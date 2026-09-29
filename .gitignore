@@ -7,3 +7,4 @@ backups/
 *.db
 *.db.gz
 .DS_Store
+.video_agent/
