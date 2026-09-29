@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+data/
+backups/
+.env
+*.db
+*.db.gz
+.DS_Store

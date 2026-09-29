@@ -1,0 +1,46 @@
+{
+  "name": "gb-pmo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "企业项目大脑（Project Brain）— LLM 驱动的多项目管理核心",
+  "scripts": {
+    "dev:server": "node --watch server/index.mjs",
+    "dev:web": "vite",
+    "dev": "npm run dev:server & npm run dev:web",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "NODE_ENV=production node server/index.mjs",
+    "migrate": "node server/db/migrate.mjs",
+    "test": "vitest run",
+    "coverage": "vitest run --coverage",
+    "check:scenarios": "node scripts/check-scenarios.mjs",
+    "check:skill": "node scripts/gen-skill-schema.mjs --check",
+    "gen:skill": "node scripts/gen-skill-schema.mjs",
+    "backup": "bash scripts/backup.sh"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "better-sqlite3": "^12.2.0",
+    "fastify": "^5.3.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.8",
+    "@testing-library/jest-dom": "^6.6.3",
+    "@testing-library/react": "^16.3.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/react": "^18.3.20",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.5.0",
+    "@vitest/coverage-v8": "^3.2.7",
+    "jsdom": "^26.1.0",
+    "lucide-react": "^0.515.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.15.3",
+    "tailwindcss": "^4.1.8",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.2.3"
+  }
+}

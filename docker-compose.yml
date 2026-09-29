@@ -1,0 +1,19 @@
+services:
+  app:
+    build: .
+    container_name: gb-pmo
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    env_file: .env
+    volumes:
+      - pmo-data:/app/data
+      - pmo-backups:/app/backups
+    # 每日 02:30 备份（容器内 sqlite3 .backup + gzip，滚动 30 天）
+    command: >
+      sh -c "node server/index.mjs &
+             while true; do sleep 86400; bash scripts/backup.sh /app/data/gb-pmo.db /app/backups || true; done"
+
+volumes:
+  pmo-data:
+  pmo-backups:

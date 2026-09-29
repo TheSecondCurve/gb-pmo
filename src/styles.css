@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #1a2233;
+  --color-ink-soft: #5a6478;
+  --color-line: #e3e7ee;
+  --color-bg: #f6f7fa;
+  --color-card: #ffffff;
+  --color-brand: #2f5fe0;
+  --color-brand-soft: #eef2fd;
+  --color-ok: #16805c;
+  --color-warn: #b7791f;
+  --color-bad: #c2402f;
+}
+
+html, body, #root { height: 100%; }
+body { background: var(--color-bg); color: var(--color-ink); font-size: 14px; }
+
+.num { font-variant-numeric: tabular-nums; }
+.cell-input {
+  @apply w-full rounded border border-[var(--color-line)] bg-white px-1.5 py-0.5 text-[13px] outline-none;
+}
+.cell-input:focus { border-color: var(--color-brand); box-shadow: 0 0 0 2px var(--color-brand-soft); }
+
+.fade-in { animation: fade .16s ease-out; }
+.pop-in { animation: pop .18s ease-out; }
+@keyframes fade { from { opacity: 0 } to { opacity: 1 } }
+@keyframes pop { from { opacity: 0; transform: translateY(4px) scale(.98) } to { opacity: 1; transform: none } }
