@@ -4,6 +4,17 @@ import { assertValue } from './enums.js'
 
 const COLS = 'id, name, username, feishu_id, wecom_id, team, is_key_person, max_parallel_projects, role, status, created_at, updated_at'
 
+/** S17-7：调用前先确认当前操作确实在移除一名在职系统管理员，否则会误拦普通变更。 */
+function assertNotLastAdmin(db) {
+  const admins = db.prepare(`SELECT COUNT(*) AS n FROM members WHERE role = 'admin' AND status = 'active'`).get().n
+  if (admins <= 1) {
+    throw Object.assign(
+      new Error('这是最后一名在职系统管理员，不能降级或离职；请先在用户管理中把其他成员设为系统管理员'),
+      { statusCode: 409 }
+    )
+  }
+}
+
 export function getMember(db, id) {
   return publicMember(camelizeRow(db.prepare(`SELECT ${COLS} FROM members WHERE id = ?`).get(id)))
 }
@@ -36,6 +47,8 @@ export function createMember(db, input, by) {
 export function updateMember(db, id, patch, by) {
   const cur = db.prepare('SELECT * FROM members WHERE id = ?').get(id)
   if (!cur) throw Object.assign(new Error('成员不存在'), { statusCode: 404 })
+  // S17-7：不能降级最后一名在职系统管理员（防锁死配置台）
+  if (patch.role === 'member' && cur.role === 'admin' && cur.status === 'active') assertNotLastAdmin(db)
   // JSON camelCase → SQL snake_case
   const COLMAP = { name: 'name', username: 'username', feishuId: 'feishu_id', wecomId: 'wecom_id', team: 'team',
     isKeyPerson: 'is_key_person', maxParallelProjects: 'max_parallel_projects', role: 'role' }
@@ -64,6 +77,8 @@ export function offboardMember(db, id, handover = {}, by) {
   const cur = db.prepare(`SELECT * FROM members WHERE id = ?`).get(id)
   if (!cur) throw Object.assign(new Error('成员不存在'), { statusCode: 404 })
   if (cur.status === 'offboarded') return getMember(db, id)
+  // S17-7：离职会移除其系统管理员身份，最后一名在职系统管理员不可离职
+  if (cur.role === 'admin') assertNotLastAdmin(db)
 
   const openTasks = db
     .prepare(`SELECT id FROM tasks WHERE responsible_member_id = ? AND status IN ('todo','doing','blocked')`)

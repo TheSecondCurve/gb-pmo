@@ -3,14 +3,15 @@
 // gen-skill-schema.mjs 会把本文件渲染进 SKILL.md，drift check 比对。
 
 export const ENUMS = {
-  memberRole: { admin: '管理员', member: '普通成员' },
+  memberRole: { admin: '系统管理员', member: '成员' },
   memberStatus: { active: '在职', offboarded: '离职' },
   projectStatus: { planning: '待启动', active: '进行中', paused: '已暂停', closed: '已结项', cancelled: '已取消' },
+  projectTypeStatus: { active: '启用', disabled: '停用' },
   priority: { high: '高', medium: '中', low: '低' },
-  taskStatus: { todo: '未开始', doing: '进行中', blocked: '被阻塞', done: '已完成', cancelled: '已取消' },
+  // v0.6：任务状态固定三档（无 blocked/cancelled；任务相互独立，无前置依赖）
+  taskStatus: { todo: '未开始', doing: '进行中', done: '完成' },
   taskSource: { template: '模板', manual: '手动', extraction: '抽取', suggestion: '建议采纳' },
   milestoneStatus: { planned: '计划中', met: '已达成', missed: '已延误', cancelled: '已取消' },
-  dependencyStatus: { pending: '待满足', satisfied: '已满足', overdue: '已逾期' },
   channelPlatform: { feishu: '飞书', wecom: '企业微信' },
   channelType: { dedicated: '专题渠道', general: '通用群' },
   eventNature: { record: '记录型', suggestion: '建议型' },

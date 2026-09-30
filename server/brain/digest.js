@@ -20,7 +20,7 @@ export async function projectDigest(db, projectId, { llm: llmOverride, windowDay
     db.prepare(
       `SELECT t.id, t.title, t.status, t.plan_start_date, t.plan_end_date, m.name AS responsible_name
        FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
-       WHERE t.project_id = ? AND t.status IN ('todo','doing','blocked') ORDER BY t.plan_end_date`
+       WHERE t.project_id = ? AND t.status IN ('todo','doing') ORDER BY t.plan_end_date`
     ).all(projectId)
   )
   const today = new Date().toISOString().slice(0, 10)
@@ -96,18 +96,11 @@ export async function personDigest(db, memberId, { llm: llmOverride } = {}) {
     db.prepare(
       `SELECT t.id, t.title, t.status, t.plan_start_date, t.plan_end_date, p.name AS project_name, p.id AS project_id
        FROM tasks t JOIN projects p ON p.id = t.project_id
-       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing','blocked') ORDER BY t.plan_end_date`
+       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') ORDER BY t.plan_end_date`
     ).all(memberId)
   )
   const today = new Date().toISOString().slice(0, 10)
   const overdue = tasks.filter((t) => t.planEndDate && t.planEndDate < today)
-  const deps = camelizeRows(
-    db.prepare(
-      `SELECT d.*, t.title AS task_title, p.name AS project_name FROM dependencies d
-       JOIN tasks t ON t.id = d.task_id JOIN projects p ON p.id = t.project_id
-       WHERE d.depends_on_member_id = ? AND d.status IN ('pending','overdue')`
-    ).all(memberId)
-  )
   const pending = pendingSuggestionsFor(db, memberId)
   const timeoutMs = th.suggestTimeoutHours * 3600 * 1000
   const timedOut = pending.filter((e) => Date.now() - e.createdAt > timeoutMs)
@@ -129,17 +122,17 @@ export async function personDigest(db, memberId, { llm: llmOverride } = {}) {
     const out = await llm.complete(
       [
         { role: 'system', content: '你是企业项目大脑，为成员生成个人梳理：给出优先处理顺序与风险提示，2-4 句中文。' },
-        { role: 'user', content: `成员：${member.name}\n未完任务：\n${taskLines}\n被依赖项：${deps.length}\n逾期：${overdue.length}\n排期冲突：${conflicts.length}\n超时待确认建议：${timedOut.length}` },
+        { role: 'user', content: `成员：${member.name}\n未完任务：\n${taskLines}\n逾期：${overdue.length}\n排期冲突：${conflicts.length}\n超时待确认建议：${timedOut.length}` },
       ]
     )
     narrative = String(out).trim()
   }
-  narrative ||= `你有 ${tasks.length} 项未完任务（逾期 ${overdue.length}）、被依赖 ${deps.length} 项、排期冲突 ${conflicts.length} 处、超时待确认建议 ${timedOut.length} 条。${overdue.length ? '建议优先处理逾期项。' : ''}`
+  narrative ||= `你有 ${tasks.length} 项未完任务（逾期 ${overdue.length}）、排期冲突 ${conflicts.length} 处、超时待确认建议 ${timedOut.length} 条。${overdue.length ? '建议优先处理逾期项。' : ''}`
 
-  const body = `${timedOut.length ? `⏰ 超时待确认（置顶）：\n${timedOut.map((e) => `- ${e.summary}（事件#${e.id}）`).join('\n')}\n\n` : ''}${narrative}\n\n任务：\n${taskLines}${conflicts.length ? `\n\n排期冲突：\n${conflicts.map(([a, b]) => `- ${a.title}（${a.planStartDate}~${a.planEndDate}）与 ${b.title}（${b.planStartDate}~${b.planEndDate}）重叠`).join('\n')}` : ''}${deps.length ? `\n\n被依赖（别人在等你）：\n${deps.map((d) => `- ${d.projectName} ${d.taskTitle}${d.dueDate ? ` 需于 ${d.dueDate} 前` : ''}（${d.status === 'overdue' ? '已逾期' : '待满足'}）`).join('\n')}` : ''}`
+  const body = `${timedOut.length ? `⏰ 超时待确认（置顶）：\n${timedOut.map((e) => `- ${e.summary}（事件#${e.id}）`).join('\n')}\n\n` : ''}${narrative}\n\n任务：\n${taskLines}${conflicts.length ? `\n\n排期冲突：\n${conflicts.map(([a, b]) => `- ${a.title}（${a.planStartDate}~${a.planEndDate}）与 ${b.title}（${b.planStartDate}~${b.planEndDate}）重叠`).join('\n')}` : ''}`
   notifyMember(db, camelizeRow(member), { pushType: 'digest', title: `个人梳理：${member.name}`, body })
 
-  return { memberId, narrative, taskCount: tasks.length, overdueCount: overdue.length, dependencyCount: deps.length, conflictCount: conflicts.length, timedOutSuggestions: timedOut.length, timedOut, conflicts }
+  return { memberId, narrative, taskCount: tasks.length, overdueCount: overdue.length, conflictCount: conflicts.length, timedOutSuggestions: timedOut.length, timedOut, conflicts }
 }
 
 /** S8-2 结项复盘摘要：基于事件流的确定性生成（LLM 可增强，人工可改后作为 closeProject 入参）。 */

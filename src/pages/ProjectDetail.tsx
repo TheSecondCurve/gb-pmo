@@ -4,7 +4,7 @@ import { useStore } from '../store'
 import { Badge, Btn, Card, Empty, Field, InlineSelect, InlineText, Modal, Spinner, inputCls } from '../components/ui'
 import {
   EVENT_STATUS_LABEL, EVENT_TYPE_LABEL, PRIORITY_LABEL, PROJECT_STATUS_LABEL, TASK_STATUS_LABEL,
-  type ChannelRow, type EventRow, type Member, type ProjectDetail,
+  type ChannelRow, type EventRow, type Member, type ProjectDetail, type TaskRecordRow,
 } from '../types'
 
 export default function ProjectDetail({ id }: { id: number }) {
@@ -16,6 +16,7 @@ export default function ProjectDetail({ id }: { id: number }) {
   const [closing, setClosing] = useState(false)
   const [binding, setBinding] = useState(false)
   const [digesting, setDigesting] = useState(false)
+  const [recordsTaskId, setRecordsTaskId] = useState<number | null>(null)
 
   const refresh = async () => {
     const [d, e, m, c] = await Promise.all([
@@ -55,7 +56,7 @@ export default function ProjectDetail({ id }: { id: number }) {
           <table className="w-full text-[13px]">
             <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
               <tr className="border-b border-[var(--color-line)]">
-                <th className="py-1.5">任务</th><th>责任人（唯一）</th><th>状态</th><th>计划开始</th><th>计划结束</th><th>标记</th>
+                <th className="py-1.5">任务</th><th>责任人（唯一）</th><th>状态</th><th>计划开始</th><th>计划结束</th><th>标记</th><th></th>
               </tr>
             </thead>
             <tbody>
@@ -82,7 +83,8 @@ export default function ProjectDetail({ id }: { id: number }) {
                   </td>
                   <td className="num">{readonly ? (t.planStartDate || '—') : <InlineText type="date" value={t.planStartDate} onSubmit={async (v) => { await api.patchTask(t.id, { planStartDate: v }); await refresh() }} />}</td>
                   <td className={`num ${t.isOverdue ? 'text-[var(--color-bad)]' : ''}`}>{readonly ? (t.planEndDate || '—') : <InlineText type="date" value={t.planEndDate} onSubmit={async (v) => { await api.patchTask(t.id, { planEndDate: v }); await refresh() }} />}</td>
-                  <td>{t.isBlocked && <Badge tone="warn">被阻塞</Badge>}{t.isOverdue && <Badge tone="bad">逾期</Badge>}</td>
+                  <td>{t.isOverdue && <Badge tone="bad">逾期</Badge>}</td>
+                  <td><Btn small kind="ghost" onClick={() => setRecordsTaskId(t.id)}>记录</Btn></td>
                 </tr>
               ))}
             </tbody>
@@ -150,6 +152,9 @@ export default function ProjectDetail({ id }: { id: number }) {
         {!readonly && <AddEvent projectId={id} onDone={refresh} />}
       </Card>
 
+      {recordsTaskId !== null && (
+        <TaskRecordsModal taskId={recordsTaskId} readonly={readonly} onClose={() => setRecordsTaskId(null)} />
+      )}
       {closing && <CloseModal p={p} onClose={() => setClosing(false)} onDone={async () => { setClosing(false); toast('项目已结项归档'); await refresh() }} />}
       {binding && <BindChannelModal projectId={id} onClose={() => setBinding(false)} onDone={async () => { setBinding(false); toast('渠道已绑定'); await refresh() }} />}
       {digesting && (
@@ -174,6 +179,43 @@ function DigestBody({ fn }: { fn: () => Promise<Record<string, unknown>> }) {
         任务 {String(out.taskCount)} 项 · 逾期 {String(out.overdueCount)} · 未指派 {String(out.unassignedCount)} · 近期事件 {String(out.eventCount)} 条 · 建议 {Array.isArray(out.suggestions) ? out.suggestions.length : 0} 条（待确认）
       </div>
     </div>
+  )
+}
+
+function TaskRecordsModal({ taskId, readonly, onClose }: { taskId: number; readonly: boolean; onClose: () => void }) {
+  const { toast } = useStore()
+  const [records, setRecords] = useState<TaskRecordRow[] | null>(null)
+  const [draft, setDraft] = useState('')
+  const refresh = async () => { const r = await api.taskRecords(taskId); setRecords(r.records) }
+  useEffect(() => { void refresh() }, [taskId])
+  return (
+    <Modal title={`任务更新记录（S2-3，追加式 · ${records?.length ?? 0} 条）`} onClose={onClose}>
+      {!records ? <Spinner /> : records.length === 0 ? <Empty hint="暂无记录，追加第一条更新" /> : (
+        <ul className="mb-3 max-h-72 space-y-2 overflow-auto">
+          {records.map((r) => (
+            <li key={r.id} className="rounded-md border border-[var(--color-line)] p-2 text-[13px]">
+              <div className="mb-0.5 text-[11px] text-[var(--color-ink-soft)]">
+                <span className="num">{new Date(r.createdAt).toLocaleString('zh-CN')}</span> · {r.memberName || '系统'}
+              </div>
+              <div className="whitespace-pre-wrap">{r.content}</div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!readonly && (
+        <div className="flex gap-2">
+          <input
+            className={inputCls} placeholder="追加一条更新记录（Enter 保存，只增不改）" value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={async (e) => {
+              if (e.key === 'Enter' && draft.trim()) {
+                try { await api.addTaskRecord(taskId, draft); setDraft(''); toast('记录已追加'); await refresh() } catch (e2) { toast((e2 as Error).message, 'bad') }
+              }
+            }} />
+        </div>
+      )}
+      {readonly && <div className="text-[11px] text-[var(--color-ink-soft)]">项目已归档，记录只读。</div>}
+    </Modal>
   )
 }
 
@@ -220,33 +262,43 @@ function AddEvent({ projectId, onDone }: { projectId: number; onDone: () => Prom
 }
 
 function CloseModal({ p, onClose, onDone }: { p: ProjectDetail; onClose: () => void; onDone: () => Promise<void> }) {
-  const open = p.tasks.filter((t) => ['todo', 'doing', 'blocked'].includes(t.status))
-  const [disp, setDisp] = useState<Record<number, string>>({})
+  const [unfinished, setUnfinished] = useState(() => p.tasks.filter((t) => t.status !== 'done'))
   const [summary, setSummary] = useState('')
   const [err, setErr] = useState('')
+  const markDone = async (taskId: number) => {
+    await api.patchTask(taskId, { status: 'done' })
+    setUnfinished((list) => list.filter((t) => t.id !== taskId))
+  }
+  const markAll = async () => {
+    for (const t of unfinished) await api.patchTask(t.id, { status: 'done' })
+    setUnfinished([])
+  }
   const submit = async () => {
     try {
-      await api.closeProject(p.id, {
-        summary: summary || undefined,
-        dispositions: open.map((t) => ({ taskId: t.id, action: disp[t.id] || 'cancelled' })),
-      })
+      await api.closeProject(p.id, { summary: summary || undefined })
       await onDone()
     } catch (e) { setErr((e as Error).message) }
   }
   return (
-    <Modal title="结项（S8）：未完任务逐项处置" onClose={onClose} wide>
-      {open.length === 0 ? <div className="mb-3 text-[13px] text-[var(--color-ink-soft)]">无未完任务，可直接结项。</div> : (
-        <table className="mb-3 w-full text-[13px]">
-          <thead className="text-left text-[12px] text-[var(--color-ink-soft)]"><tr className="border-b border-[var(--color-line)]"><th className="py-1">任务</th><th>处置</th></tr></thead>
-          <tbody>
-            {open.map((t) => (
-              <tr key={t.id} className="border-b border-[var(--color-line)] last:border-0">
-                <td className="py-1">{t.title}</td>
-                <td><InlineSelect value={disp[t.id] || 'cancelled'} options={{ cancelled: '取消', done: '完成' }} onSubmit={(v) => setDisp((d) => ({ ...d, [t.id]: v }))} /></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <Modal title="结项（S8）：所有任务标记完成后方可结项" onClose={onClose} wide>
+      {unfinished.length === 0 ? <div className="mb-3 text-[13px] text-[var(--color-ink-soft)]">无未完任务，可直接结项。</div> : (
+        <div className="mb-3">
+          <div className="mb-2 flex items-center justify-between">
+            <span className="text-[13px]">未完任务 {unfinished.length} 项（v0.6：唯一终态=完成，无「取消」处置）</span>
+            <Btn small kind="primary" onClick={() => void markAll()}>全部标记完成</Btn>
+          </div>
+          <table className="w-full text-[13px]">
+            <thead className="text-left text-[12px] text-[var(--color-ink-soft)]"><tr className="border-b border-[var(--color-line)]"><th className="py-1">任务</th><th></th></tr></thead>
+            <tbody>
+              {unfinished.map((t) => (
+                <tr key={t.id} className="border-b border-[var(--color-line)] last:border-0">
+                  <td className="py-1">{t.title}</td>
+                  <td><Btn small onClick={() => void markDone(t.id)}>标记完成</Btn></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
       <Field label="复盘摘要（留空则由大脑基于事件流自动生成）">
         <textarea className={inputCls} rows={3} value={summary} onChange={(e) => setSummary(e.target.value)} />

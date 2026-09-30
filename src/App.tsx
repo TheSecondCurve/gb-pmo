@@ -33,7 +33,13 @@ export default function App() {
   if (path === '/' || path === '/dashboard') page = <Dashboard />
   else if (path === '/projects') page = <Projects />
   else if (m) page = <ProjectDetail id={Number(m[1])} />
-  else if (path === '/admin') page = member.role === 'admin' ? <Admin /> : <div className="p-8">需要管理员权限</div>
+  else if (path === '/admin' || path.startsWith('/admin/')) {
+    // 配置台二级路由：#/admin/<section>/<tab>（S17，仅系统管理员；Shell 负责缺省段归一化）
+    const am = path.match(/^\/admin(?:\/([a-z]+))?(?:\/([a-z]+))?/)
+    page = member.role === 'admin'
+      ? <Admin section={am?.[1]} tab={am?.[2]} />
+      : <div className="p-8 text-[var(--color-ink-soft)]">需要系统管理员权限</div>
+  }
   else page = <div className="p-8">页面不存在：{path}</div>
 
   return (
@@ -53,7 +59,7 @@ export default function App() {
           ))}
         </nav>
         <div className="border-t border-[var(--color-line)] px-4 py-3 text-[12px] text-[var(--color-ink-soft)]">
-          <div>{member.name}（{member.role === 'admin' ? '管理员' : '成员'}）</div>
+          <div>{member.name}（{member.role === 'admin' ? '系统管理员' : '成员'}）</div>
           <Btn small kind="ghost" onClick={async () => { await api.logout(); await refresh() }}>退出登录</Btn>
         </div>
       </aside>

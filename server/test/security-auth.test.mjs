@@ -35,11 +35,17 @@ describe('认证边界', () => {
     const memberCookie = await loginCookie(ctx.app, 'lisi', 'pass-123456')
     for (const [method, url] of [
       ['POST', '/api/v1/members'],
+      ['PATCH', `/api/v1/members/3`],
       ['GET', '/api/v1/admin/settings'],
       ['PUT', '/api/v1/admin/settings/thresholds'],
       ['GET', '/api/v1/admin/todo'],
       ['POST', '/api/v1/admin/test-llm'],
       ['DELETE', '/api/v1/admin/tokens/1'],
+      ['GET', '/api/v1/admin/templates'],
+      ['POST', '/api/v1/admin/project-types'],
+      ['PATCH', '/api/v1/admin/project-types/1'],
+      ['POST', '/api/v1/admin/templates'],
+      ['DELETE', '/api/v1/admin/templates/99'],
     ]) {
       const res = await authed(ctx.app, memberCookie, method, url, {})
       expect(res.status).toBe(403)
@@ -74,5 +80,32 @@ describe('认证边界', () => {
     const forged = `pmo_session=${cookie.split('=')[1].slice(0, -2)}xy`
     const res = await ctx.app.inject({ method: 'GET', url: '/api/v1/auth/me', headers: { cookie: forged } })
     expect(res.statusCode).toBe(401)
+  })
+
+  it('S17-7: 最后一名在职系统管理员不可被降级/离职；存在第二名时允许', async () => {
+    const local = await setupApp()
+    try {
+      const cookie = await loginCookie(local.app, 'admin', 'admin-pass-123')
+      // 唯一在职 admin：降级自己 → 409
+      const demote = await authed(local.app, cookie, 'PATCH', `/api/v1/members/${local.members.admin.id}`, { role: 'member' })
+      expect(demote.status).toBe(409)
+      expect(demote.body.message).toContain('系统管理员')
+      // 唯一在职 admin：离职 → 409（先补一名普通成员接管，绕开转交 409，验证的是角色保护）
+      await authed(local.app, cookie, 'POST', '/api/v1/members', { name: '小明', username: 'xiaoming', password: 'pass-123456' })
+      const offboard = await authed(local.app, cookie, 'POST', `/api/v1/members/${local.members.admin.id}/offboard`, {
+        handover: { tasks: [], projects: [] },
+      })
+      expect(offboard.status).toBe(409)
+      expect(offboard.body.message).toContain('系统管理员')
+      // 指定第二名系统管理员后，原管理员可降级
+      const promote = await authed(local.app, cookie, 'PATCH', `/api/v1/members/${local.members.dev.id}`, { role: 'admin' })
+      expect(promote.status).toBe(200)
+      expect(promote.body.member.role).toBe('admin')
+      const demote2 = await authed(local.app, cookie, 'PATCH', `/api/v1/members/${local.members.admin.id}`, { role: 'member' })
+      expect(demote2.status).toBe(200)
+      expect(demote2.body.member.role).toBe('member')
+    } finally {
+      local.db.close()
+    }
   })
 })
