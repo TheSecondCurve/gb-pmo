@@ -7,10 +7,10 @@ export default defineConfig({
     testTimeout: 20000,
     coverage: {
       provider: 'v8',
-      // K7：核心目录门禁；server/index.mjs 为进程入口、scheduler.js 为定时器接线（集成由部署冒烟覆盖），
-      // db/ 为声明与迁移，均不计数
+      // K7：核心目录门禁；server/index.mjs 为进程入口、scheduler.js 为定时器接线、bot/gateway.js 为
+      // 飞书长连接接线（集成由部署冒烟覆盖），db/ 为声明与迁移，均不计数
       include: ['server/engine/**', 'server/routes/**', 'server/brain/**', 'server/agent/**'],
-      exclude: ['server/db/**', 'server/brain/scheduler.js'],
+      exclude: ['server/db/**', 'server/brain/scheduler.js', 'server/brain/bot/gateway.js'],
       thresholds: { lines: 80, functions: 80, branches: 80, statements: 80 },
     },
   },

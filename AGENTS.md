@@ -10,7 +10,7 @@ server/                    # Fastify 后端（内网单进程）
 ├── routes/                # 路由层：参数校验 + 权限校验 + 调 engine，禁止写业务 SQL
 ├── engine/                # 业务引擎：纯函数/类，接收 db，不感知 HTTP
 ├── agent/                 # Agent 接入栈：login.sh/install.sh 渲染、PAT、SQL/action/metrics 端点
-├── brain/                 # 大脑：LLM 适配（DeepSeek）、IM 连接器、抽取/分拣/梳理/日报/预警/调度
+├── brain/                 # 大脑：LLM 适配（DeepSeek）、IM 连接器、抽取/分拣/梳理/日报/预警/调度、bot/（飞书指令机器人 S20）
 ├── db/                    # better-sqlite3 连接（连接层 PRAGMA）、migrations/*.sql、schema.ts（Drizzle 查询类型）
 └── test/                  # 测试与源码分层放置（*.test.mjs），按 PRD 场景组织命名
 src/                       # Vite + React SPA（hash 路由、Context store、手写极简组件）

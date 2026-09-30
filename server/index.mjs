@@ -60,3 +60,9 @@ console.log(`gb-pmo listening on :${PORT} (db: ${DB_FILE})`)
 const { startScheduler } = await import('./brain/scheduler.js')
 startScheduler(db, { llm: getLlm(db) })
 console.log('[scheduler] enabled（cron 由配置台 scheduler 块驱动：信息更新对齐 / 预警提醒 / 日报提醒）')
+
+// S20 机器人指令通道（v0.11）：飞书长连接随进程内嵌（botEnabled 门控；SDK 缺失不阻塞主进程）
+const { startBot } = await import('./brain/bot/gateway.js')
+startBot(db, { secret: process.env.GB_PMO_SESSION_SECRET || '' }).then((r) => {
+  console.log(`[bot] ${r.started ? 'enabled（飞书私聊/群@ 指令通道，配置台 im.feishu 驱动）' : `未启动：${r.reason}`}`)
+}).catch((e) => console.warn(`[bot] 启动失败：${e.message}`))

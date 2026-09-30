@@ -86,3 +86,40 @@ export async function testConnection(cfg) {
     return { ok: false, reason: e.message }
   }
 }
+
+// —— S20 机器人指令通道：以应用身份发消息/卡片 + 读群信息（判定外部群） ——
+
+async function postMessage(cfg, receiveIdType, receiveId, msgType, content) {
+  const token = await tenantToken(cfg)
+  const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages?receive_id_type=${receiveIdType}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ receive_id: receiveId, msg_type: msgType, content: JSON.stringify(content) }),
+  })
+  if (!res.ok) throw Object.assign(new Error(`飞书发送 HTTP ${res.status}`), { statusCode: 502 })
+  const data = await res.json()
+  if (data.code !== 0) throw Object.assign(new Error(`飞书发送失败: ${data.msg}`), { statusCode: 502 })
+  return { messageId: data.data?.message_id || null }
+}
+
+/** 发文本（chat_id 定向：私聊会话与群均适用）。 */
+export async function sendText(cfg, chatId, text) {
+  return postMessage(cfg, 'chat', chatId, 'text', { text })
+}
+
+/** 发消息卡片（S20 确认卡）。 */
+export async function sendCard(cfg, chatId, card) {
+  return postMessage(cfg, 'chat', chatId, 'interactive', card)
+}
+
+/** 群信息（external 字段用于 S20-7 外部群拒答；调用方负责缓存）。 */
+export async function getChat(cfg, chatId) {
+  const token = await tenantToken(cfg)
+  const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/chats/${chatId}`, {
+    headers: { authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw Object.assign(new Error(`飞书群信息 HTTP ${res.status}`), { statusCode: 502 })
+  const data = await res.json()
+  if (data.code !== 0) throw Object.assign(new Error(`飞书群信息失败: ${data.msg}`), { statusCode: 502 })
+  return data.data || {}
+}
