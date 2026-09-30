@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 // gb-pmo 入口：建库迁移 → bootstrap 管理员（零 admin 缺密码拒启）→ 起服务（生产托管 dist/）。
+// S19：进程时区固定北京（cron 调度与服务器侧本地格式化按北京时间）；日历日语义另由 db/time.js 与 BJ_TODAY() 承载。
+process.env.TZ = 'Asia/Shanghai'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'

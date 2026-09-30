@@ -1,4 +1,5 @@
 import { camelizeRow, camelizeRows } from '../db/index.mjs'
+import { today } from '../db/time.js'
 import { assertValue } from './enums.js'
 import { addEvent } from './events.js'
 import { audit } from './auth.js'
@@ -19,7 +20,6 @@ export function createProject(db, input, by) {
   const { type, template: tpl } = resolveTemplateForCreate(db, { typeCode, templateCode })
 
   const now = Date.now()
-  const today = new Date().toISOString().slice(0, 10)
   const created = db.transaction(() => {
     const info = db.prepare(
       `INSERT INTO projects (name, template_code, project_type_id, status, priority, lead_member_id, client_name,
@@ -34,7 +34,7 @@ export function createProject(db, input, by) {
       db.prepare(
         `INSERT INTO tasks (project_id, title, responsible_member_id, status, plan_start_date, source, created_at, updated_at)
          VALUES (?, ?, ?, 'todo', ?, 'template', ?, ?)`
-      ).run(projectId, t.title, leadMemberId, planStartDate || today, now, now)
+      ).run(projectId, t.title, leadMemberId, planStartDate || today(), now, now)
     }
     for (const m of milestones) {
       db.prepare('INSERT INTO milestones (project_id, name, plan_date, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
@@ -74,10 +74,9 @@ export function getProjectDetail(db, id) {
        WHERE t.project_id = ? ORDER BY t.id`
     )
     .all(id)
-  const today = new Date().toISOString().slice(0, 10)
   const taskRows = tasks.map((t) => ({
     ...camelizeRow(t),
-    isOverdue: Boolean(t.plan_end_date && t.plan_end_date < today && t.status !== 'done'),
+    isOverdue: Boolean(t.plan_end_date && t.plan_end_date < today() && t.status !== 'done'),
   }))
   return {
     ...camelizeRow(p),
@@ -96,7 +95,7 @@ export function listProjects(db, { statuses = OPEN_STATUSES } = {}) {
     .prepare(
       `SELECT p.*, m.name AS lead_name, pt.name AS type_name,
          (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status IN ('todo','doing','blocked')
-            AND t.plan_end_date IS NOT NULL AND t.plan_end_date < date('now')) AS overdue_tasks,
+            AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY()) AS overdue_tasks,
          (SELECT MAX(e.business_time) FROM project_events e WHERE e.project_id = p.id AND e.status = 'effective') AS last_event_at
        FROM projects p LEFT JOIN members m ON m.id = p.lead_member_id
        LEFT JOIN project_types pt ON pt.id = p.project_type_id
@@ -104,7 +103,6 @@ export function listProjects(db, { statuses = OPEN_STATUSES } = {}) {
        ORDER BY ${PRIORITY_ORDER}, p.updated_at DESC`
     )
     .all(...statuses)
-  const today = new Date().toISOString().slice(0, 10)
   return rows.map((r) => {
     const row = camelizeRow(r)
     row.silentDays = row.lastEventAt ? Math.floor((Date.now() - row.lastEventAt) / 86400000) : null
@@ -127,7 +125,7 @@ export function updateProject(db, id, patch, by) {
     const next = assertValue('projectStatus', patch.status)
     if (next === 'closed') throw Object.assign(new Error('结项走 closeProject（S8）'), { statusCode: 400 })
     fields.status = next
-    if (next === 'active' && !cur.actual_start_date) fields.actual_start_date = new Date().toISOString().slice(0, 10)
+    if (next === 'active' && !cur.actual_start_date) fields.actual_start_date = today()
   }
   if (!Object.keys(fields).length) return getProjectDetail(db, id)
   fields.updated_at = Date.now()
@@ -166,12 +164,11 @@ export function closeProject(db, id, { summary } = {}, by) {
       statusCode: 409, openTasks,
     })
   }
-  const today = new Date().toISOString().slice(0, 10)
   const tx = db.transaction(() => {
     db.prepare('UPDATE milestones SET status = ? WHERE project_id = ? AND status = ?')
       .run('cancelled', id, 'planned')
     db.prepare('UPDATE projects SET status = ?, actual_end_date = ?, closeout_summary = ?, updated_at = ? WHERE id = ?')
-      .run('closed', today, summary || '', Date.now(), id)
+      .run('closed', today(), summary || '', Date.now(), id)
     addEvent(db, {
       projectId: id, eventType: 'decision', nature: 'record', sourcePlatform: 'web', generatedBy: 'system',
       summary: `项目结项${summary ? `：${summary}` : ''}`, speakerMemberId: by,

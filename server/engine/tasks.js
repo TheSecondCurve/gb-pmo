@@ -1,4 +1,5 @@
 import { camelizeRow, camelizeRows } from '../db/index.mjs'
+import { today } from '../db/time.js'
 import { assertValue } from './enums.js'
 import { getProject } from './projects.js'
 import { addEvent } from './events.js'
@@ -7,15 +8,10 @@ import { audit } from './auth.js'
 const TASK_COLS = `t.*, m.name AS responsible_name, p.name AS project_name, p.status AS project_status`
 
 function decorate(rows) {
-  const today = todayStr()
   return rows.map((r) => ({
     ...camelizeRow(r),
-    isOverdue: Boolean(r.plan_end_date && r.plan_end_date < today && r.status !== 'done'),
+    isOverdue: Boolean(r.plan_end_date && r.plan_end_date < today() && r.status !== 'done'),
   }))
-}
-
-export function todayStr() {
-  return new Date().toISOString().slice(0, 10)
 }
 
 export function getTask(db, id) {
@@ -88,7 +84,7 @@ export function updateTask(db, id, patch, by) {
   if ('planEndDate' in patch) fields.plan_end_date = patch.planEndDate || null
   if ('status' in patch && patch.status !== cur.status) {
     fields.status = assertValue('taskStatus', patch.status)
-    if (patch.status === 'done') fields.actual_end_date = todayStr()
+    if (patch.status === 'done') fields.actual_end_date = today()
   }
   if (!Object.keys(fields).length) return getTask(db, id)
   fields.updated_at = Date.now()
@@ -161,7 +157,7 @@ export function overdueTasksOf(db, memberId) {
     db.prepare(
       `SELECT t.id, t.title, t.plan_end_date, p.id AS project_id, p.name AS project_name
        FROM tasks t JOIN projects p ON p.id = t.project_id
-       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.plan_end_date IS NOT NULL AND t.plan_end_date < date('now')`
+       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY()`
     ).all(memberId)
   )
 }

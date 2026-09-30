@@ -2,6 +2,7 @@
 // 时点由 scheduler.reportCron 驱动（v0.7，取代 dailyReportHour）；当日已发不重复（S18-4，force 手动重发绕过）。
 
 import { camelizeRows, camelizeRow } from '../db/index.mjs'
+import { today, bjDayStartMs } from '../db/time.js'
 import { getSetting } from '../engine/settings.js'
 import { expireStaleSuggestions } from '../engine/events.js'
 import { queryMetric } from '../engine/metrics.js'
@@ -9,7 +10,7 @@ import { notifyMember } from './push.js'
 
 export async function dailyReport(db, { force = false } = {}) {
   const now = new Date()
-  const dayStart = new Date(now).setHours(0, 0, 0, 0)
+  const dayStart = bjDayStartMs(now) // 「当日」按北京日（S19）
   if (!force) {
     const sent = db
       .prepare(`SELECT COUNT(*) AS n FROM pushes WHERE push_type = 'daily_report' AND created_at >= ?`)
@@ -44,7 +45,7 @@ export async function dailyReport(db, { force = false } = {}) {
          WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing')`
       ).all(m.id)
     )
-    const tomorrow = new Date(now.getTime() + 86400000).toISOString().slice(0, 10)
+    const tomorrow = today(now.getTime() + 86400000)
     const dueTomorrow = myTasks.filter((t) => t.planEndDate === tomorrow)
     const pending = camelizeRows(
       db.prepare(
@@ -77,7 +78,7 @@ export async function dailyReport(db, { force = false } = {}) {
       )
     }
 
-    const title = `项目大脑日报 ${now.toISOString().slice(0, 10)}`
+    const title = `项目大脑日报 ${today(now)}`
     notifyMember(db, m, { pushType: 'daily_report', title, body: sections.join('\n\n') })
     reports.push({ memberId: m.id, sections: sections.length })
   }

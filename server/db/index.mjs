@@ -2,6 +2,7 @@ import Database from 'better-sqlite3'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { today } from './time.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 export const MIGRATIONS_DIR = path.join(__dirname, 'migrations')
@@ -9,12 +10,23 @@ export const MIGRATIONS_DIR = path.join(__dirname, 'migrations')
 /**
  * 打开数据库并应用 SQLite 工程规范（tech-architecture.md）：
  * PRAGMA 只在连接层执行，不写进 migration；库文件 600。
+ * 连接层注册 BJ_TODAY()（S19）：SQL 中的「今天」一律走它（北京时区，与 today() 同源），
+ * 禁止裸 date('now')（UTC 语义，Agent 端点有护栏）。
  */
 export function openDb(file) {
   const db = new Database(file)
   db.pragma('journal_mode = WAL')
   db.pragma('busy_timeout = 5000')
   db.pragma('foreign_keys = ON')
+  // varargs：BJ_TODAY() 与 BJ_TODAY(<epoch_ms>) 两种形态都合法（无参时入参为 undefined）
+  db.function('BJ_TODAY', { varargs: true }, (at) => {
+    if (at == null) return today()
+    const d = new Date(typeof at === 'number' ? at : Number(at))
+    if (Number.isNaN(d.getTime())) {
+      throw new Error('BJ_TODAY 参数须为 epoch 毫秒（整数），或留空取当前北京日')
+    }
+    return today(d)
+  })
   try {
     if (file !== ':memory:') fs.chmodSync(file, 0o600)
   } catch {
