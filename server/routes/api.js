@@ -153,6 +153,23 @@ export function registerApiRoutes(app) {
     return reply.status(201).send({ record: tasks.addTaskRecord(db, { taskId: Number(req.params.id), content: req.body?.content }, req.member.id) })
   })
 
+  // 任务参考资料（S23，v0.13）：SOP/知识库链接，全员可维护（D1）留审计；推送附带给执行人
+  app.get('/api/v1/tasks/:id/refs', async (req) => ({ refs: tasks.listTaskRefs(db, Number(req.params.id)) }))
+
+  app.post('/api/v1/tasks/:id/refs', async (req, reply) => {
+    return reply.status(201).send(
+      { ref: tasks.addTaskRef(db, { taskId: Number(req.params.id), title: req.body?.title, url: req.body?.url, note: req.body?.note }, req.member.id) }
+    )
+  })
+
+  app.patch('/api/v1/tasks/:id/refs/:refId', async (req) =>
+    ({ ref: tasks.updateTaskRef(db, Number(req.params.refId), req.body, req.member.id) }))
+
+  app.delete('/api/v1/tasks/:id/refs/:refId', async (req) => {
+    tasks.deleteTaskRef(db, Number(req.params.refId), req.member.id)
+    return { ok: true }
+  })
+
   app.post('/api/v1/milestones', async (req, reply) => {
     return reply.status(201).send(tasks.createMilestone(db, req.body, req.member.id))
   })

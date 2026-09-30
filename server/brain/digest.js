@@ -5,6 +5,7 @@ import { camelizeRows, camelizeRow } from '../db/index.mjs'
 import { today } from '../db/time.js'
 import { getSetting } from '../engine/settings.js'
 import { addEvent, markPushedTo, pendingSuggestionsFor } from '../engine/events.js'
+import { taskRefMap, formatTaskRefs } from '../engine/tasks.js'
 import { getLlm, parseJsonLoose } from './llm.js'
 import { notifyMember } from './push.js'
 
@@ -115,7 +116,12 @@ export async function personDigest(db, memberId, { llm: llmOverride } = {}) {
     }
   }
 
-  const taskLines = tasks.map((t) => `- ${t.project_name} #${t.id} ${t.title} [${t.status}]${t.planEndDate ? ` 截止${t.planEndDate}${t.planEndDate < today() ? '（逾期）' : ''}` : ''}`).join('\n') || '（无未完任务）'
+  // S23：任务行附带参考资料（SOP/知识库链接），执行人拿到完整信息
+  const refMap = taskRefMap(db, tasks.map((t) => t.id))
+  const taskLines = tasks.map((t) => {
+    const refs = formatTaskRefs(refMap.get(t.id))
+    return `- ${t.project_name} #${t.id} ${t.title} [${t.status}]${t.planEndDate ? ` 截止${t.planEndDate}${t.planEndDate < today() ? '（逾期）' : ''}` : ''}${refs ? `\n  参考：${refs}` : ''}`
+  }).join('\n') || '（无未完任务）'
   let narrative
   if (llm) {
     const out = await llm.complete(

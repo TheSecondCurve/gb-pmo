@@ -1,7 +1,7 @@
 // 大脑·预警（S7，v0.6）：关键人逾期未完任务 → 推老板+本人；关键人过载 → 老板视图标红并推送。
 
 import { camelizeRows } from '../db/index.mjs'
-import { overdueTasksOf } from '../engine/tasks.js'
+import { overdueTasksOf, taskRefMap, formatTaskRefs } from '../engine/tasks.js'
 import { queryMetric } from '../engine/metrics.js'
 import { notifyMember, notifyAdmins } from './push.js'
 
@@ -13,7 +13,12 @@ export function evaluateAlerts(db) {
   for (const m of keypersons) {
     const ods = overdueTasksOf(db, m.id)
     if (!ods.length) continue
-    const lines = ods.map((d) => `- ${d.projectName}「${d.title}」截止 ${d.planEndDate}，已逾期`)
+    // S23：逾期任务行附带参考资料（告诉他逾期任务照哪份 SOP 做）
+    const refMap = taskRefMap(db, ods.map((d) => d.id))
+    const lines = ods.map((d) => {
+      const refs = formatTaskRefs(refMap.get(d.id))
+      return `- ${d.projectName}「${d.title}」截止 ${d.planEndDate}，已逾期${refs ? `\n  参考：${refs}` : ''}`
+    })
     const body = `你有 ${ods.length} 项逾期未完任务：\n${lines.join('\n')}`
     notifyMember(db, m, { pushType: 'alert', title: `逾期任务预警：${m.name}`, body })
     notifyAdmins(db, { pushType: 'alert', title: `逾期任务预警：${m.name}（${ods.length} 项）`, body })
