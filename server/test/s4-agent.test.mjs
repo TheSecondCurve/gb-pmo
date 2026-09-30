@@ -65,7 +65,7 @@ describe('S4 Agent 接入（形态 B）', () => {
     // 完成一项，剩 5 项未完
     await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${p.body.tasks[0].id}`, { status: 'done' })
     const res = await sql(
-      `SELECT id, title, plan_end_date FROM tasks WHERE responsible_member_id = ${ctx.members.lead.id} AND status IN ('todo','doing','blocked') ORDER BY id`
+      `SELECT id, title, plan_end_date FROM tasks WHERE responsible_member_id = ${ctx.members.lead.id} AND status IN ('todo','doing') ORDER BY id`
     )
     expect(res.status).toBe(200)
     expect(res.body.rows.length).toBe(5)

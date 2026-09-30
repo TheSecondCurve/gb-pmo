@@ -6,7 +6,7 @@ import { getSetting } from './settings.js'
 import { todayStr } from './tasks.js'
 
 const OPEN_PROJECT = `p.status IN ('planning','active','paused')`
-const OPEN_TASK = `t.status IN ('todo','doing','blocked')`
+const OPEN_TASK = `t.status IN ('todo','doing')`
 const DAY = 86400000
 
 function daysSince(ts) {
@@ -210,8 +210,7 @@ const IMPLEMENTATIONS = {
         `SELECT ${dims} AS ${groupBy}, m.is_key_person, m.max_parallel_projects,
            (SELECT COUNT(DISTINCT p2.id) FROM projects p2 WHERE p2.status = 'active' AND (p2.lead_member_id = m.id
               OR p2.id IN (SELECT project_id FROM tasks WHERE responsible_member_id = m.id AND status IN ('todo','doing','blocked')))) AS parallel_projects,
-           (SELECT COUNT(*) FROM tasks t2 WHERE t2.responsible_member_id = m.id AND t2.status IN ('todo','doing','blocked')) AS open_tasks,
-           (SELECT COUNT(*) FROM dependencies d WHERE d.depends_on_member_id = m.id AND d.status IN ('pending','overdue')) AS unmet_dependencies
+           (SELECT COUNT(*) FROM tasks t2 WHERE t2.responsible_member_id = m.id AND t2.status IN ('todo','doing')) AS open_tasks
          FROM members m WHERE m.status = 'active' GROUP BY ${dims}, m.id ORDER BY parallel_projects DESC`
       )
       .all()
@@ -220,7 +219,7 @@ const IMPLEMENTATIONS = {
       is_key_person: Boolean(r.is_key_person),
       overloaded: r.parallel_projects > r.max_parallel_projects,
     }))
-    return { columns: [groupBy, 'isKeyPerson', 'parallelProjects', 'openTasks', 'unmetDependencies', 'overloaded'], rows: camelizeRows(out) }
+    return { columns: [groupBy, 'isKeyPerson', 'parallelProjects', 'openTasks', 'overloaded'], rows: camelizeRows(out) }
   },
 
   weekly_project_flow(db) {

@@ -149,7 +149,7 @@ export async function extractEvents(llm, db, projectId, messages) {
   }
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId)
   const tasks = db
-    .prepare(`SELECT t.id, t.title, t.status, t.plan_end_date, m.name AS owner FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id WHERE t.project_id = ? AND t.status IN ('todo','doing','blocked')`)
+    .prepare(`SELECT t.id, t.title, t.status, t.plan_end_date, m.name AS owner FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id WHERE t.project_id = ? AND t.status IN ('todo','doing')`)
     .all(projectId)
   const milestones = db.prepare('SELECT id, name, plan_date FROM milestones WHERE project_id = ? AND status = ?').all(projectId, 'planned')
 

@@ -34,8 +34,7 @@ export const api = {
   project: (id: number) => req<import('./types').ProjectDetail>('GET', `/api/v1/projects/${id}`),
   createProject: (p: Record<string, unknown>) => req<import('./types').ProjectDetail>('POST', '/api/v1/projects', p),
   patchProject: (id: number, p: Record<string, unknown>) => req<import('./types').ProjectDetail>('PATCH', `/api/v1/projects/${id}`, p),
-  closeProject: (id: number, body: Record<string, unknown>) => req<import('./types').ProjectDetail>('POST', `/api/v1/projects/${id}/close`, body),
-  addStage: (id: number, name: string) => req('POST', `/api/v1/projects/${id}/stages`, { name }),
+  closeProject: (id: number, body: Record<string, unknown>) => req<import('./types').ProjectDetail>('POST', `/api/v1/projects/${id}/close`, body), // v0.6：body 仅 summary（结项规则=全部任务完成）
   projectEvents: (id: number, status?: string) => req<{ events: import('./types').EventRow[] }>('GET', `/api/v1/projects/${id}/events${status ? `?status=${status}` : ''}`),
   addProjectEvent: (id: number, body: Record<string, unknown>) => req('POST', `/api/v1/projects/${id}/events`, body),
   projectDigest: (id: number) => req<Record<string, unknown>>('POST', `/api/v1/projects/${id}/digest`, {}),
@@ -49,6 +48,8 @@ export const api = {
   unassigned: () => req<{ tasks: import('./types').TaskRow[] }>('GET', '/api/v1/tasks/unassigned'),
   patchTask: (id: number, p: Record<string, unknown>) => req<import('./types').TaskRow>('PATCH', `/api/v1/tasks/${id}`, p),
   createTask: (p: Record<string, unknown>) => req<import('./types').TaskRow>('POST', '/api/v1/tasks', p),
+  taskRecords: (id: number) => req<{ records: import('./types').TaskRecordRow[] }>('GET', `/api/v1/tasks/${id}/records`),
+  addTaskRecord: (id: number, content: string) => req<{ record: import('./types').TaskRecordRow }>('POST', `/api/v1/tasks/${id}/records`, { content }),
   createMilestone: (p: Record<string, unknown>) => req('POST', '/api/v1/milestones', p),
   patchMilestone: (id: number, p: Record<string, unknown>) => req('PATCH', `/api/v1/milestones/${id}`, p),
 
@@ -64,6 +65,16 @@ export const api = {
   channels: () => req<{ channels: import('./types').ChannelRow[] }>('GET', '/api/v1/channels'),
   upsertChannel: (p: Record<string, unknown>) => req('POST', '/api/v1/channels', p),
   deleteChannel: (id: number) => req('DELETE', `/api/v1/channels/${id}`),
+
+  projectTypes: () => req<{ types: import('./types').ProjectType[] }>('GET', '/api/v1/project-types'),
+  createProjectType: (p: Record<string, unknown>) => req<{ type: import('./types').ProjectType }>('POST', '/api/v1/admin/project-types', p),
+  patchProjectType: (id: number, p: Record<string, unknown>) => req<{ type: import('./types').ProjectType }>('PATCH', `/api/v1/admin/project-types/${id}`, p),
+  adminTemplates: () => req<{ templates: import('./types').TemplateRow[] }>('GET', '/api/v1/admin/templates'),
+  createTemplate: (p: Record<string, unknown>) => req<{ template: import('./types').TemplateRow }>('POST', '/api/v1/admin/templates', p),
+  patchTemplate: (id: number, p: Record<string, unknown>) => req<{ template: import('./types').TemplateRow }>('PATCH', `/api/v1/admin/templates/${id}`, p),
+  deleteTemplate: (id: number) => req('DELETE', `/api/v1/admin/templates/${id}`),
+  adminTokens: () => req<{ tokensByMember: Record<string, { id: number; name: string; tokenPrefix: string; scope: string; expiresAt: number; revokedAt?: number | null }[]> }>('GET', '/api/v1/admin/tokens'),
+  revokeAdminToken: (id: number) => req('DELETE', `/api/v1/admin/tokens/${id}`),
 
   metric: (id: string, groupBy?: string) => req<import('./types').MetricQuery>('GET', `/api/v1/metrics/${id}/query${groupBy ? `?groupBy=${groupBy}` : ''}`),
   metricCatalog: () => req<{ metrics: import('./types').MetricCard[] }>('GET', '/api/v1/metrics'),

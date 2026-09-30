@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { setupDb } from './helpers.mjs'
 import { createMember } from '../engine/members.js'
-import { createProject, getProjectDetail, updateProject, closeProject, addStage, listProjects, projectsWithoutChannel } from '../engine/projects.js'
-import { createTask, updateTask, getTask, listTasks, createMilestone, updateMilestone, createDependency, upsertChannel, evaluateDependencyStatus } from '../engine/tasks.js'
+import { createProject, getProjectDetail, updateProject, closeProject, listProjects, projectsWithoutChannel } from '../engine/projects.js'
+import { createTask, updateTask, getTask, listTasks, createMilestone, updateMilestone, upsertChannel, addTaskRecord, listTaskRecords } from '../engine/tasks.js'
 import { addEvent, getEvent, confirmEvent, rejectEvent, listEvents, expireStaleSuggestions } from '../engine/events.js'
 import { queryMetric, acceptanceAlarm } from '../engine/metrics.js'
 import { projectDigest, personDigest } from '../brain/digest.js'
@@ -39,7 +39,7 @@ describe('projects 分支', () => {
     db.close()
   })
 
-  it('更新：无字段早退、name/clientName/日期可改；closed 走 closeProject；重复结项/未处置 409；addStage 空名 400', () => {
+  it('更新：无字段早退、name/clientName/日期可改；closed 走 closeProject；重复结项/未完任务 409（v0.6 全部完成才可结项）', () => {
     const { db } = setupDb()
     const s = seed(db)
     const p = mk(db, s.lead.id, 'P1')
@@ -47,10 +47,9 @@ describe('projects 分支', () => {
     const renamed = updateProject(db, p.id, { name: 'P1改', clientName: 'C', planStartDate: '2026-10-01' }, 1)
     expect(renamed.name).toBe('P1改')
     expect(() => updateProject(db, p.id, { status: 'closed' }, 1)).toThrow()
-    expect(() => addStage(db, p.id, '')).toThrow()
     expect(() => closeProject(db, p.id, {}, 1)).toThrow()
-    const tasks = listTasks(db, { projectId: p.id })
-    const closed = closeProject(db, p.id, { dispositions: tasks.map((t) => ({ taskId: t.id, action: 'done' })) }, 1)
+    for (const t of listTasks(db, { projectId: p.id })) updateTask(db, t.id, { status: 'done' }, 1)
+    const closed = closeProject(db, p.id, {}, 1)
     expect(closed.status).toBe('closed')
     expect(() => closeProject(db, p.id, {}, 1)).toThrow()
     expect(listProjects(db, { statuses: ['closed'] }).length).toBe(1)
@@ -59,8 +58,8 @@ describe('projects 分支', () => {
   })
 })
 
-describe('tasks/milestones/channels/dependencies 分支', () => {
-  it('任务：缺参 400、404、无字段早退；里程碑无字段早退；依赖校验；渠道规则', () => {
+describe('tasks/milestones/channels/task_records 分支', () => {
+  it('任务：缺参 400、404、无字段早退；里程碑无字段早退；任务记录追加；渠道规则', () => {
     const { db } = setupDb()
     const s = seed(db)
     const p = mk(db, s.lead.id)
@@ -73,9 +72,12 @@ describe('tasks/milestones/channels/dependencies 分支', () => {
     const ms = createMilestone(db, { projectId: p.id, name: 'M1', planDate: '2026-10-01' }, 1)
     expect(updateMilestone(db, ms.id, {}, 1).id).toBe(ms.id)
     expect(() => createMilestone(db, { name: 'x' }, 1)).toThrow()
-    expect(() => createDependency(db, { taskId: t.id }, 1)).toThrow()
-    const dep = createDependency(db, { taskId: t.id, dependsOnMemberId: s.lead.id, dueDate: '2026-01-01' }, 1)
-    expect(evaluateDependencyStatus(db)).toBeGreaterThanOrEqual(1)
+    // 任务更新记录（S2-3）：追加式；空内容/未知任务拒绝
+    expect(() => addTaskRecord(db, { taskId: t.id, content: '' }, 1)).toThrow()
+    expect(() => addTaskRecord(db, { taskId: 999, content: 'x' }, 1)).toThrow()
+    addTaskRecord(db, { taskId: t.id, content: '第一条' }, 1)
+    addTaskRecord(db, { taskId: t.id, content: '第二条' }, 1)
+    expect(listTaskRecords(db, t.id).map((r) => r.content)).toEqual(['第一条', '第二条'])
     // 渠道：通用群不能绑项目、专题必须绑项目、未知平台 400
     expect(() => upsertChannel(db, { platform: 'feishu', groupKey: 'g1', channelType: 'general', projectId: p.id }, 1)).toThrow()
     expect(() => upsertChannel(db, { platform: 'feishu', groupKey: 'g2', channelType: 'dedicated' }, 1)).toThrow()
