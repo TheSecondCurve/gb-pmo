@@ -2,8 +2,8 @@
 // dashboard 页面与 Agent metrics 端点都从这里取数，禁止在别处手写指标 SQL。
 
 import { camelizeRows } from '../db/index.mjs'
+import { today, bjWeekStartMs } from '../db/time.js'
 import { getSetting } from './settings.js'
-import { todayStr } from './tasks.js'
 
 const OPEN_PROJECT = `p.status IN ('planning','active','paused')`
 const OPEN_TASK = `t.status IN ('todo','doing')`
@@ -137,9 +137,9 @@ const IMPLEMENTATIONS = {
     const rows = db
       .prepare(
         `SELECT ${dims.col} AS ${dims.alias},
-           SUM(CASE WHEN t.plan_end_date IS NOT NULL AND t.plan_end_date < date('now') THEN 1 ELSE 0 END) AS overdue,
+           SUM(CASE WHEN t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY() THEN 1 ELSE 0 END) AS overdue,
            COUNT(*) AS open_tasks,
-           ROUND(1.0 * SUM(CASE WHEN t.plan_end_date IS NOT NULL AND t.plan_end_date < date('now') THEN 1 ELSE 0 END) / COUNT(*), 4) AS overdue_rate
+           ROUND(1.0 * SUM(CASE WHEN t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY() THEN 1 ELSE 0 END) / COUNT(*), 4) AS overdue_rate
          FROM tasks t LEFT JOIN projects p ON t.project_id = p.id LEFT JOIN members m ON m.id = t.responsible_member_id
          WHERE ${OPEN_TASK} GROUP BY ${dims.col}`
       )
@@ -169,7 +169,7 @@ const IMPLEMENTATIONS = {
     const rows = db
       .prepare(
         `SELECT p.id, p.name, p.priority, m.name AS lead,
-           (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND ${OPEN_TASK} AND t.plan_end_date IS NOT NULL AND t.plan_end_date < date('now')) AS overdue_tasks,
+           (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND ${OPEN_TASK} AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY()) AS overdue_tasks,
            (SELECT COALESCE(MAX(e.business_time), p.created_at) FROM project_events e WHERE e.project_id = p.id AND e.status = 'effective') AS last_effective_at
          FROM projects p LEFT JOIN members m ON m.id = p.lead_member_id
          WHERE ${OPEN_PROJECT}
@@ -223,9 +223,9 @@ const IMPLEMENTATIONS = {
   },
 
   weekly_project_flow(db) {
-    const monday = getMonday(new Date())
-    const started = db.prepare('SELECT COUNT(*) AS n FROM projects WHERE created_at >= ?').get(monday.getTime()).n
-    const closed = db.prepare('SELECT COUNT(*) AS n FROM projects WHERE actual_end_date >= ?').get(monday.toISOString().slice(0, 10)).n
+    const mondayMs = bjWeekStartMs() // 本自然周按北京时区（S19）
+    const started = db.prepare('SELECT COUNT(*) AS n FROM projects WHERE created_at >= ?').get(mondayMs).n
+    const closed = db.prepare('SELECT COUNT(*) AS n FROM projects WHERE actual_end_date >= ?').get(today(mondayMs)).n
     return { columns: ['flow', 'count'], rows: [{ flow: 'started', count: started }, { flow: 'closed', count: closed }] }
   },
 
@@ -248,14 +248,6 @@ const IMPLEMENTATIONS = {
   },
 }
 
-function getMonday(d) {
-  const date = new Date(d)
-  const day = (date.getDay() + 6) % 7
-  date.setDate(date.getDate() - day)
-  date.setHours(0, 0, 0, 0)
-  return date
-}
-
 function badDim(metric, dim) {
   return Object.assign(new Error(`指标 ${metric} 不支持维度 ${dim}`), { statusCode: 400 })
 }
@@ -272,4 +264,3 @@ export function acceptanceAlarm(db) {
   return { rate, threshold: th.acceptanceAlarm, generated: total, accepted }
 }
 
-export { todayStr }

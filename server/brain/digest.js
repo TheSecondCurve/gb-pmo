@@ -2,6 +2,7 @@
 // LLM 出叙事与建议；建议一律走建议型事件等人确认（S15-2）。LLM 未配置时确定性降级。
 
 import { camelizeRows, camelizeRow } from '../db/index.mjs'
+import { today } from '../db/time.js'
 import { getSetting } from '../engine/settings.js'
 import { addEvent, markPushedTo, pendingSuggestionsFor } from '../engine/events.js'
 import { getLlm, parseJsonLoose } from './llm.js'
@@ -23,8 +24,7 @@ export async function projectDigest(db, projectId, { llm: llmOverride, windowDay
        WHERE t.project_id = ? AND t.status IN ('todo','doing') ORDER BY t.plan_end_date`
     ).all(projectId)
   )
-  const today = new Date().toISOString().slice(0, 10)
-  const overdue = tasks.filter((t) => t.planEndDate && t.planEndDate < today)
+  const overdue = tasks.filter((t) => t.planEndDate && t.planEndDate < today())
   const unassigned = tasks.filter((t) => !t.responsibleMemberId && t.planStartDate)
   const events = camelizeRows(
     db.prepare(
@@ -37,8 +37,8 @@ export async function projectDigest(db, projectId, { llm: llmOverride, windowDay
     .prepare('SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND updated_at >= ?').get(projectId, Date.now() - windowDays * DAY).n
   const silent = !lastEventAt && taskChangedRecently === 0 || (lastEventAt && lastEventAt < Date.now() - th.silentDays * DAY && taskChangedRecently === 0)
 
-  const taskPlane = tasks.map((t) => `#${t.id} ${t.title} [${t.status}]${t.planEndDate ? ` 截止${t.planEndDate}${t.planEndDate < today ? '（已逾期）' : ''}` : ''}${t.responsibleName ? ` 负责:${t.responsibleName}` : '（未指派）'}`).join('\n') || '（无未完任务）'
-  const discussionPlane = events.map((e) => `[${new Date(e.businessTime).toISOString().slice(0, 10)}] ${e.summary}（事件#${e.id}）`).join('\n') || '（窗口期内无事件）'
+  const taskPlane = tasks.map((t) => `#${t.id} ${t.title} [${t.status}]${t.planEndDate ? ` 截止${t.planEndDate}${t.planEndDate < today() ? '（已逾期）' : ''}` : ''}${t.responsibleName ? ` 负责:${t.responsibleName}` : '（未指派）'}`).join('\n') || '（无未完任务）'
+  const discussionPlane = events.map((e) => `[${today(e.businessTime)}] ${e.summary}（事件#${e.id}）`).join('\n') || '（窗口期内无事件）'
 
   let narrative
   const suggestions = []
@@ -99,8 +99,7 @@ export async function personDigest(db, memberId, { llm: llmOverride } = {}) {
        WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') ORDER BY t.plan_end_date`
     ).all(memberId)
   )
-  const today = new Date().toISOString().slice(0, 10)
-  const overdue = tasks.filter((t) => t.planEndDate && t.planEndDate < today)
+  const overdue = tasks.filter((t) => t.planEndDate && t.planEndDate < today())
   const pending = pendingSuggestionsFor(db, memberId)
   const timeoutMs = th.suggestTimeoutHours * 3600 * 1000
   const timedOut = pending.filter((e) => Date.now() - e.createdAt > timeoutMs)
@@ -116,7 +115,7 @@ export async function personDigest(db, memberId, { llm: llmOverride } = {}) {
     }
   }
 
-  const taskLines = tasks.map((t) => `- ${t.project_name} #${t.id} ${t.title} [${t.status}]${t.planEndDate ? ` 截止${t.planEndDate}${t.planEndDate < today ? '（逾期）' : ''}` : ''}`).join('\n') || '（无未完任务）'
+  const taskLines = tasks.map((t) => `- ${t.project_name} #${t.id} ${t.title} [${t.status}]${t.planEndDate ? ` 截止${t.planEndDate}${t.planEndDate < today() ? '（逾期）' : ''}` : ''}`).join('\n') || '（无未完任务）'
   let narrative
   if (llm) {
     const out = await llm.complete(

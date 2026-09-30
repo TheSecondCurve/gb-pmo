@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { fmtDateTime } from '../fmt'
 import { api } from '../api'
 import { useStore } from '../store'
 import { Badge, Btn, Card, Empty, Field, InlineSelect, InlineText, Modal, Spinner, inputCls } from '../components/ui'
@@ -135,7 +136,7 @@ export default function ProjectDetail({ id }: { id: number }) {
                   <Badge tone="muted">{EVENT_TYPE_LABEL[e.eventType] || e.eventType}</Badge>
                   <Badge tone={e.nature === 'suggestion' ? 'info' : 'muted'}>{e.nature === 'suggestion' ? '建议型' : '记录型'}</Badge>
                   {e.generatedBy === 'extraction' && <Badge tone="muted">IM 抽取</Badge>}
-                  <span className="num">{new Date(e.businessTime).toLocaleString('zh-CN')}</span>
+                  <span className="num">{fmtDateTime(e.businessTime)}</span>
                   {e.speakerLabel && <span>{e.speakerLabel}</span>}
                 </div>
                 <div>{e.summary}</div>
@@ -195,7 +196,7 @@ function TaskRecordsModal({ taskId, readonly, onClose }: { taskId: number; reado
           {records.map((r) => (
             <li key={r.id} className="rounded-md border border-[var(--color-line)] p-2 text-[13px]">
               <div className="mb-0.5 text-[11px] text-[var(--color-ink-soft)]">
-                <span className="num">{new Date(r.createdAt).toLocaleString('zh-CN')}</span> · {r.memberName || '系统'}
+                <span className="num">{fmtDateTime(r.createdAt)}</span> · {r.memberName || '系统'}
               </div>
               <div className="whitespace-pre-wrap">{r.content}</div>
             </li>

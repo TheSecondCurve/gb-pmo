@@ -45,6 +45,7 @@ npm start              # 生产模式启动（NODE_ENV=production，托管 dist/
 ## 4. 编码约定
 
 - JSON 一律 camelCase；时间戳 epoch 毫秒；本项目无金额字段（PRD 裁剪）。
+- 日历日一律北京时区（S19）：JS 走 `server/db/time.js`（`today()`/`bjDayStartMs()`/`bjWeekStartMs()`），SQL 走连接层注册的 `BJ_TODAY()`，禁止 `new Date().toISOString().slice(0,10)` 与裸 `date('now')`（均 UTC 语义，凌晨差一天）；前端展示走 `src/fmt.ts`（显式 Asia/Shanghai），禁止 `new Date('YYYY-MM-DD')` 反解。
 - 删除 = 软删（`deleted_at`/状态枚举），人员离职 = 软删 + 强制转交。
 - 状态一律用中央枚举 `server/engine/enums.js`（带中文 label），不散落字符串。
 - 讨论面（project_events）append-only：只插入，不 UPDATE 已生效事件的业务内容。
