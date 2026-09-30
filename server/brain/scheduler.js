@@ -12,17 +12,23 @@ export const TASKS = [
   { key: 'extraction', cronKey: 'extractionCron', enabledKey: 'extractionEnabled' },
   { key: 'alerts', cronKey: 'alertCron', enabledKey: 'alertEnabled' },
   { key: 'report', cronKey: 'reportCron', enabledKey: 'reportEnabled' },
+  { key: 'calendarSync', cronKey: 'calendarSyncCron', enabledKey: 'calendarSyncEnabled' }, // S22 项目日历对账
 ]
 
 const DEFAULT_RUNNERS = {
   extraction: async (db, { llm }) => (await import('./extract.js')).runExtraction(db, {}, { llm }),
   alerts: async (db) => (await import('./alert.js')).evaluateAlerts(db),
   report: async (db) => (await import('./report.js')).dailyReport(db, { force: false }),
+  calendarSync: async (db) => (await import('./calendar.js')).syncProjectCalendar(db),
 }
 
-/** 纯判定：给定调度配置（含 cron 与 enabled）与各任务上次运行时刻，返回此刻应跑的任务 key 数组。 */
+/** 纯判定：给定调度配置（含 cron 与 enabled）与各任务上次运行时刻，返回此刻应跑的任务 key 数组。
+ *  cronKey 缺失（部分配置/测试构造）视为未排期跳过；生产运行时 getSetting 与默认值深合并恒完整。 */
 export function dueTasks(cfg, lastRuns, nowMs) {
-  return TASKS.filter((t) => cfg[t.enabledKey] !== false).filter((t) => isDue(cfg[t.cronKey], lastRuns[t.key] ?? 0, nowMs)).map((t) => t.key)
+  return TASKS
+    .filter((t) => cfg[t.enabledKey] !== false && cfg[t.cronKey])
+    .filter((t) => isDue(cfg[t.cronKey], lastRuns[t.key] ?? 0, nowMs))
+    .map((t) => t.key)
 }
 
 /**

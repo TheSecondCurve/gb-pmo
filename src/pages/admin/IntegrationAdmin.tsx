@@ -51,23 +51,71 @@ function LlmCard() {
 function FeishuCard() {
   const { toast } = useStore()
   const [cfg, setCfg] = useState<{ appId: string; appSecret: string } | null>(null)
+  const [calendarId, setCalendarId] = useState<string | null>(null)
+  const [calMsg, setCalMsg] = useState('')
+  const [calBusy, setCalBusy] = useState(false)
   const [result, setResult] = useState('')
   useEffect(() => {
-    void (async () => { const s = await api.settings(); setCfg((s['im.feishu'] as { appId: string; appSecret: string }) || { appId: '', appSecret: '' }) })()
+    void (async () => {
+      const s = await api.settings()
+      setCfg((s['im.feishu'] as { appId: string; appSecret: string }) || { appId: '', appSecret: '' })
+      setCalendarId((s['calendar'] as { feishuCalendarId?: string })?.feishuCalendarId || '')
+    })()
   }, [])
   if (!cfg) return <Spinner />
+  const runCal = async (kind: 'init' | 'sync') => {
+    setCalBusy(true); setCalMsg('')
+    try {
+      if (kind === 'init') {
+        const r = await api.calendarInit()
+        setCalendarId(r.calendarId)
+        setCalMsg(`✅ 项目日历已创建（${r.calendarId}）。团队成员在飞书日历搜索「项目日历（gb-pmo）」即可订阅。`)
+      } else {
+        const r = await api.calendarSync()
+        if ('reason' in r) {
+          setCalMsg(`⏭️ ${r.reason}`)
+        } else {
+          const errs = r.errors?.length ? `；${r.errors.length} 个项目失败（${r.errors[0].name}: ${r.errors[0].error}）` : ''
+          setCalMsg(`✅ 同步完成：新建 ${r.created} · 更新 ${r.updated} · 跳过 ${r.skipped}${errs}`)
+          if (errs) toast(r.errors![0].error, 'bad')
+        }
+      }
+    } catch (e) {
+      setCalMsg(`❌ ${(e as Error).message}`)
+      toast((e as Error).message, 'bad')
+    } finally {
+      setCalBusy(false)
+    }
+  }
   return (
-    <Card title="飞书（自建应用 + 机器人进群 + im:message.group_msg；申请步骤见 docs/prd.md 附录 A.1）">
-      <div className="max-w-lg">
-        <Field label="App ID"><input className={inputCls} value={cfg.appId} onChange={(e) => setCfg({ ...cfg, appId: e.target.value })} /></Field>
-        <Field label="App Secret"><input className={inputCls} type="password" value={cfg.appSecret} onChange={(e) => setCfg({ ...cfg, appSecret: e.target.value })} /></Field>
-      </div>
-      <div className="flex items-center gap-2">
-        <Btn kind="primary" onClick={async () => { await api.putSetting('im.feishu', cfg); toast('飞书配置已保存') }}>保存</Btn>
-        <Btn onClick={async () => { const r = await api.testIm('feishu'); setResult(r.ok ? '✅ 连接成功' : `❌ ${r.reason}`); if (!r.ok) toast(r.reason || '连接失败', 'bad') }}>测试连接</Btn>
-        {result && <span className="text-[12px]">{result}</span>}
-      </div>
-    </Card>
+    <div className="space-y-4">
+      <Card title="飞书（自建应用 + 机器人进群 + im:message.group_msg；申请步骤见 docs/prd.md 附录 A.1）">
+        <div className="max-w-lg">
+          <Field label="App ID"><input className={inputCls} value={cfg.appId} onChange={(e) => setCfg({ ...cfg, appId: e.target.value })} /></Field>
+          <Field label="App Secret"><input className={inputCls} type="password" value={cfg.appSecret} onChange={(e) => setCfg({ ...cfg, appSecret: e.target.value })} /></Field>
+        </div>
+        <div className="flex items-center gap-2">
+          <Btn kind="primary" onClick={async () => { await api.putSetting('im.feishu', cfg); toast('飞书配置已保存') }}>保存</Btn>
+          <Btn onClick={async () => { const r = await api.testIm('feishu'); setResult(r.ok ? '✅ 连接成功' : `❌ ${r.reason}`); if (!r.ok) toast(r.reason || '连接失败', 'bad') }}>测试连接</Btn>
+          {result && <span className="text-[12px]">{result}</span>}
+        </div>
+      </Card>
+      <Card title="项目日历（S22）：组织级日历，团队订阅即见全部项目起止（结项项目保留）">
+        <p className="mb-3 text-[12px] leading-5 text-[var(--color-ink-soft)]">
+          需先开通日历权限 <code>calendar:calendar</code> / <code>calendar:event</code>（附录 A.1 第 8 步）。
+          初始化 = 应用身份创建组织内可订阅的日历；之后按「阈值与推送」的 calendarSyncCron 对账同步（改期/结项下轮自动跟进），此处可手动立即同步。
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[12px] text-[var(--color-ink-soft)]">
+            状态：{calendarId ? <span className="num">已初始化（{calendarId}）</span> : '未初始化（调度静默跳过）'}
+          </span>
+          <Btn kind="primary" disabled={calBusy || !!calendarId} onClick={() => void runCal('init')}>初始化项目日历</Btn>
+          <Btn disabled={calBusy || !calendarId} onClick={() => void runCal('sync')}>立即同步</Btn>
+          {calBusy && <span className="text-[12px] text-[var(--color-ink-soft)]">请求飞书中…</span>}
+        </div>
+        {calMsg && <div className="mt-2 text-[12px]">{calMsg}</div>}
+      </Card>
+    </div>
   )
 }
 

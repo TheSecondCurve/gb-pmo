@@ -13,11 +13,11 @@ export function getSetting(db, key) {
 // 值校验器（按 key）：保存前拦截非法值，中文错误带 400。
 const VALIDATORS = {
   scheduler(value) {
-    for (const k of ['extractionCron', 'alertCron', 'reportCron']) {
+    for (const k of ['extractionCron', 'alertCron', 'reportCron', 'calendarSyncCron']) {
       if (value?.[k] === undefined) continue
       parseCron(value[k]) // 非法即 throw（statusCode 400，含字段与原因）
     }
-    for (const k of ['extractionEnabled', 'alertEnabled', 'reportEnabled']) {
+    for (const k of ['extractionEnabled', 'alertEnabled', 'reportEnabled', 'calendarSyncEnabled']) {
       if (value?.[k] === undefined) continue
       if (typeof value[k] !== 'boolean') {
         throw Object.assign(new Error(`scheduler.${k} 须为布尔值（true/false）`), { statusCode: 400 })

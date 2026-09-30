@@ -3,6 +3,7 @@ import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { dailyReport } from '../brain/report.js'
 import { evaluateAlerts } from '../brain/alert.js'
 import { queryMetric } from '../engine/metrics.js'
+import { today } from '../db/time.js'
 
 // PRD S6 / S7 — 日报分视角与「今日无更新」；关键人逾期任务与过载预警（v0.6：S7-1 改逾期任务口径）
 
@@ -11,8 +12,10 @@ afterAll(() => ctx?.db.close())
 
 async function mkProject(name, leadId, priority = 'medium') {
   const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+  // v0.12（S21-1）：切「进行中」必须有交付日期——today() 同源 +30 天，避免时间炸弹与 UTC 偏差
+  const planEndDate = new Date(Date.parse(`${today()}T00:00:00Z`) + 30 * 86400000).toISOString().slice(0, 10)
   const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-    name, templateCode: 'software_delivery', leadMemberId: leadId, priority,
+    name, templateCode: 'software_delivery', leadMemberId: leadId, priority, planEndDate,
   })
   await authed(ctx.app, cookie, 'PATCH', `/api/v1/projects/${res.body.id}`, { status: 'active' })
   return res.body

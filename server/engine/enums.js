@@ -79,7 +79,11 @@ export const DEFAULT_SETTINGS = {
     alertEnabled: true,
     reportCron: '0 18 * * *',      // 日报提醒（默认每日 18:00）
     reportEnabled: true,
+    calendarSyncCron: '*/30 * * * *', // 项目日历同步（S22，默认每 30 分钟）
+    calendarSyncEnabled: true,
   },
+  // S22 项目日历：feishuCalendarId 空=未初始化（配置台「外部依赖→飞书」初始化写入；同步任务静默跳过）
+  calendar: { feishuCalendarId: '' },
   llm: { baseUrl: 'https://api.deepseek.com', apiKey: '', model: 'deepseek-chat', timeoutMs: 60000 },
   'im.feishu': {
     appId: '', appSecret: '',

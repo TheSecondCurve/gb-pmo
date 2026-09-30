@@ -59,7 +59,7 @@ console.log(`gb-pmo listening on :${PORT} (db: ${DB_FILE})`)
 // 大脑调度器随进程默认运行（S18，v0.7）：cron 与每任务 enabled 开关在配置台「阈值与推送」热调整
 const { startScheduler } = await import('./brain/scheduler.js')
 startScheduler(db, { llm: getLlm(db) })
-console.log('[scheduler] enabled（cron 由配置台 scheduler 块驱动：信息更新对齐 / 预警提醒 / 日报提醒）')
+console.log('[scheduler] enabled（cron 由配置台 scheduler 块驱动：信息更新对齐 / 预警提醒 / 日报提醒 / 项目日历同步）')
 
 // S20 机器人指令通道（v0.11）：飞书长连接随进程内嵌（botEnabled 门控；SDK 缺失不阻塞主进程）
 const { startBot } = await import('./brain/bot/gateway.js')

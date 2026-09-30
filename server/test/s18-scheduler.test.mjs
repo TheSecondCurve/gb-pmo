@@ -173,6 +173,7 @@ describe('S18 管理端点（手动对齐 + 调度配置）', () => {
     expect(s.body.scheduler).toEqual({
       extractionCron: '0 * * * *', alertCron: '*/15 * * * *', reportCron: '0 18 * * *',
       extractionEnabled: true, alertEnabled: true, reportEnabled: true,
+      calendarSyncCron: '*/30 * * * *', calendarSyncEnabled: true, // v0.12 新增（S22 项目日历同步）
     })
 
     const memberPut = await authed(ctx.app, leadCookie, 'PUT', '/api/v1/admin/settings/scheduler', {
