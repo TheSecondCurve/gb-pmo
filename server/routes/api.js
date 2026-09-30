@@ -286,6 +286,17 @@ export function registerApiRoutes(app) {
     return { ok: true }
   })
 
+  // S17-9：任务模板 AI 起草——LLM 按名称+说明产任务清单草稿（只回填编辑器，不落库；保存走既有通道）
+  app.post('/api/v1/admin/templates/draft', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { name, description } = req.body || {}
+    if (!name || !String(name).trim()) return reply.status(400).send({ message: 'name 必填（模板名）' })
+    const { draftTemplateTasks } = await import('../brain/templates.js')
+    const out = await draftTemplateTasks(db, { name: String(name).trim(), description }, { llm: app.llm ?? undefined })
+    auth.audit(db, { memberId: req.member.id, action: 'template.draft', objectType: 'template', detail: { name: String(name).trim(), tasks: out.tasks.length } })
+    return out
+  })
+
   app.get('/api/v1/admin/tokens', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     const { listTokens: lt } = await import('../engine/auth.js')

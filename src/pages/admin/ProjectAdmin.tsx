@@ -142,6 +142,7 @@ function TemplateEditor({ template, onClose, onDone }: { template: TemplateRow |
       }
     : { code: '', name: '', description: '', tasksText: '' })
   const [err, setErr] = useState('')
+  const [drafting, setDrafting] = useState(false)
 
   const parse = () => {
     const tasks = form.tasksText
@@ -164,6 +165,17 @@ function TemplateEditor({ template, onClose, onDone }: { template: TemplateRow |
       <Field label="默认任务清单（每行一条任务标题，按顺序；v0.6：无阶段、无预设依赖）">
         <textarea className={inputCls} rows={10} value={form.tasksText} onChange={(e) => setForm({ ...form, tasksText: e.target.value })} placeholder={'需求确认与范围冻结\n技术方案与排期\n开发联调\n结项复盘'} />
       </Field>
+      <div className="mb-2 flex items-center gap-2">
+        <Btn small disabled={!form.name.trim() || drafting} onClick={async () => {
+          setDrafting(true); setErr('')
+          try {
+            const out = await api.draftTemplateTasks({ name: form.name, description: form.description })
+            setForm((f) => ({ ...f, tasksText: out.tasks.join('\n') }))
+            toast(`AI 起草 ${out.tasks.length} 条任务，可继续编辑后保存（草稿未落库）`)
+          } catch (e) { setErr((e as Error).message) } finally { setDrafting(false) }
+        }}>{drafting ? 'AI 起草中…' : '✨ AI 起草任务清单'}</Btn>
+        <span className="text-[11px] text-[var(--color-ink-soft)]">按模板名+说明生成草稿（S17-9）；需已配置 DeepSeek（外部依赖 → LLM）</span>
+      </div>
       {err && <div className="mb-2 rounded bg-red-50 px-2 py-1 text-[12px] text-[var(--color-bad)]">{err}</div>}
       <div className="text-[11px] text-[var(--color-ink-soft)]">编辑保存 = 任务清单整体替换；已立项项目是立项时的实例拷贝，不受影响。</div>
       <div className="mt-3 flex justify-end gap-2">

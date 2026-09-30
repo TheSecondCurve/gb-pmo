@@ -224,4 +224,48 @@ describe('S17 配置台改版：角色治理与类型/模板管理', () => {
       local.db.close()
     }
   })
+
+  it('S17-9: 模板 AI 起草——LLM 产草稿回填不落库；未配置给指引；成员 403；留审计', async () => {
+    ctx = await setupApp()
+    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    const leadCookie = await loginCookie(ctx.app, 'zhangsan', 'pass-123456')
+
+    // LLM 未配置（默认 settings 无 apiKey）→ 明确指引，不降级瞎生成
+    const noLlm = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/templates/draft', { name: '硬件部署' })
+    expect(noLlm.status).toBe(503)
+    expect(JSON.stringify(noLlm.body)).toMatch(/LLM 未配置/)
+
+    // 普通成员 403
+    const denied = await authed(ctx.app, leadCookie, 'POST', '/api/v1/admin/templates/draft', { name: '硬件部署' })
+    expect(denied.status).toBe(403)
+
+    // 正常草稿：清洗序号前缀（"1. " / "2、"）
+    ctx.app.llm = fakeLlm(() => JSON.stringify({ tasks: ['1. 设备到货验收', '2、机柜上架与布线', '应用部署与联调', '割接上线', '结项移交'] }))
+    const ok = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/templates/draft', { name: '硬件部署交付', description: '机房设备安装到割接上线' })
+    expect(ok.status).toBe(200)
+    expect(ok.body.tasks).toEqual(['设备到货验收', '机柜上架与布线', '应用部署与联调', '割接上线', '结项移交'])
+    // 草稿不落库（信任边界：确认保存走既有通道）
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM project_templates WHERE name = '硬件部署交付'`).get().n).toBe(0)
+    // 留审计
+    expect(ctx.db.prepare(`SELECT * FROM audit_logs WHERE action = 'template.draft'`).get()).toBeTruthy()
+  })
+
+  it('S17-9: AI 起草边界——超 15 条截断、少于 3 条拒绝、非 JSON 502、缺 name 400', async () => {
+    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    ctx.app.llm = fakeLlm(() => JSON.stringify({ tasks: Array.from({ length: 18 }, (_, i) => `任务${i + 1}`) }))
+    const many = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/templates/draft', { name: '大模板' })
+    expect(many.status).toBe(200)
+    expect(many.body.tasks).toHaveLength(15)
+
+    ctx.app.llm = fakeLlm(() => JSON.stringify({ tasks: ['仅一条', '两条'] }))
+    const few = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/templates/draft', { name: '小模板' })
+    expect(few.status).toBe(502)
+
+    ctx.app.llm = fakeLlm(() => '抱歉我无法生成')
+    const bad = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/templates/draft', { name: '坏模板' })
+    expect(bad.status).toBe(502)
+
+    const noName = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/templates/draft', {})
+    expect(noName.status).toBe(400)
+  })
 })
