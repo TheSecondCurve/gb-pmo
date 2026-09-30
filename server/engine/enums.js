@@ -30,6 +30,15 @@ export const ENUMS = {
   eventGenerator: { extraction: 'IM 抽取', digest: '梳理建议', agent: 'Agent 口述', web: '页面操作', system: '系统' },
   pushType: { daily_report: '日报', digest: '梳理', alert: '预警', test: '测试' },
   tokenScope: { read: '只读', write: '读写' },
+  // S20 机器人指令通道：指令/卡片/机器人回复三类记录 + 结果枚举（bot_commands.result）
+  botCommandKind: { command: '指令', card: '卡片回调', bot_reply: '机器人回复' },
+  botCommandResult: {
+    replied: '已回复', clarified: '已追问', guidance: '绑定引导', bound: '已绑定',
+    card_sent: '已发确认卡', confirmed: '已确认生效', rejected: '已驳回',
+    refused_permission: '权限不足', refused_quota: '超出限额', refused_external: '外部群拒答',
+    refused_unregistered: '未登记群拒答', ignored_unbound: '未绑定忽略', ignored_dedup: '重复忽略',
+    no_llm: 'LLM 未配置', error: '错误',
+  },
 }
 
 export function label(group, value) {
@@ -72,6 +81,12 @@ export const DEFAULT_SETTINGS = {
     reportEnabled: true,
   },
   llm: { baseUrl: 'https://api.deepseek.com', apiKey: '', model: 'deepseek-chat', timeoutMs: 60000 },
-  'im.feishu': { appId: '', appSecret: '' },
+  'im.feishu': {
+    appId: '', appSecret: '',
+    botEnabled: false,                       // S20 机器人指令通道总开关（默认关）
+    botModes: { p2p: true, groupAt: true },  // 私聊 / 群@ 两个入口
+    answerUnregisteredGroups: true,          // 未登记群是否响应项目问答（写需显式指项目）
+    commandQuotaPerDay: 50,                  // 每成员每日自然语言指令限额（北京日）
+  },
   'im.wecom': { corpId: '', secret: '', publicKeyVer: '', privateKey: '', sdkUrl: '' },
 }
