@@ -126,6 +126,10 @@ describe('S18 调度判定（scheduler）', () => {
   })
 
   it('S18-2/S18-4: 心跳按 cron 触发，改配置下一拍生效；report 冷启动补发', async () => {
+    // 独立库（前置：当日无日报推送）。不能复用上一用例的 ctx——它的 dailyReport 会以真实时钟写
+    // pushes 行，真实时间晚于本用例假时钟 18:01 时，initialLastRun 锚点会越过 now，补发窗口为空，
+    // 测试就变成「每天只在 18:01 前跑得绿」的时间炸弹。
+    ctx = await setupApp()
     const { db } = ctx
     const base = new Date()
     base.setHours(18, 1, 0, 0)

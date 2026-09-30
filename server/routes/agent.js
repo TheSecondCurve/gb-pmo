@@ -5,19 +5,14 @@ import { fileURLToPath } from 'node:url'
 import { issueToken, authenticateToken, audit, revokeToken, listTokens } from '../engine/auth.js'
 import { login } from '../engine/auth.js'
 import { queryMetric, listMetrics } from '../engine/metrics.js'
-import * as tasks from '../engine/tasks.js'
-import * as projectTypes from '../engine/projectTypes.js'
-import { setSetting } from '../engine/settings.js'
 import { safeBaseUrl, renderLoginSh, renderLoginPs1, renderInstallSh, renderInstallPs1, renderClientSh } from '../agent/scripts.mjs'
+import {
+  SQL_MAX_ROWS, CREDENTIAL_COLS, SESSION_TABLE, READ_HEADS, WRITE_HEADS, DDL_HEADS, stripSqlComments,
+} from '../agent/sqlGuard.js'
+import { ACTIONS } from '../agent/actions.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const SKILL_VERSION = '0.1.1'
-
-const SQL_MAX_ROWS = 1000
-const CREDENTIAL_COLS = /password_hash|token_hash/i
-const SESSION_TABLE = /\bsessions\b/i
-const READ_HEADS = /^(SELECT|WITH|VALUES)\b/i
-const WRITE_HEADS = /^(INSERT|UPDATE|DELETE)\b/i
 
 export function registerAgentRoutes(app) {
   const db = app.db
@@ -77,13 +72,13 @@ export function registerAgentRoutes(app) {
     if (!sql.trim()) return reply.status(400).send({ message: 'sql 必填' })
 
     // 注释前缀剥离后再判定语句头，防 /* */ 或 -- 前缀绕过
-    const stripped = sql.replace(/^\s*(--[^\n]*\n|\/\*[\s\S]*?\*\/|\s)+/, '').trim()
+    const stripped = stripSqlComments(sql)
     // 凭据黑名单与 sessions 表引用（prepare 之前判定）
     if (CREDENTIAL_COLS.test(sql) || SESSION_TABLE.test(sql)) {
       audit(db, { memberId: member.id, action: 'agent.sql.denied', detail: { reason: 'blacklist' } })
       return reply.status(403).send({ message: '禁止访问凭据列或 sessions 表' })
     }
-    if (/^(CREATE|ALTER|DROP|PRAGMA|ATTACH|DETACH|VACUUM|REINDEX)\b/i.test(stripped)) {
+    if (DDL_HEADS.test(stripped)) {
       audit(db, { memberId: member.id, action: 'agent.sql.denied', detail: { reason: 'ddl' } })
       return reply.status(403).send({ message: 'DDL/PRAGMA 对任何令牌一律 403' })
     }
@@ -142,42 +137,7 @@ export function registerAgentRoutes(app) {
   app.get('/api/v1/agent/tokens', async (req) => ({ tokens: listTokens(db, req.agentAuth.member.id) }))
 
   // —— 受限 action 端点（K3 白名单枚举；配置类仅系统管理员 PAT，S17-10）——
-
-  const ACTIONS = {
-    // 触发类：write scope 即可
-    trigger_extraction: { run: async (params, ctx) => (await import('../brain/extract.js')).runExtraction(db, params) },
-    generate_project_digest: { run: async (params, ctx) =>
-      (await import('../brain/digest.js')).projectDigest(db, Number(params.projectId), { llm: app.llm }) },
-    generate_person_digest: { run: async (params, ctx) =>
-      (await import('../brain/digest.js')).personDigest(db, Number(params.memberId ?? ctx.member.id), { llm: app.llm }) },
-    push_report: { run: async (params, ctx) => (await import('../brain/report.js')).dailyReport(db, { llm: app.llm, force: true }) },
-
-    // 配置类（S17-10）：与 web 配置台同构（复用 engine 校验与审计），仅系统管理员 PAT
-    upsert_channel: {
-      adminOnly: true,
-      run: async (params, ctx) => tasks.upsertChannel(db, params, ctx.member.id),
-    },
-    delete_channel: {
-      adminOnly: true,
-      run: async (params, ctx) => tasks.deleteChannel(db, Number(params.id), ctx.member.id) || { ok: true },
-    },
-    put_setting: {
-      adminOnly: true,
-      run: async (params, ctx) => setSetting(db, params.key, params.value, ctx.member.id),
-    },
-    create_template: {
-      adminOnly: true,
-      run: async (params, ctx) => projectTypes.createTemplate(db, params, ctx.member.id),
-    },
-    draft_template_tasks: {
-      adminOnly: true,
-      run: async (params, ctx) => (await import('../brain/templates.js')).draftTemplateTasks(db, params, { llm: app.llm ?? undefined }),
-    },
-    reset_channel_cursor: {
-      adminOnly: true,
-      run: async (params, ctx) => tasks.resetChannelCursor(db, Number(params.channelId), { days: params.days }, ctx.member.id),
-    },
-  }
+  // 注册表本体在 server/agent/actions.js（K9：与 S20 机器人 trigger 工具共用）
 
   app.post('/api/v1/agent/actions', async (req, reply) => {
     const { token, member } = req.agentAuth
@@ -192,7 +152,7 @@ export function registerAgentRoutes(app) {
       audit(db, { memberId: member.id, action: 'agent.action.denied', detail: { action, reason: 'adminOnly' } })
       return reply.status(403).send({ message: '配置类操作需要系统管理员的 PAT（web 配置台或换管理员账号授权）' })
     }
-    const result = await spec.run(params || {}, { member })
+    const result = await spec.run(params || {}, { db, member, llm: app.llm ?? undefined })
     audit(db, { memberId: member.id, action: `agent.action.${action}`, detail: { params: params || {} } })
     return { ok: true, action, result }
   })

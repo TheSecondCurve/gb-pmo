@@ -276,6 +276,35 @@ client.sh action generate_person_digest '{}'
 | member_id | INTEGER |  |
 | content | TEXT |  |
 
+### bot_commands
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| message_id | TEXT |  |
+| platform | TEXT |  |
+| chat_id | TEXT |  |
+| chat_type | TEXT |  |
+| sender_open_id | TEXT |  |
+| member_id | INTEGER |  |
+| kind | TEXT |  |
+| raw_text | TEXT |  |
+| intent | TEXT |  |
+| detail | TEXT |  |
+| result | TEXT |  |
+| llm_calls | INTEGER |  |
+| duration_ms | INTEGER |  |
+
+### bot_bind_codes
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| member_id | INTEGER |  |
+| code_hash | TEXT |  |
+| expires_at | INTEGER |  |
+| used_at | INTEGER |  |
+
 ## 枚举（值 ↔ 中文 label，双向对齐）
 
 - **memberRole**: admin=系统管理员、member=成员
@@ -294,6 +323,8 @@ client.sh action generate_person_digest '{}'
 - **eventGenerator**: extraction=IM 抽取、digest=梳理建议、agent=Agent 口述、web=页面操作、system=系统
 - **pushType**: daily_report=日报、digest=梳理、alert=预警、test=测试
 - **tokenScope**: read=只读、write=读写
+- **botCommandKind**: command=指令、card=卡片回调、bot_reply=机器人回复
+- **botCommandResult**: replied=已回复、clarified=已追问、guidance=绑定引导、bound=已绑定、card_sent=已发确认卡、confirmed=已确认生效、rejected=已驳回、refused_permission=权限不足、refused_quota=超出限额、refused_external=外部群拒答、refused_unregistered=未登记群拒答、ignored_unbound=未绑定忽略、ignored_dedup=重复忽略、no_llm=LLM 未配置、error=错误
 
 <!--SCHEMA:END-->
 

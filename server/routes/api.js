@@ -57,6 +57,14 @@ export function registerApiRoutes(app) {
     return { ok: true }
   })
 
+  // S20-4：飞书绑定码（成员自助生成；10 分钟一次性，仅私聊 /bind 消费，凭据不经 LLM）
+  app.post('/api/v1/auth/feishu-bind-code', async (req) => {
+    const { issueBindCode } = await import('../brain/bot/command.js')
+    const out = issueBindCode(db, req.member.id)
+    auth.audit(db, { memberId: req.member.id, action: 'bot.bindCode', objectType: 'member', objectId: req.member.id })
+    return out
+  })
+
   // —— 成员（D1 全员透明：查看全员可；维护管理员）——
 
   app.get('/api/v1/members', async () => ({ members: members.listMembers(db) }))

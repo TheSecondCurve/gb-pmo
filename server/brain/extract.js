@@ -49,11 +49,17 @@ export async function runExtraction(db, { channelId, projectId } = {}, { llm } =
 /**
  * 消息批量入库（测试直调；连接器喂数据的统一通道）。
  * 每条消息：身份映射 → （通用群）分拣 → LLM 抽取 → 事件写入。
+ * S20-10：机器人已处理/已回复的消息（bot_commands 有 message_id）跳过，防同一消息双入库。
  */
 export async function ingestMessages(db, channel, messages, { llm: llmOverride } = {}) {
   const llm = getLlm(db, llmOverride)
-  const stats = { events: 0, suggestions: 0, unrouted: 0, unknownSpeakers: 0 }
+  const stats = { events: 0, suggestions: 0, unrouted: 0, unknownSpeakers: 0, botProcessed: 0 }
+  const botSeen = db.prepare('SELECT 1 FROM bot_commands WHERE message_id = ?')
   for (const msg of messages) {
+    if (msg.id && botSeen.get(msg.id)) {
+      stats.botProcessed += 1
+      continue
+    }
     const speaker = mapSpeaker(db, channel.platform, msg.speakerId, msg.speakerLabel)
     if (!speaker) stats.unknownSpeakers += 1
 
@@ -105,7 +111,8 @@ export async function ingestMessages(db, channel, messages, { llm: llmOverride }
   return stats
 }
 
-function pushSuggestion(db, evt) {
+/** 建议推送（S3-4/S20-2 共用）：目标任务责任人 + 项目牵头人（去重），记 pushed_to。 */
+export function pushSuggestion(db, evt) {
   const target = evt.targetTaskId
     ? db.prepare('SELECT responsible_member_id AS rid FROM tasks WHERE id = ?').get(evt.targetTaskId)
     : null
