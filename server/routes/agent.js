@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url'
 import { issueToken, authenticateToken, audit, revokeToken, listTokens } from '../engine/auth.js'
 import { login } from '../engine/auth.js'
 import { queryMetric, listMetrics } from '../engine/metrics.js'
+import * as tasks from '../engine/tasks.js'
+import * as projectTypes from '../engine/projectTypes.js'
+import { setSetting } from '../engine/settings.js'
 import { safeBaseUrl, renderLoginSh, renderLoginPs1, renderInstallSh, renderInstallPs1, renderClientSh } from '../agent/scripts.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -133,27 +136,58 @@ export function registerAgentRoutes(app) {
 
   app.get('/api/v1/agent/tokens', async (req) => ({ tokens: listTokens(db, req.agentAuth.member.id) }))
 
-  // —— 受限 action 端点（K3 白名单枚举）——
+  // —— 受限 action 端点（K3 白名单枚举；配置类仅系统管理员 PAT，S17-10）——
 
   const ACTIONS = {
-    trigger_extraction: async (params, ctx) => (await import('../brain/extract.js')).runExtraction(db, params),
-    generate_project_digest: async (params, ctx) =>
-      (await import('../brain/digest.js')).projectDigest(db, Number(params.projectId), { llm: app.llm }),
-    generate_person_digest: async (params, ctx) =>
-      (await import('../brain/digest.js')).personDigest(db, Number(params.memberId ?? ctx.member.id), { llm: app.llm }),
-    push_report: async (params, ctx) => (await import('../brain/report.js')).dailyReport(db, { llm: app.llm, force: true }),
+    // 触发类：write scope 即可
+    trigger_extraction: { run: async (params, ctx) => (await import('../brain/extract.js')).runExtraction(db, params) },
+    generate_project_digest: { run: async (params, ctx) =>
+      (await import('../brain/digest.js')).projectDigest(db, Number(params.projectId), { llm: app.llm }) },
+    generate_person_digest: { run: async (params, ctx) =>
+      (await import('../brain/digest.js')).personDigest(db, Number(params.memberId ?? ctx.member.id), { llm: app.llm }) },
+    push_report: { run: async (params, ctx) => (await import('../brain/report.js')).dailyReport(db, { llm: app.llm, force: true }) },
+
+    // 配置类（S17-10）：与 web 配置台同构（复用 engine 校验与审计），仅系统管理员 PAT
+    upsert_channel: {
+      adminOnly: true,
+      run: async (params, ctx) => tasks.upsertChannel(db, params, ctx.member.id),
+    },
+    delete_channel: {
+      adminOnly: true,
+      run: async (params, ctx) => tasks.deleteChannel(db, Number(params.id), ctx.member.id) || { ok: true },
+    },
+    put_setting: {
+      adminOnly: true,
+      run: async (params, ctx) => setSetting(db, params.key, params.value, ctx.member.id),
+    },
+    create_template: {
+      adminOnly: true,
+      run: async (params, ctx) => projectTypes.createTemplate(db, params, ctx.member.id),
+    },
+    draft_template_tasks: {
+      adminOnly: true,
+      run: async (params, ctx) => (await import('../brain/templates.js')).draftTemplateTasks(db, params, { llm: app.llm ?? undefined }),
+    },
+    reset_channel_cursor: {
+      adminOnly: true,
+      run: async (params, ctx) => tasks.resetChannelCursor(db, Number(params.channelId), { days: params.days }, ctx.member.id),
+    },
   }
 
   app.post('/api/v1/agent/actions', async (req, reply) => {
     const { token, member } = req.agentAuth
     if (token.scope !== 'write') return reply.status(403).send({ message: '触发类操作需要 write scope' })
     const { action, params } = req.body || {}
-    const handler = ACTIONS[action]
-    if (!handler) {
+    const spec = ACTIONS[action]
+    if (!spec) {
       audit(db, { memberId: member.id, action: 'agent.action.denied', detail: { action } })
       return reply.status(400).send({ message: `未知 action: ${action}（白名单: ${Object.keys(ACTIONS).join(', ')}）` })
     }
-    const result = await handler(params || {}, { member })
+    if (spec.adminOnly && member.role !== 'admin') {
+      audit(db, { memberId: member.id, action: 'agent.action.denied', detail: { action, reason: 'adminOnly' } })
+      return reply.status(403).send({ message: '配置类操作需要系统管理员的 PAT（web 配置台或换管理员账号授权）' })
+    }
+    const result = await spec.run(params || {}, { member })
     audit(db, { memberId: member.id, action: `agent.action.${action}`, detail: { params: params || {} } })
     return { ok: true, action, result }
   })

@@ -202,3 +202,97 @@ describe('SQL 端点对抗用例表（engineering-standards §4）', () => {
     writeToken = readToken // 后续用例换有效令牌
   })
 })
+
+// —— S17-10（v0.9）：Agent 配置类 action（仅系统管理员 PAT，成员 403）——
+
+function fakeLlm(handler) {
+  return { name: 'fake', complete: async () => handler() }
+}
+
+describe('S17-10 Agent 配置类 action', () => {
+  let adminToken
+  let memberToken
+
+  async function mkProject() {
+    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
+      name: '客户R系统', templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id, planEndDate: '2026-12-31',
+    })
+    return res.body
+  }
+
+  it('S17-10: 成员 PAT 调配置类 action 403；未知 action 400', async () => {
+    ctx = await setupApp()
+    const a = await ctx.app.inject({ method: 'POST', url: '/api/v1/auth/agent-login', payload: { username: 'admin', password: 'admin-pass-123' } })
+    adminToken = a.json().token
+    const m = await ctx.app.inject({ method: 'POST', url: '/api/v1/auth/agent-login', payload: { username: 'zhangsan', password: 'pass-123456' } })
+    memberToken = m.json().token
+
+    const denied = await agent('POST', '/api/v1/agent/actions', { action: 'put_setting', params: { key: 'scheduler', value: {} } }, memberToken)
+    expect(denied.status).toBe(403)
+    expect(JSON.stringify(denied.body)).toMatch(/管理员/)
+    // 被拒也留审计
+    expect(ctx.db.prepare(`SELECT * FROM audit_logs WHERE action = 'agent.action.denied' AND detail LIKE '%put_setting%'`).get()).toBeTruthy()
+
+    const unknown = await agent('POST', '/api/v1/agent/actions', { action: 'reboot_server' }, adminToken)
+    expect(unknown.status).toBe(400)
+    expect(unknown.body.message).toContain('白名单')
+  })
+
+  it('S17-10: put_setting 经 action 改调度 cron（复用校验器，非法 400）', async () => {
+    const ok = await agent('POST', '/api/v1/agent/actions', {
+      action: 'put_setting', params: { key: 'scheduler', value: { extractionCron: '*/10 * * * *', alertCron: '*/15 * * * *', reportCron: '0 18 * * *' } },
+    }, adminToken)
+    expect(ok.status).toBe(200)
+    expect(ok.body.result.extractionCron).toBe('*/10 * * * *')
+
+    const bad = await agent('POST', '/api/v1/agent/actions', {
+      action: 'put_setting', params: { key: 'scheduler', value: { extractionCron: '99 * * * *', alertCron: '*/15 * * * *', reportCron: '0 18 * * *' } },
+    }, adminToken)
+    expect(bad.status).toBe(400)
+    expect(JSON.stringify(bad.body)).toMatch(/分/)
+  })
+
+  it('S17-10: upsert_channel 绑群 + reset_channel_cursor 回看重读', async () => {
+    const p = await mkProject()
+    const up = await agent('POST', '/api/v1/agent/actions', {
+      action: 'upsert_channel', params: { platform: 'feishu', groupKey: 'oc_agent', channelType: 'dedicated', projectId: p.id },
+    }, adminToken)
+    expect(up.status).toBe(200)
+    const channelId = up.body.result.id
+
+    // 模拟已读过（游标推进到当前）
+    ctx.db.prepare('UPDATE channels SET cursor = ? WHERE id = ?').run(String(Math.floor(Date.now() / 1000)), channelId)
+    const reset = await agent('POST', '/api/v1/agent/actions', { action: 'reset_channel_cursor', params: { channelId } }, adminToken)
+    expect(reset.status).toBe(200)
+    const resetTo = Number(reset.body.result.cursor)
+    expect(resetTo).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) - 7 * 86400 + 5)
+    expect(resetTo).toBeGreaterThan(Math.floor(Date.now() / 1000) - 8 * 86400)
+    expect(ctx.db.prepare(`SELECT * FROM audit_logs WHERE action = 'channel.cursorReset' AND object_id = ?`).get(String(channelId))).toBeTruthy()
+
+    // days 越界拒绝
+    const bad = await agent('POST', '/api/v1/agent/actions', { action: 'reset_channel_cursor', params: { channelId, days: 365 } }, adminToken)
+    expect(bad.status).toBe(400)
+
+    // 删除渠道
+    const del = await agent('POST', '/api/v1/agent/actions', { action: 'delete_channel', params: { id: channelId } }, adminToken)
+    expect(del.status).toBe(200)
+    expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM channels WHERE id = ?').get(channelId).n).toBe(0)
+  })
+
+  it('S17-10: draft_template_tasks + create_template 对话式 AI 初始化模板', async () => {
+    ctx.app.llm = fakeLlm(() => JSON.stringify({ tasks: ['设备到货验收', '机柜上架与布线', '应用部署与联调', '割接上线', '结项移交'] }))
+    const draft = await agent('POST', '/api/v1/agent/actions', {
+      action: 'draft_template_tasks', params: { name: '硬件部署交付', description: '机房设备安装到割接上线' },
+    }, adminToken)
+    expect(draft.status).toBe(200)
+    expect(draft.body.result.tasks).toHaveLength(5)
+
+    const create = await agent('POST', '/api/v1/agent/actions', {
+      action: 'create_template', params: { code: 'hw_deploy', name: '硬件部署交付', description: '机房设备安装到割接上线', tasks: draft.body.result.tasks.map((title) => ({ title })) },
+    }, adminToken)
+    expect(create.status).toBe(200)
+    expect(create.body.result.tasks).toHaveLength(5)
+    expect(ctx.db.prepare(`SELECT 1 FROM project_templates WHERE code = 'hw_deploy'`).get()).toBeTruthy()
+  })
+})

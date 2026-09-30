@@ -201,3 +201,19 @@ export function deleteChannel(db, id, by) {
   db.prepare('DELETE FROM channels WHERE id = ?').run(id)
   audit(db, { memberId: by, action: 'channel.delete', objectType: 'channel', objectId: id })
 }
+
+/**
+ * 渠道游标重置（S17-10）：回看 N 天（1~90，默认 7），供管理员反复重读同一群做验证调试。
+ * 注意：消息未落库（仅事件 append-only），重放会生成新事件流，历史事件不动。
+ */
+export function resetChannelCursor(db, id, { days = 7 } = {}, by) {
+  const ch = db.prepare('SELECT * FROM channels WHERE id = ?').get(id)
+  if (!ch) throw Object.assign(new Error('渠道不存在'), { statusCode: 404 })
+  if (!Number.isInteger(days) || days < 1 || days > 90) {
+    throw Object.assign(new Error('days 须为 1~90 的整数'), { statusCode: 400 })
+  }
+  const cursorSec = Math.floor((Date.now() - days * 86_400_000) / 1000)
+  db.prepare('UPDATE channels SET cursor = ?, updated_at = ? WHERE id = ?').run(String(cursorSec), Date.now(), id)
+  audit(db, { memberId: by, action: 'channel.cursorReset', objectType: 'channel', objectId: id, detail: { days, from: ch.cursor } })
+  return camelizeRow(db.prepare('SELECT * FROM channels WHERE id = ?').get(id))
+}
