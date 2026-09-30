@@ -80,7 +80,9 @@ export function getProjectDetail(db, id) {
   if (!p) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
   const tasks = db
     .prepare(
-      `SELECT t.*, m.name AS responsible_name FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
+      `SELECT t.*, m.name AS responsible_name,
+         (SELECT COUNT(*) FROM task_refs r WHERE r.task_id = t.id AND r.deleted_at IS NULL) AS ref_count
+       FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
        WHERE t.project_id = ? ORDER BY t.id`
     )
     .all(id)

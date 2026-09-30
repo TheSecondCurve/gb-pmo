@@ -17,7 +17,7 @@ function decorate(rows) {
 export function getTask(db, id) {
   const row = db.prepare(`SELECT ${TASK_COLS} FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id LEFT JOIN projects p ON p.id = t.project_id WHERE t.id = ?`).get(id)
   if (!row) throw Object.assign(new Error('任务不存在'), { statusCode: 404 })
-  return decorate([row])[0]
+  return { ...decorate([row])[0], refs: listTaskRefs(db, id) }
 }
 
 export function listTasks(db, { projectId, responsibleMemberId, statuses } = {}) {
@@ -149,6 +149,92 @@ export function listTaskRecords(db, taskId) {
        WHERE r.task_id = ? ORDER BY r.created_at, r.id`
     ).all(taskId)
   )
+}
+
+// —— 任务参考资料（S23，v0.13）：SOP/知识库链接，手工维护；推送（日报/预警/个人梳理）附带给执行人 —— 
+
+const HTTP_URL = /^https?:\/\//i
+
+export function listTaskRefs(db, taskId) {
+  return camelizeRows(
+    db.prepare(
+      `SELECT r.*, m.name AS created_by_name FROM task_refs r LEFT JOIN members m ON m.id = r.created_by
+       WHERE r.task_id = ? AND r.deleted_at IS NULL ORDER BY r.id`
+    ).all(taskId)
+  )
+}
+
+/** 批量取任务参考资料（推送用）：返回 taskId → 未删参考资料数组。 */
+export function taskRefMap(db, taskIds) {
+  if (!taskIds?.length) return new Map()
+  const rows = db.prepare(
+    `SELECT * FROM task_refs WHERE task_id IN (${taskIds.map(() => '?').join(',')}) AND deleted_at IS NULL ORDER BY id`
+  ).all(...taskIds)
+  const map = new Map()
+  for (const r of rows) {
+    const list = map.get(r.task_id) || []
+    list.push(camelizeRow(r))
+    map.set(r.task_id, list)
+  }
+  return map
+}
+
+/** 推送文本形态：`标题 链接`，多条以「；」相连。 */
+export function formatTaskRefs(refs) {
+  return (refs || []).map((r) => `${r.title} ${r.url}`).join('；')
+}
+
+function assertRefWritable(db, taskId) {
+  const cur = db
+    .prepare('SELECT t.id, p.status AS project_status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?')
+    .get(taskId)
+  if (!cur) throw Object.assign(new Error('任务不存在'), { statusCode: 404 })
+  if (cur.project_status === 'closed' || cur.project_status === 'cancelled') {
+    throw Object.assign(new Error('项目已结项/取消，任务面只读'), { statusCode: 409 })
+  }
+}
+
+export function addTaskRef(db, { taskId, title, url, note }, by) {
+  if (!taskId || !String(title || '').trim() || !String(url || '').trim()) {
+    throw Object.assign(new Error('taskId/title/url 必填'), { statusCode: 400 })
+  }
+  const cleanUrl = String(url).trim()
+  if (!HTTP_URL.test(cleanUrl)) throw Object.assign(new Error('url 须为 http(s) 链接'), { statusCode: 400 })
+  assertRefWritable(db, taskId)
+  const info = db.prepare(
+    'INSERT INTO task_refs (task_id, title, url, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(taskId, String(title).trim(), cleanUrl, note ? String(note).trim() : null, by ?? null, Date.now())
+  audit(db, { memberId: by, action: 'task_ref.create', objectType: 'task_ref', objectId: info.lastInsertRowid, detail: { taskId } })
+  return listTaskRefs(db, taskId).find((r) => r.id === Number(info.lastInsertRowid))
+}
+
+export function updateTaskRef(db, id, patch, by) {
+  const cur = db.prepare('SELECT * FROM task_refs WHERE id = ? AND deleted_at IS NULL').get(id)
+  if (!cur) throw Object.assign(new Error('参考资料不存在'), { statusCode: 404 })
+  assertRefWritable(db, cur.task_id)
+  const fields = {}
+  if ('title' in patch) {
+    if (!String(patch.title || '').trim()) throw Object.assign(new Error('title 不能为空'), { statusCode: 400 })
+    fields.title = String(patch.title).trim()
+  }
+  if ('url' in patch) {
+    if (!HTTP_URL.test(String(patch.url || '').trim())) throw Object.assign(new Error('url 须为 http(s) 链接'), { statusCode: 400 })
+    fields.url = String(patch.url).trim()
+  }
+  if ('note' in patch) fields.note = patch.note ? String(patch.note).trim() : null
+  if (!Object.keys(fields).length) return listTaskRefs(db, cur.task_id).find((r) => r.id === id)
+  db.prepare(`UPDATE task_refs SET ${Object.keys(fields).map((k) => `${k} = @${k}`).join(', ')} WHERE id = @__id`).run({ ...fields, __id: id })
+  audit(db, { memberId: by, action: 'task_ref.update', objectType: 'task_ref', objectId: id, detail: { fields: Object.keys(fields) } })
+  return listTaskRefs(db, cur.task_id).find((r) => r.id === id)
+}
+
+/** 软删（S23-2）：行保留、deleted_at 落值；结项/取消后不可删（任务面只读）。 */
+export function deleteTaskRef(db, id, by) {
+  const cur = db.prepare('SELECT * FROM task_refs WHERE id = ? AND deleted_at IS NULL').get(id)
+  if (!cur) throw Object.assign(new Error('参考资料不存在'), { statusCode: 404 })
+  assertRefWritable(db, cur.task_id)
+  db.prepare('UPDATE task_refs SET deleted_at = ? WHERE id = ?').run(Date.now(), id)
+  audit(db, { memberId: by, action: 'task_ref.delete', objectType: 'task_ref', objectId: id })
 }
 
 /** S7-1（v0.6 口径）：某人名下逾期未完任务清单。 */

@@ -5,7 +5,7 @@ import { useStore } from '../store'
 import { Badge, Btn, Card, Empty, Field, InlineSelect, InlineText, Modal, Spinner, inputCls } from '../components/ui'
 import {
   EVENT_STATUS_LABEL, EVENT_TYPE_LABEL, PRIORITY_LABEL, PROJECT_STATUS_LABEL, TASK_STATUS_LABEL,
-  type ChannelRow, type EventRow, type Member, type ProjectDetail, type TaskRecordRow,
+  type ChannelRow, type EventRow, type Member, type ProjectDetail, type TaskRecordRow, type TaskRefRow,
 } from '../types'
 
 export default function ProjectDetail({ id }: { id: number }) {
@@ -18,6 +18,7 @@ export default function ProjectDetail({ id }: { id: number }) {
   const [binding, setBinding] = useState(false)
   const [digesting, setDigesting] = useState(false)
   const [recordsTaskId, setRecordsTaskId] = useState<number | null>(null)
+  const [refsTask, setRefsTask] = useState<{ id: number; title: string } | null>(null)
 
   const refresh = async () => {
     const [d, e, m, c] = await Promise.all([
@@ -95,8 +96,14 @@ export default function ProjectDetail({ id }: { id: number }) {
                   </td>
                   <td className="num">{readonly ? (t.planStartDate || '—') : <InlineText type="date" value={t.planStartDate} onSubmit={async (v) => { await api.patchTask(t.id, { planStartDate: v }); await refresh() }} />}</td>
                   <td className={`num ${t.isOverdue ? 'text-[var(--color-bad)]' : ''}`}>{readonly ? (t.planEndDate || '—') : <InlineText type="date" value={t.planEndDate} onSubmit={async (v) => { await api.patchTask(t.id, { planEndDate: v }); await refresh() }} />}</td>
-                  <td>{t.isOverdue && <Badge tone="bad">逾期</Badge>}</td>
-                  <td><Btn small kind="ghost" onClick={() => setRecordsTaskId(t.id)}>记录</Btn></td>
+                  <td>
+                    {t.isOverdue && <Badge tone="bad">逾期</Badge>}
+                    {!!t.refCount && <Badge tone="info">参考 {t.refCount}</Badge>}
+                  </td>
+                  <td className="whitespace-nowrap">
+                    <Btn small kind="ghost" onClick={() => setRefsTask({ id: t.id, title: t.title })}>参考</Btn>
+                    <Btn small kind="ghost" onClick={() => setRecordsTaskId(t.id)}>记录</Btn>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -167,6 +174,9 @@ export default function ProjectDetail({ id }: { id: number }) {
       {recordsTaskId !== null && (
         <TaskRecordsModal taskId={recordsTaskId} readonly={readonly} onClose={() => setRecordsTaskId(null)} />
       )}
+      {refsTask !== null && (
+        <TaskRefsModal taskId={refsTask.id} taskTitle={refsTask.title} readonly={readonly} onClose={() => setRefsTask(null)} />
+      )}
       {closing && <CloseModal p={p} onClose={() => setClosing(false)} onDone={async () => { setClosing(false); toast('项目已结项归档'); await refresh() }} />}
       {binding && <BindChannelModal projectId={id} onClose={() => setBinding(false)} onDone={async () => { setBinding(false); toast('渠道已绑定'); await refresh() }} />}
       {digesting && (
@@ -227,6 +237,86 @@ function TaskRecordsModal({ taskId, readonly, onClose }: { taskId: number; reado
         </div>
       )}
       {readonly && <div className="text-[11px] text-[var(--color-ink-soft)]">项目已归档，记录只读。</div>}
+    </Modal>
+  )
+}
+
+/** S23 任务参考资料：SOP/知识库链接的查看与手工维护（软删；结项只读）；推送会附带给执行人。 */
+function TaskRefsModal({ taskId, taskTitle, readonly, onClose }: { taskId: number; taskTitle: string; readonly: boolean; onClose: () => void }) {
+  const { toast } = useStore()
+  const [refs, setRefs] = useState<TaskRefRow[] | null>(null)
+  const [title, setTitle] = useState('')
+  const [url, setUrl] = useState('')
+  const [note, setNote] = useState('')
+  const [editing, setEditing] = useState<TaskRefRow | null>(null)
+  const refresh = async () => { const r = await api.taskRefs(taskId); setRefs(r.refs) }
+  useEffect(() => { void refresh() }, [taskId])
+  const add = async () => {
+    try {
+      await api.addTaskRef(taskId, { title: title.trim(), url: url.trim(), note: note.trim() || undefined })
+      setTitle(''); setUrl(''); setNote(''); toast('参考资料已添加'); await refresh()
+    } catch (e) { toast((e as Error).message, 'bad') }
+  }
+  const saveEdit = async () => {
+    if (!editing) return
+    try {
+      await api.patchTaskRef(taskId, editing.id, { title: editing.title, url: editing.url, note: editing.note || '' })
+      setEditing(null); toast('参考资料已更新'); await refresh()
+    } catch (e) { toast((e as Error).message, 'bad') }
+  }
+  return (
+    <Modal title={`任务参考资料（S23）· ${taskTitle}`} onClose={onClose}>
+      {!refs ? <Spinner /> : refs.length === 0 ? <Empty hint="暂无参考资料（可挂 SOP / 知识库链接，推送时会附带给责任人）" /> : (
+        <ul className="mb-3 max-h-72 space-y-2 overflow-auto">
+          {refs.map((r) => (
+            <li key={r.id} className="rounded-md border border-[var(--color-line)] p-2 text-[13px]">
+              {editing?.id === r.id ? (
+                <div className="space-y-1.5">
+                  <input className={inputCls} placeholder="标题（如：部署 SOP）" value={editing.title} onChange={(e) => setEditing({ ...editing, title: e.target.value })} />
+                  <input className={inputCls} placeholder="链接（https://…）" value={editing.url} onChange={(e) => setEditing({ ...editing, url: e.target.value })} />
+                  <input className={inputCls} placeholder="备注（可选）" value={editing.note || ''} onChange={(e) => setEditing({ ...editing, note: e.target.value })} />
+                  <div className="flex gap-2">
+                    <Btn small kind="primary" disabled={!editing.title.trim() || !editing.url.trim()} onClick={() => void saveEdit()}>保存</Btn>
+                    <Btn small onClick={() => setEditing(null)}>取消</Btn>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <a className="font-medium text-[var(--color-brand)] hover:underline" href={r.url} target="_blank" rel="noreferrer">{r.title}</a>
+                  <span className="num ml-2 break-all text-[11px] text-[var(--color-ink-soft)]">{r.url}</span>
+                  {r.note && <div className="mt-0.5 text-[12px] text-[var(--color-ink-soft)]">{r.note}</div>}
+                  <div className="mt-1 flex items-center gap-2 text-[11px] text-[var(--color-ink-soft)]">
+                    <span className="num">{fmtDateTime(r.createdAt)}</span>
+                    {r.createdByName && <span>· {r.createdByName}</span>}
+                    {!readonly && (
+                      <span className="ml-auto flex gap-1">
+                        <Btn small kind="ghost" onClick={() => setEditing({ ...r })}>编辑</Btn>
+                        <Btn small kind="ghost" onClick={async () => {
+                          try { await api.deleteTaskRef(taskId, r.id); toast('已移除（软删留痕）'); await refresh() } catch (e) { toast((e as Error).message, 'bad') }
+                        }}>移除</Btn>
+                      </span>
+                    )}
+                  </div>
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {!readonly && (
+        <div className="space-y-1.5">
+          <div className="flex gap-2">
+            <input className={inputCls} placeholder="标题（如：部署 SOP）" value={title} onChange={(e) => setTitle(e.target.value)} />
+            <input className={inputCls} placeholder="链接（https://…）" value={url} onChange={(e) => setUrl(e.target.value)} />
+          </div>
+          <div className="flex gap-2">
+            <input className={inputCls} placeholder="备注（可选：适用时机/范围）" value={note} onChange={(e) => setNote(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && title.trim() && url.trim()) void add() }} />
+            <Btn small kind="primary" disabled={!title.trim() || !url.trim()} onClick={() => void add()}>添加</Btn>
+          </div>
+        </div>
+      )}
+      {readonly && <div className="text-[11px] text-[var(--color-ink-soft)]">项目已归档，参考资料只读。</div>}
     </Modal>
   )
 }

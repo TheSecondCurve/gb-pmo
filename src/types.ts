@@ -26,6 +26,11 @@ export interface TaskRow {
   id: number; projectId: number; title: string; responsibleMemberId: number | null; responsibleName?: string | null
   status: string; planStartDate?: string | null; planEndDate?: string | null
   isOverdue: boolean
+  refCount?: number // S23：未删除参考资料条数（项目详情任务行）
+}
+export interface TaskRefRow {
+  id: number; taskId: number; title: string; url: string; note?: string | null
+  createdBy?: number | null; createdByName?: string | null; createdAt: number
 }
 export interface TaskRecordRow { id: number; taskId: number; memberId: number | null; memberName?: string | null; content: string; createdAt: number }
 export interface MilestoneRow { id: number; projectId: number; name: string; planDate?: string | null; actualDate?: string | null; status: string }

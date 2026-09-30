@@ -50,6 +50,13 @@ export const api = {
   createTask: (p: Record<string, unknown>) => req<import('./types').TaskRow>('POST', '/api/v1/tasks', p),
   taskRecords: (id: number) => req<{ records: import('./types').TaskRecordRow[] }>('GET', `/api/v1/tasks/${id}/records`),
   addTaskRecord: (id: number, content: string) => req<{ record: import('./types').TaskRecordRow }>('POST', `/api/v1/tasks/${id}/records`, { content }),
+  // S23 任务参考资料：SOP/知识库链接，全员可维护；推送（日报/预警/个人梳理）附带
+  taskRefs: (id: number) => req<{ refs: import('./types').TaskRefRow[] }>('GET', `/api/v1/tasks/${id}/refs`),
+  addTaskRef: (id: number, body: { title: string; url: string; note?: string }) =>
+    req<{ ref: import('./types').TaskRefRow }>('POST', `/api/v1/tasks/${id}/refs`, body),
+  patchTaskRef: (taskId: number, refId: number, p: Record<string, unknown>) =>
+    req<{ ref: import('./types').TaskRefRow }>('PATCH', `/api/v1/tasks/${taskId}/refs/${refId}`, p),
+  deleteTaskRef: (taskId: number, refId: number) => req<{ ok: boolean }>('DELETE', `/api/v1/tasks/${taskId}/refs/${refId}`),
   createMilestone: (p: Record<string, unknown>) => req('POST', '/api/v1/milestones', p),
   patchMilestone: (id: number, p: Record<string, unknown>) => req('PATCH', `/api/v1/milestones/${id}`, p),
 
