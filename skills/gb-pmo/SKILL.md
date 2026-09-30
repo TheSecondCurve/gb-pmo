@@ -1,6 +1,6 @@
 ---
 name: gb-pmo
-version: 0.1.0
+version: 0.1.1
 description: 企业项目大脑——项目/任务/事件/成员的查询、维护与大脑功能触发
 ---
 
@@ -45,12 +45,13 @@ client.sh action generate_person_digest '{}'
 
 1. **指标以 metrics 端点为准**（口径同源 dashboard）；明细与自由查询才用 SQL 端点。
 2. **写 SQL 守则**：手动补 `updated_at`（epoch 毫秒）与审计需要的字段；软删不硬删（人员改 status='offboarded'，不要 DELETE）；403 不换字段重试；只改自己为责任人/牵头人的对象，跨人变更走建议。
-3. **LLM 信任边界**：口述更新一律 `INSERT INTO project_events (nature='suggestion', status='pending', ...)` 生成建议，等人在页面/接口确认；绝不直接 `UPDATE tasks` 改状态/日期/责任人。
-4. 常用查询模式：
+3. **时间与时区（S19）**：日历日一律北京时区。SQL 中「今天」用「BJ_TODAY()」（可传 epoch 毫秒参数取该时刻的北京日）；不要写 date('now')/datetime('now')——那是 UTC 语义，凌晨会差一天，端点会 400 拒绝；时间戳一律 epoch 毫秒。
+4. **LLM 信任边界**：口述更新一律 `INSERT INTO project_events (nature='suggestion', status='pending', ...)` 生成建议，等人在页面/接口确认；绝不直接 `UPDATE tasks` 改状态/日期/责任人。
+5. 常用查询模式：
    - 「我本周的任务」：`SELECT t.id, t.title, t.plan_end_date, p.name FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.responsible_member_id=<我> AND t.status IN ('todo','doing')`
-   - 「B 项目卡在哪」：看 project_events 最新 blocker/risk + 逾期未完任务（plan_end_date < date('now') 且 status != 'done'）。
+   - 「B 项目卡在哪」：看 project_events 最新 blocker/risk + 逾期未完任务（plan_end_date < BJ_TODAY() 且 status != 'done'）。
    - 任务状态固定三档：todo/doing/done（v0.6，无 blocked/cancelled）；任务相互独立，无前置依赖。
-5. 建议事件的 target 字段组合：task → status/plan_start_date/plan_end_date/responsible_member_id；milestone → target_object='milestone' 且 plan_date。
+6. 建议事件的 target 字段组合：task → status/plan_start_date/plan_end_date/responsible_member_id；milestone → target_object='milestone' 且 plan_date。
 
 
 <!--SCHEMA:BEGIN（本区块由 scripts/gen-skill-schema.mjs 生成，勿手改；drift check 比对）-->

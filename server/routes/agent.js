@@ -11,7 +11,7 @@ import { setSetting } from '../engine/settings.js'
 import { safeBaseUrl, renderLoginSh, renderLoginPs1, renderInstallSh, renderInstallPs1, renderClientSh } from '../agent/scripts.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const SKILL_VERSION = '0.1.0'
+const SKILL_VERSION = '0.1.1'
 
 const SQL_MAX_ROWS = 1000
 const CREDENTIAL_COLS = /password_hash|token_hash/i
@@ -86,6 +86,11 @@ export function registerAgentRoutes(app) {
     if (/^(CREATE|ALTER|DROP|PRAGMA|ATTACH|DETACH|VACUUM|REINDEX)\b/i.test(stripped)) {
       audit(db, { memberId: member.id, action: 'agent.sql.denied', detail: { reason: 'ddl' } })
       return reply.status(403).send({ message: 'DDL/PRAGMA 对任何令牌一律 403' })
+    }
+    // S19 时区护栏：裸 date('now')/datetime('now') 是 UTC 语义，凌晨时段会错一天；显式带时区修饰（如 '+8 hours'）放行
+    if (/\b(?:date|datetime)\s*\(\s*'now'\s*\)/i.test(sql)) {
+      audit(db, { memberId: member.id, action: 'agent.sql.denied', detail: { reason: 'utc_now' } })
+      return reply.status(400).send({ message: "date('now')/datetime('now') 为 UTC 语义（凌晨会差一天）：今天请用 BJ_TODAY()（北京时区，可传 epoch 毫秒参数），或显式写 date('now','+8 hours')" })
     }
     const isReadHead = READ_HEADS.test(stripped)
     const isWriteHead = WRITE_HEADS.test(stripped)

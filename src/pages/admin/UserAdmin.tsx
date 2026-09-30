@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { fmtDate } from '../../fmt'
 import { api } from '../../api'
 import { useStore } from '../../store'
 import { Badge, Btn, Card, Empty, Field, InlineSelect, InlineText, Spinner, Tabs, inputCls } from '../../components/ui'
@@ -153,7 +154,7 @@ function TokensTab() {
                 <tr key={t.id} className="border-b border-[var(--color-line)] last:border-0">
                   <td className="py-1">{t.name}</td><td className="num font-mono">{t.tokenPrefix}…</td>
                   <td><Badge tone={t.scope === 'write' ? 'warn' : 'muted'}>{t.scope}</Badge></td>
-                  <td className="num">{new Date(t.expiresAt).toLocaleDateString('zh-CN')}</td>
+                  <td className="num">{fmtDate(t.expiresAt)}</td>
                   <td>{t.revokedAt ? <Badge tone="muted">已吊销</Badge> : <Badge tone="ok">有效</Badge>}</td>
                   <td>{!t.revokedAt && <Btn small kind="ghost" onClick={async () => {
                     if (!confirm('吊销该令牌？对应 Agent 立即失去访问权')) return

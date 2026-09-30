@@ -4,6 +4,7 @@
 //（测试只走 buildApp；心跳行为用注入 runners 直测）。
 
 import { getSetting } from '../engine/settings.js'
+import { bjDayStartMs } from '../db/time.js'
 import { isDue } from '../engine/cron.js'
 
 // 任务表：key 顺序即执行顺序；runners 可整体注入（测试）
@@ -30,7 +31,7 @@ export function dueTasks(cfg, lastRuns, nowMs) {
  */
 export function initialLastRun(db, taskKey, nowMs) {
   if (taskKey !== 'report') return nowMs
-  const dayStart = new Date(nowMs).setHours(0, 0, 0, 0)
+  const dayStart = bjDayStartMs(nowMs) // 「今日」按北京日（S19）
   const lastPush = db
     .prepare(`SELECT MAX(created_at) AS t FROM pushes WHERE push_type = 'daily_report' AND created_at >= ?`)
     .get(dayStart)?.t

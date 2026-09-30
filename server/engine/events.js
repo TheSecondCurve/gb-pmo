@@ -1,4 +1,5 @@
 import { camelizeRow, camelizeRows } from '../db/index.mjs'
+import { today } from '../db/time.js'
 import { assertValue } from './enums.js'
 
 const EVENT_COLS = `id, project_id, business_time, created_at, nature, event_type, summary, raw_snapshot,
@@ -119,9 +120,8 @@ function applyTaskPatch(db, e) {
   const value = e.target_value
   if (field === 'status') {
     assertValue('taskStatus', value)
-    const today = new Date().toISOString().slice(0, 10)
     db.prepare('UPDATE tasks SET status = ?, actual_end_date = ?, updated_at = ? WHERE id = ?')
-      .run(value, value === 'done' ? today : null, Date.now(), e.target_task_id)
+      .run(value, value === 'done' ? today() : null, Date.now(), e.target_task_id)
   } else if (field === 'plan_end_date' || field === 'plan_start_date') {
     db.prepare(`UPDATE tasks SET ${field} = ?, updated_at = ? WHERE id = ?`).run(value, Date.now(), e.target_task_id)
   } else if (field === 'responsible_member_id') {
