@@ -50,7 +50,7 @@ export async function fetchMessages(cfg, channel, cursor) {
   let lastSec = 0
   do {
     const url = new URL('https://open.feishu.cn/open-apis/im/v1/messages')
-    url.searchParams.set('container_id', channel.group_key)
+    url.searchParams.set('container_id', channel.groupKey)
     url.searchParams.set('container_id_type', 'chat')
     url.searchParams.set('start_time', String(start))
     url.searchParams.set('end_time', String(end))

@@ -82,6 +82,8 @@ export const api = {
   adminTodo: () => req<{ projects: { id: number; name: string; leadName: string }[] }>('GET', '/api/v1/admin/todo'),
   settings: () => req<Record<string, unknown>>('GET', '/api/v1/admin/settings'),
   putSetting: (key: string, value: unknown) => req('PUT', `/api/v1/admin/settings/${key}`, value),
+  runExtraction: (body: { channelId?: number; projectId?: number } = {}) =>
+    req<{ channels: { channelId: number; platform: string; pulled?: number; events?: number; suggestions?: number; unrouted?: number; error?: string }[] }>('POST', '/api/v1/admin/extraction/run', body),
   testLlm: (body: object) => req<{ ok: boolean; reason?: string; sample?: string }>('POST', '/api/v1/admin/test-llm', body),
   testIm: (platform: string) => req<{ ok: boolean; reason?: string }>('POST', `/api/v1/admin/test-im/${platform}`, {}),
   tokens: () => req<{ tokens: { id: number; name: string; tokenPrefix: string; scope: string; createdAt: number; expiresAt: number; revokedAt?: number | null }[] }>('GET', '/api/v1/auth/tokens'),

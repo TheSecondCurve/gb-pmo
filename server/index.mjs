@@ -54,8 +54,7 @@ app.setNotFoundHandler((req, reply) => {
 await app.listen({ port: PORT, host: '0.0.0.0' })
 console.log(`gb-pmo listening on :${PORT} (db: ${DB_FILE})`)
 
-if (process.env.ENABLE_SCHEDULER === '1') {
-  const { startScheduler } = await import('./brain/scheduler.js')
-  startScheduler(db, { llm: getLlm(db) })
-  console.log('[scheduler] enabled (extraction hourly / alerts 15min / daily report)')
-}
+// 大脑调度器随进程默认运行（S18，v0.7）：cron 与每任务 enabled 开关在配置台「阈值与推送」热调整
+const { startScheduler } = await import('./brain/scheduler.js')
+startScheduler(db, { llm: getLlm(db) })
+console.log('[scheduler] enabled（cron 由配置台 scheduler 块驱动：信息更新对齐 / 预警提醒 / 日报提醒）')
