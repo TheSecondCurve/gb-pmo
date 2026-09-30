@@ -170,13 +170,13 @@ describe('routing/digest/report 分支', () => {
     db.close()
   })
 
-  it('report：未到推送时点 skipped；明日到期任务出现在责任人日报', async () => {
+  it('report：当日已发不重复（S18-4，v0.7 时点判断由 reportCron 调度接管）；明日到期任务出现在责任人日报', async () => {
     const { db } = setupDb()
     const s = seed(db)
-    setSetting(db, 'push', { dailyReportHour: new Date().getHours() + 1 }, 1)
+    const first = await dailyReport(db, { force: false })
+    expect(first.skipped).toBeUndefined()
     const skipped = await dailyReport(db, { force: false })
     expect(skipped.skipped).toBe(true)
-    setSetting(db, 'push', { dailyReportHour: 0 }, 1)
     const p = mk(db, s.lead.id, 'R1')
     const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
     updateTask(db, p.tasks[0].id, { planEndDate: tomorrow }, 1)

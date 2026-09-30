@@ -62,7 +62,15 @@ export const DEFAULT_SETTINGS = {
     healthRed: { silentDays: 7, overdue: 3 },
     healthYellow: { silentDays: 3, overdue: 1 },
   },
-  push: { dailyReportHour: 18 },
+  push: { dailyReportHour: 18 }, // v0.7 废弃：日报时点由 scheduler.reportCron 取代（保留兼容旧配置）
+  scheduler: {
+    extractionCron: '0 * * * *',   // 信息更新对齐（S18，默认每小时）
+    extractionEnabled: true,
+    alertCron: '*/15 * * * *',     // 预警提醒（默认每 15 分钟）
+    alertEnabled: true,
+    reportCron: '0 18 * * *',      // 日报提醒（默认每日 18:00）
+    reportEnabled: true,
+  },
   llm: { baseUrl: 'https://api.deepseek.com', apiKey: '', model: 'deepseek-chat', timeoutMs: 60000 },
   'im.feishu': { appId: '', appSecret: '' },
   'im.wecom': { corpId: '', secret: '', publicKeyVer: '', privateKey: '', sdkUrl: '' },

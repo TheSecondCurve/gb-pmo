@@ -1,25 +1,67 @@
-// 调度器：抽取（每小时）、预警（每 15 分钟）、日报（到点触发）、建议超时过期。
-// 仅 index.mjs 在 ENABLE_SCHEDULER=1 时启动；测试不启动。
+// 调度器（S18，v0.7）：三项大脑定时任务由 settings.scheduler 的 cron + 每任务 enabled 开关驱动。
+// 调度器随进程默认运行（原 ENABLE_SCHEDULER 环境变量已删除）；心跳每分钟读配置判定（改配置保存即生效，
+// 无需重启）；判定语义 =「上次运行之后到现在」窗口内存在 cron 匹配分钟（isDue）。测试不启动调度器
+//（测试只走 buildApp；心跳行为用注入 runners 直测）。
 
-export function startScheduler(db, { llm = null, logger = console } = {}) {
-  const timers = []
+import { getSetting } from '../engine/settings.js'
+import { isDue } from '../engine/cron.js'
 
-  timers.push(setInterval(() => {
-    import('./extract.js').then((m) => m.runExtraction(db, {}, { llm })).catch((e) => logger.error('[scheduler] extraction:', e.message))
-  }, 60 * 60 * 1000))
+// 任务表：key 顺序即执行顺序；runners 可整体注入（测试）
+export const TASKS = [
+  { key: 'extraction', cronKey: 'extractionCron', enabledKey: 'extractionEnabled' },
+  { key: 'alerts', cronKey: 'alertCron', enabledKey: 'alertEnabled' },
+  { key: 'report', cronKey: 'reportCron', enabledKey: 'reportEnabled' },
+]
 
-  timers.push(setInterval(() => {
-    import('./alert.js').then((m) => m.evaluateAlerts(db)).catch((e) => logger.error('[scheduler] alerts:', e.message))
-  }, 15 * 60 * 1000))
+const DEFAULT_RUNNERS = {
+  extraction: async (db, { llm }) => (await import('./extract.js')).runExtraction(db, {}, { llm }),
+  alerts: async (db) => (await import('./alert.js')).evaluateAlerts(db),
+  report: async (db) => (await import('./report.js')).dailyReport(db, { force: false }),
+}
 
-  // 日报：每 10 分钟检查一次是否已过当日推送时点且今日未发（按 pushes 当日记录去重）
-  timers.push(setInterval(() => {
-    import('./report.js')
-      .then((m) => m.dailyReport(db))
-      .then((r) => r.skipped || logger.log('[scheduler] daily report sent:', r.reports))
-      .catch((e) => logger.error('[scheduler] report:', e.message))
-  }, 10 * 60 * 1000))
+/** 纯判定：给定调度配置（含 cron 与 enabled）与各任务上次运行时刻，返回此刻应跑的任务 key 数组。 */
+export function dueTasks(cfg, lastRuns, nowMs) {
+  return TASKS.filter((t) => cfg[t.enabledKey] !== false).filter((t) => isDue(cfg[t.cronKey], lastRuns[t.key] ?? 0, nowMs)).map((t) => t.key)
+}
 
-  const stop = () => timers.forEach(clearInterval)
-  return { stop }
+/**
+ * 冷启动锚点：report 锚定 max(今日 00:00, 最近一次日报推送时刻) —— 停机跨过时点当日补发、
+ * 已发不重发由窗口语义 + dailyReport 当日去重兜底；其余任务锚定当前时刻（游标/预警本身幂等增量）。
+ */
+export function initialLastRun(db, taskKey, nowMs) {
+  if (taskKey !== 'report') return nowMs
+  const dayStart = new Date(nowMs).setHours(0, 0, 0, 0)
+  const lastPush = db
+    .prepare(`SELECT MAX(created_at) AS t FROM pushes WHERE push_type = 'daily_report' AND created_at >= ?`)
+    .get(dayStart)?.t
+  return Math.max(dayStart, lastPush ?? 0)
+}
+
+export function startScheduler(db, { llm = null, logger = console, tickMs = 60_000, now = Date.now, runners } = {}) {
+  const runs = { ...DEFAULT_RUNNERS, ...runners }
+  const lastRuns = {}
+  for (const t of TASKS) lastRuns[t.key] = initialLastRun(db, t.key, now())
+
+  let busy = false
+  const tick = async () => {
+    if (busy) return // 上一拍未跑完（任务慢于心跳）则跳过本拍
+    busy = true
+    try {
+      const cfg = getSetting(db, 'scheduler')
+      for (const key of dueTasks(cfg, lastRuns, now())) {
+        try {
+          await runs[key](db, { llm })
+        } catch (e) {
+          logger.error(`[scheduler] ${key}:`, e.message) // 失败也推进锚点，下个周期再试
+        }
+        lastRuns[key] = now()
+      }
+    } finally {
+      busy = false
+    }
+  }
+
+  void tick() // 冷启动立即判定一次（日报停机补发在此生效）
+  const timer = setInterval(() => void tick(), tickMs)
+  return { stop: () => clearInterval(timer) }
 }

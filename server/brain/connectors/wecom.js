@@ -14,7 +14,7 @@ export async function fetchMessages(cfg, channel, cursor) {
   const res = await fetch(String(cfg.sdkUrl).replace(/\/+$/, '') + '/pull', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ seq: Number(cursor || 0), limit: 200, chatId: channel.group_key }),
+    body: JSON.stringify({ seq: Number(cursor || 0), limit: 200, chatId: channel.groupKey }),
   })
   if (!res.ok) throw Object.assign(new Error(`企微 SDK 代理 HTTP ${res.status}`), { statusCode: 502 })
   const data = await res.json()
