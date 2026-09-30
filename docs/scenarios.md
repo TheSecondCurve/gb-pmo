@@ -100,6 +100,7 @@
 | S17-7 | 当某操作将导致最后一名在职系统管理员被降级或离职时，应被拒绝 | `server/test/security-auth.test.mjs` |
 | S17-8 | 当停用项目类型后立项不可再选该类型、历史项目不受影响；编辑任务模板只影响未来立项 | `server/test/s17-admin.test.mjs` |
 | S17-9 | 当管理员在模板编辑器点「AI 起草」时，LLM 按模板名+说明生成任务清单草稿（3~15 条、无阶段无依赖）回填编辑器；草稿不落库，确认后走既有保存；LLM 未配置返回指引；成员 403（v0.8） | `server/test/s17-admin.test.mjs` |
+| S17-10 | 当系统管理员 PAT 经 action 端点发起配置类操作（upsert_channel / delete_channel / put_setting / draft_template_tasks / create_template / reset_channel_cursor）时，与 web 配置台同构生效并留审计；成员 PAT 403；游标重置回看 1~90 天（v0.9） | `server/test/s4-agent.test.mjs` |
 
 ## S18（P0）— 管理员 — 大脑调度与手动对齐（v0.7）
 
