@@ -6,6 +6,7 @@ import { today, bjDayStartMs } from '../db/time.js'
 import { getSetting } from '../engine/settings.js'
 import { expireStaleSuggestions } from '../engine/events.js'
 import { queryMetric } from '../engine/metrics.js'
+import { taskRefMap, formatTaskRefs } from '../engine/tasks.js'
 import { notifyMember } from './push.js'
 
 export async function dailyReport(db, { force = false } = {}) {
@@ -54,6 +55,13 @@ export async function dailyReport(db, { force = false } = {}) {
       ).all(m.id, m.id)
     )
     sections.push(`【我的任务】未完 ${myTasks.length} 项${dueTomorrow.length ? `，明日到期 ${dueTomorrow.length} 项（${dueTomorrow.map((t) => t.title).join('、')}）` : ''}${pending.length ? `\n【待确认建议】${pending.length} 条等你处理` : ''}`)
+
+    // S23：名下任务挂了参考资料的，列出标题+链接（执行人拿到完整信息；无资料不加空段落）
+    const refMap = taskRefMap(db, myTasks.map((t) => t.id))
+    const withRefs = myTasks.filter((t) => refMap.get(t.id)?.length)
+    if (withRefs.length) {
+      sections.push(`【参考资料】\n${withRefs.map((t) => `- ${t.title}：${formatTaskRefs(refMap.get(t.id))}`).join('\n')}`)
+    }
 
     // 牵头人视角：所辖项目进展（S6-2：无更新标注而非省略）
     const myProjects = projects.filter((p) => p.leadMemberId === m.id)

@@ -119,6 +119,7 @@ client.sh action generate_person_digest '{}'
    - 「我本周的任务」：\`SELECT t.id, t.title, t.plan_end_date, p.name FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.responsible_member_id=<我> AND t.status IN ('todo','doing')\`
    - 「B 项目卡在哪」：看 project_events 最新 blocker/risk + 逾期未完任务（plan_end_date < BJ_TODAY() 且 status != 'done'）。
    - 任务状态固定三档：todo/doing/done（v0.6，无 blocked/cancelled）；任务相互独立，无前置依赖。
+   - 「任务参考资料」（S23，SOP/知识库链接）：\`SELECT title, url FROM task_refs WHERE task_id=<id> AND deleted_at IS NULL\`；写入补 created_by/created_at，删除=软删（UPDATE task_refs SET deleted_at=<epoch毫秒>）；日报/预警/个人梳理推送会自动附带给责任人。
 6. 建议事件的 target 字段组合：task → status/plan_start_date/plan_end_date/responsible_member_id；milestone → target_object='milestone' 且 plan_date。
 
 `
