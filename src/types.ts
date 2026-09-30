@@ -19,6 +19,7 @@ export interface ProjectRow {
   status: string; priority: 'high' | 'medium' | 'low'
   leadMemberId: number; leadName: string; clientName?: string | null
   planStartDate?: string | null; planEndDate?: string | null
+  daysToDelivery?: number | null // S21：剩余/超期天数（未来为正、已过为负；结项/取消或未填为 null）
   overdueTasks: number; silentDays: number | null; lastEventAt?: number | null; updatedAt: number
 }
 export interface TaskRow {

@@ -32,7 +32,7 @@ export default function Projects() {
             <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
               <tr className="border-b border-[var(--color-line)]">
                 <th className="py-1.5">优先级</th><th>项目</th><th>牵头人</th><th>状态</th>
-                <th className="num">逾期</th><th>计划周期</th><th>类型</th>
+                <th className="num">逾期</th><th>交付周期（S21）</th><th>类型</th>
               </tr>
             </thead>
             <tbody>
@@ -51,7 +51,12 @@ export default function Projects() {
                     }} />
                   </td>
                   <td className={`num ${p.overdueTasks ? 'text-[var(--color-bad)]' : ''}`}>{p.overdueTasks}</td>
-                  <td className="num">{p.planStartDate || '?'} ~ {p.planEndDate || '?'}</td>
+                  <td className="num">
+                    {p.planStartDate || '?'} ~ {p.planEndDate || '?'}{' '}
+                    {p.daysToDelivery != null && (p.daysToDelivery >= 0
+                      ? <Badge tone={p.daysToDelivery <= 3 ? 'warn' : 'muted'}>{p.daysToDelivery === 0 ? '今日交付' : `剩 ${p.daysToDelivery} 天`}</Badge>
+                      : <Badge tone="bad">超期 {-p.daysToDelivery} 天</Badge>)}
+                  </td>
                   <td className="text-[var(--color-ink-soft)]">{p.typeName || p.templateCode}</td>
                 </tr>
               ))}
@@ -111,7 +116,9 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
         <Field label="客户（可选）"><input className={inputCls} value={form.clientName} onChange={(e) => set('clientName', e.target.value)} /></Field>
         <Field label="计划开始"><input type="date" className={inputCls} value={form.planStartDate} onChange={(e) => set('planStartDate', e.target.value)} /></Field>
       </div>
-      <Field label="计划结束"><input type="date" className={inputCls} value={form.planEndDate} onChange={(e) => set('planEndDate', e.target.value)} /></Field>
+      <Field label="交付日期（S21：切「进行中」前必填；进行中项目 = 启动日→交付日期）">
+        <input type="date" className={inputCls} value={form.planEndDate} onChange={(e) => set('planEndDate', e.target.value)} />
+      </Field>
       {err && <div className="mb-3 rounded bg-red-50 px-2 py-1.5 text-[12px] text-[var(--color-bad)]">{err}</div>}
       <div className="flex justify-end gap-2">
         <Btn onClick={onClose}>取消</Btn>

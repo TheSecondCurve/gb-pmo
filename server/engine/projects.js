@@ -1,12 +1,22 @@
 import { camelizeRow, camelizeRows } from '../db/index.mjs'
-import { today } from '../db/time.js'
+import { today, dayDiff } from '../db/time.js'
 import { assertValue } from './enums.js'
 import { addEvent } from './events.js'
 import { audit } from './auth.js'
 import { resolveTemplateForCreate } from './projectTypes.js'
 
 const OPEN_STATUSES = ['planning', 'active', 'paused']
+const IN_CYCLE_STATUSES = ['active', 'paused'] // 已进入交付周期（S21）
 const PRIORITY_ORDER = `CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END`
+
+/**
+ * S21 剩余/超期天数：交付日期在今天的日历日差（未来为正、已过为负=超期天数）；
+ * 结项/取消（周期已结束）或无交付日期时为 null。北京日历日口径（S19）。
+ */
+export function daysToDelivery(p) {
+  if (p.status === 'closed' || p.status === 'cancelled' || !p.plan_end_date) return null
+  return dayDiff(today(), p.plan_end_date)
+}
 
 /** S1 立项：选项目类型→套用其绑定模板实例化（S1-5；兼容直给 templateCode），牵头人必填、任务默认责任人=牵头人（D3）。 */
 export function createProject(db, input, by) {
@@ -80,6 +90,7 @@ export function getProjectDetail(db, id) {
   }))
   return {
     ...camelizeRow(p),
+    daysToDelivery: daysToDelivery(p),
     tasks: taskRows,
     milestones: camelizeRows(db.prepare('SELECT * FROM milestones WHERE project_id = ? ORDER BY plan_date').all(id)),
     channels: camelizeRows(
@@ -106,6 +117,7 @@ export function listProjects(db, { statuses = OPEN_STATUSES } = {}) {
   return rows.map((r) => {
     const row = camelizeRow(r)
     row.silentDays = row.lastEventAt ? Math.floor((Date.now() - row.lastEventAt) / 86400000) : null
+    row.daysToDelivery = daysToDelivery(r)
     return row
   })
 }
@@ -125,7 +137,18 @@ export function updateProject(db, id, patch, by) {
     const next = assertValue('projectStatus', patch.status)
     if (next === 'closed') throw Object.assign(new Error('结项走 closeProject（S8）'), { statusCode: 400 })
     fields.status = next
-    if (next === 'active' && !cur.actual_start_date) fields.actual_start_date = today()
+    // cur 为 camelCase 行；启动日=首次激活落定，暂停后重启不重置（S21 交付周期起点）
+    if (next === 'active' && !cur.actualStartDate) fields.actual_start_date = today()
+  }
+  // S21：交付日期一等公民——切「进行中」必须有交付日期（同请求补齐亦放行）；
+  // 已进入交付周期（进行中/已暂停）的项目不可清空交付日期。
+  const nextStatus = fields.status || cur.status
+  const nextEndDate = 'plan_end_date' in fields ? fields.plan_end_date : cur.planEndDate
+  if (nextStatus === 'active' && !nextEndDate) {
+    throw Object.assign(new Error('未填交付日期（S21-1）：进行中项目 = 启动日→交付日期的交付周期，请先填交付日期'), { statusCode: 400 })
+  }
+  if (!nextEndDate && IN_CYCLE_STATUSES.includes(nextStatus) && IN_CYCLE_STATUSES.includes(cur.status)) {
+    throw Object.assign(new Error('交付日期不可清空（S21-3）：项目已进入交付周期（进行中/已暂停）'), { statusCode: 400 })
   }
   if (!Object.keys(fields).length) return getProjectDetail(db, id)
   fields.updated_at = Date.now()

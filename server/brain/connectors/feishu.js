@@ -123,3 +123,56 @@ export async function getChat(cfg, chatId) {
   if (data.code !== 0) throw Object.assign(new Error(`飞书群信息失败: ${data.msg}`), { statusCode: 502 })
   return data.data || {}
 }
+
+// —— S22 项目日历：应用身份维护组织级日历与全日事件（calendar/v4，PRD §7.6）——
+
+async function callApi(cfg, path, method, body) {
+  const token = await tenantToken(cfg)
+  const res = await fetch(`https://open.feishu.cn/open-apis${path}`, {
+    method,
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  if (!res.ok) throw Object.assign(new Error(`飞书日历 HTTP ${res.status}`), { statusCode: 502 })
+  const data = await res.json()
+  if (data.code !== 0) throw Object.assign(new Error(`飞书日历失败: ${data.msg}`), { statusCode: 502 })
+  return data.data || {}
+}
+
+/**
+ * 创建组织级日历（组织内可搜索订阅；share_tenant_permission 为飞书字符串布尔）。
+ * 返回 { calendarId }。
+ */
+export async function createCalendar(cfg, { summary, description }) {
+  const data = await callApi(cfg, '/calendar/v4/calendars', 'POST', {
+    summary, description,
+    permissions: { share_tenant_permission: 'true', public_permission: 'false' },
+  })
+  return { calendarId: data.calendar?.calendar_id || null }
+}
+
+/** 全日事件时间体：飞书全天日程起止=首日/末日（闭区间，单日两者相同）。 */
+const allDay = (day) => ({ date: day, timestamp: '' })
+
+/** 在日历上创建全日事件，返回 { eventId }。content = { summary, description, startDay, endDay }。 */
+export async function createEvent(cfg, calendarId, content) {
+  const data = await callApi(cfg, `/calendar/v4/calendars/${calendarId}/events`, 'POST', {
+    summary: content.summary,
+    description: content.description,
+    start_time: allDay(content.startDay),
+    end_time: allDay(content.endDay),
+    need_notification: false,
+  })
+  return { eventId: data.event?.event_id || null }
+}
+
+/** 更新既有全日事件（对账 hash 变化时 patch 同一 event_id）。 */
+export async function patchEvent(cfg, calendarId, eventId, content) {
+  await callApi(cfg, `/calendar/v4/calendars/${calendarId}/events/${eventId}`, 'PATCH', {
+    summary: content.summary,
+    description: content.description,
+    start_time: allDay(content.startDay),
+    end_time: allDay(content.endDay),
+  })
+  return { eventId }
+}

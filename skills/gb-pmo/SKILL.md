@@ -305,6 +305,16 @@ client.sh action generate_person_digest '{}'
 | expires_at | INTEGER |  |
 | used_at | INTEGER |  |
 
+### calendar_sync
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| project_id | INTEGER |  |
+| calendar_event_id | TEXT | 飞书 event_id（创建成功后写入） |
+| content_hash | TEXT | 期望事件内容摘要（标题/描述/起止日），变则 patch |
+| synced_at | INTEGER | 最近一次成功同步时刻（epoch 毫秒） |
+| last_error | TEXT | 最近一次 patch 失败原因（create 失败尚无映射行，错误只在同步结果回显） |
+
 ## 枚举（值 ↔ 中文 label，双向对齐）
 
 - **memberRole**: admin=系统管理员、member=成员

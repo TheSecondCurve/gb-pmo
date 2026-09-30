@@ -27,3 +27,8 @@ export function bjWeekStartMs(at = new Date()) {
   const weekday = new Date(start + OFFSET).getUTCDay() // 北京零点的 UTC 瞬间，getUTCDay 即北京星期
   return start - ((weekday + 6) % 7) * DAY_MS
 }
+
+/** 两个北京日历日相差的天数（toDay - fromDay；跨年/跨月正确，纯日期串无时区语义）。 */
+export function dayDiff(fromDay, toDay) {
+  return Math.round((Date.parse(`${toDay}T00:00:00Z`) - Date.parse(`${fromDay}T00:00:00Z`)) / DAY_MS)
+}
