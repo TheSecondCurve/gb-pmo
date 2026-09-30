@@ -211,8 +211,26 @@ function ChannelsTab() {
 function ChannelsCard({ channels, onDone }: { channels: ChannelRow[]; onDone: () => Promise<void> }) {
   const { toast } = useStore()
   const [form, setForm] = useState({ platform: 'feishu', groupKey: '', name: '', channelType: 'general' })
+  // S18-1：立即对齐（手动增量抽取，回显每渠道结果；单渠道失败不阻塞）
+  const align = async (channelId?: number) => {
+    try {
+      const r = await api.runExtraction(channelId ? { channelId } : {})
+      const sum = (k: 'pulled' | 'events' | 'suggestions' | 'unrouted') => r.channels.reduce((s, c) => s + (c[k] ?? 0), 0)
+      const errs = r.channels.filter((c) => c.error)
+      toast(
+        `对齐完成：拉取 ${sum('pulled')} 条 · 事件 ${sum('events')} · 建议 ${sum('suggestions')} · 未分拣 ${sum('unrouted')}` +
+          (errs.length ? `；${errs.length} 个渠道失败（${errs[0].error}）` : ''),
+        errs.length ? 'bad' : undefined,
+      )
+      await onDone()
+    } catch (e) { toast((e as Error).message, 'bad') }
+  }
   return (
     <Card title={`渠道（${channels.length}）：专题 1 群:1 项目；通用群由 LLM 分拣（D5）`}>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Btn kind="primary" onClick={() => void align()}>立即对齐（全部渠道）</Btn>
+        <span className="text-[12px] text-[var(--color-ink-soft)]">手动增量拉取并抽取新消息，更新项目最新状态（S18）</span>
+      </div>
       <div className="mb-3 flex flex-wrap gap-2">
         <select className={inputCls + ' !w-28'} value={form.platform} onChange={(e) => setForm({ ...form, platform: e.target.value })}>
           <option value="feishu">飞书</option><option value="wecom">企业微信</option>
@@ -247,7 +265,10 @@ function ChannelsCard({ channels, onDone }: { channels: ChannelRow[]; onDone: ()
                 <td className="num">{c.groupKey}</td><td>{c.name || '—'}</td>
                 <td>{c.channelType === 'dedicated' ? '专题' : '通用'}</td>
                 <td>{c.channelType === 'dedicated' ? `${c.projectId} ${c.projectName || ''}` : '（LLM 分拣）'}</td>
-                <td><Btn small kind="ghost" onClick={async () => { await api.deleteChannel(c.id); toast('已删除'); await onDone() }}>删除</Btn></td>
+                <td className="whitespace-nowrap">
+                  <Btn small kind="ghost" onClick={() => void align(c.id)}>对齐</Btn>{' '}
+                  <Btn small kind="ghost" onClick={async () => { await api.deleteChannel(c.id); toast('已删除'); await onDone() }}>删除</Btn>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -260,21 +281,37 @@ function ChannelsCard({ channels, onDone }: { channels: ChannelRow[]; onDone: ()
 // —— Tab 3：阈值与推送 ——
 
 interface Thresholds { silentDays: number; keypersonMaxProjects: number; acceptanceAlarm: number; suggestTimeoutHours: number; routingConfidence: number }
+interface SchedulerCfg {
+  extractionCron: string; extractionEnabled: boolean
+  alertCron: string; alertEnabled: boolean
+  reportCron: string; reportEnabled: boolean
+}
 
 function ParamsTab() {
   const { toast } = useStore()
   const [thresholds, setThresholds] = useState<Thresholds | null>(null)
-  const [pushHour, setPushHour] = useState(18)
+  const [sched, setSched] = useState<SchedulerCfg | null>(null)
   useEffect(() => {
     void (async () => {
       const s = await api.settings()
       setThresholds(s.thresholds as Thresholds)
-      setPushHour(((s.push as { dailyReportHour: number }) || { dailyReportHour: 18 }).dailyReportHour)
+      setSched(s.scheduler as SchedulerCfg)
     })()
   }, [])
-  if (!thresholds) return <Spinner />
+  if (!thresholds || !sched) return <Spinner />
   const num = (k: keyof Thresholds) => (
     <input type="number" step="0.05" className={inputCls} value={thresholds[k]} onChange={(e) => setThresholds({ ...thresholds, [k]: Number(e.target.value) })} />
+  )
+  const task = (cronKey: 'extractionCron' | 'alertCron' | 'reportCron', enabledKey: 'extractionEnabled' | 'alertEnabled' | 'reportEnabled', label: string) => (
+    <div className="flex items-end gap-2">
+      <Field label={label}>
+        <input className={inputCls + ' font-mono !w-40'} value={sched[cronKey]} onChange={(e) => setSched({ ...sched, [cronKey]: e.target.value })} />
+      </Field>
+      <label className="flex items-center gap-1 pb-2 text-[12px]">
+        <input type="checkbox" checked={sched[enabledKey]} onChange={(e) => setSched({ ...sched, [enabledKey]: e.target.checked })} />
+        启用
+      </label>
+    </div>
   )
   return (
     <div className="space-y-4">
@@ -288,13 +325,21 @@ function ParamsTab() {
         </div>
         <Btn kind="primary" onClick={async () => { await api.putSetting('thresholds', thresholds); toast('阈值已保存'); const s = await api.settings(); setThresholds(s.thresholds as Thresholds) }}>保存阈值</Btn>
       </Card>
-      <Card title="推送（日报时点，S6）">
-        <div className="flex items-end gap-3">
-          <Field label="日报推送时点（小时，0-23）">
-            <input type="number" min={0} max={23} className={inputCls + ' !w-32'} value={pushHour} onChange={(e) => setPushHour(Number(e.target.value))} />
-          </Field>
-          <Btn kind="primary" onClick={async () => { await api.putSetting('push', { dailyReportHour: pushHour }); toast('推送配置已保存') }}>保存</Btn>
+      <Card title="大脑调度（S18，v0.7）：标准 cron「分 时 日 月 周」+ 每任务开关，保存即生效无需重启">
+        <div className="flex flex-wrap items-end gap-3">
+          {task('extractionCron', 'extractionEnabled', '信息更新对齐')}
+          {task('alertCron', 'alertEnabled', '预警提醒')}
+          {task('reportCron', 'reportEnabled', '日报提醒')}
+          <Btn kind="primary" onClick={async () => {
+            try {
+              await api.putSetting('scheduler', sched)
+              toast('调度配置已保存')
+            } catch (e) { toast((e as Error).message, 'bad') }
+          }}>保存</Btn>
         </div>
+        <p className="mt-2 text-[12px] leading-5 text-[var(--color-ink-soft)]">
+          调度器随进程默认运行，心跳每分钟按配置判定。支持 *、*/n、a-b、a,b 与数字（周 0/7 均为周日）。日报停机错过时点当日补发、当日已发不重复。
+        </p>
       </Card>
     </div>
   )

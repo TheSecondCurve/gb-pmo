@@ -1,4 +1,5 @@
 // 大脑·日报（S6）：按角色分视角，全员在职成员接收；无更新项目标「今日无更新」。
+// 时点由 scheduler.reportCron 驱动（v0.7，取代 dailyReportHour）；当日已发不重复（S18-4，force 手动重发绕过）。
 
 import { camelizeRows, camelizeRow } from '../db/index.mjs'
 import { getSetting } from '../engine/settings.js'
@@ -7,10 +8,13 @@ import { queryMetric } from '../engine/metrics.js'
 import { notifyMember } from './push.js'
 
 export async function dailyReport(db, { force = false } = {}) {
-  const push = getSetting(db, 'push')
   const now = new Date()
-  if (!force && now.getHours() < push.dailyReportHour) {
-    return { skipped: true, reason: `未到推送时点（${push.dailyReportHour}:00）` }
+  const dayStart = new Date(now).setHours(0, 0, 0, 0)
+  if (!force) {
+    const sent = db
+      .prepare(`SELECT COUNT(*) AS n FROM pushes WHERE push_type = 'daily_report' AND created_at >= ?`)
+      .get(dayStart).n
+    if (sent > 0) return { skipped: true, reason: '今日已推送过日报，不重复发送' }
   }
   expireStaleSuggestions(db, getSetting(db, 'thresholds').suggestTimeoutHours)
 
@@ -21,7 +25,6 @@ export async function dailyReport(db, { force = false } = {}) {
        WHERE p.status IN ('planning','active','paused') ORDER BY CASE p.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END`
     ).all()
   )
-  const dayStart = new Date(now).setHours(0, 0, 0, 0)
   const todayEvents = camelizeRows(
     db.prepare('SELECT project_id, summary FROM project_events WHERE business_time >= ? AND status = ?').all(dayStart, 'effective')
   )

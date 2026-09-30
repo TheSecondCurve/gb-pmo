@@ -51,7 +51,7 @@ npm run typecheck && npm run build
 1. 配置台填 DeepSeek（base_url/api_key/model + 测试连接）——未配置时大脑走确定性降级（只产记录型事件）。
 2. 飞书：按 `docs/prd.md` 附录 A.1 创建自建应用、开 `im:message.group_msg`、机器人进项目群，配置台填 App ID/Secret。
 3. 企微：需付费开通会话存档 + 部署官方 C SDK 代理（附录 A.2 step-by-step）；未开通时企微渠道自动降级。
-4. `ENABLE_SCHEDULER=1` 启动调度（每小时抽取 / 15 分钟预警 / 日报按配置时点推送）。
+4. 调度器随进程默认运行（信息更新对齐 / 预警提醒 / 日报提醒）；周期与每任务开关在配置台「阈值与推送」热调整，保存即生效。
 
 ## 明确不做（节选，全文见 docs/prd.md §9）
 

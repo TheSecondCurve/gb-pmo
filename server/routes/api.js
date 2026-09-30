@@ -223,6 +223,18 @@ export function registerApiRoutes(app) {
     return { key: req.params.key, value: setSetting(db, req.params.key, req.body, req.member.id) }
   })
 
+  // S18-1：管理员手动「立即对齐」——立即增量拉取并抽取（收集新记录、更新项目最新状态），回显每渠道结果
+  app.post('/api/v1/admin/extraction/run', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { channelId, projectId } = req.body || {}
+    if (channelId !== undefined && !Number.isInteger(channelId)) return reply.status(400).send({ message: 'channelId 须为整数' })
+    if (projectId !== undefined && !Number.isInteger(projectId)) return reply.status(400).send({ message: 'projectId 须为整数' })
+    const { runExtraction } = await import('../brain/extract.js')
+    const result = await runExtraction(db, { channelId, projectId }, { llm: app.llm ?? undefined })
+    auth.audit(db, { memberId: req.member.id, action: 'extraction.run', objectType: 'channel', detail: { channelId, projectId } })
+    return result
+  })
+
   // S17-4：DeepSeek 测试连接（最小 completion，回显成败原因）
   app.post('/api/v1/admin/test-llm', async (req, reply) => {
     if (!requireAdmin(req, reply)) return

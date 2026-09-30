@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS } from './enums.js'
+import { parseCron } from './cron.js'
 
 /** 读配置：与默认值深合并（配置台只存覆盖项）。 */
 export function getSetting(db, key) {
@@ -9,10 +10,27 @@ export function getSetting(db, key) {
   return deepMerge(base, JSON.parse(row.value))
 }
 
+// 值校验器（按 key）：保存前拦截非法值，中文错误带 400。
+const VALIDATORS = {
+  scheduler(value) {
+    for (const k of ['extractionCron', 'alertCron', 'reportCron']) {
+      if (value?.[k] === undefined) continue
+      parseCron(value[k]) // 非法即 throw（statusCode 400，含字段与原因）
+    }
+    for (const k of ['extractionEnabled', 'alertEnabled', 'reportEnabled']) {
+      if (value?.[k] === undefined) continue
+      if (typeof value[k] !== 'boolean') {
+        throw Object.assign(new Error(`scheduler.${k} 须为布尔值（true/false）`), { statusCode: 400 })
+      }
+    }
+  },
+}
+
 export function setSetting(db, key, value, by) {
   if (!(key in DEFAULT_SETTINGS)) {
     throw Object.assign(new Error(`unknown setting key: ${key}`), { statusCode: 400 })
   }
+  VALIDATORS[key]?.(value)
   db.prepare(
     `INSERT INTO settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)
      ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by`
