@@ -73,6 +73,8 @@ export const api = {
   createTemplate: (p: Record<string, unknown>) => req<{ template: import('./types').TemplateRow }>('POST', '/api/v1/admin/templates', p),
   patchTemplate: (id: number, p: Record<string, unknown>) => req<{ template: import('./types').TemplateRow }>('PATCH', `/api/v1/admin/templates/${id}`, p),
   deleteTemplate: (id: number) => req('DELETE', `/api/v1/admin/templates/${id}`),
+  draftTemplateTasks: (body: { name: string; description?: string }) =>
+    req<{ tasks: string[] }>('POST', '/api/v1/admin/templates/draft', body),
   adminTokens: () => req<{ tokensByMember: Record<string, { id: number; name: string; tokenPrefix: string; scope: string; expiresAt: number; revokedAt?: number | null }[]> }>('GET', '/api/v1/admin/tokens'),
   revokeAdminToken: (id: number) => req('DELETE', `/api/v1/admin/tokens/${id}`),
 
