@@ -262,6 +262,26 @@ export function registerApiRoutes(app) {
     return mod.testConnection(getSetting(db, `im.${platform}`))
   })
 
+  // S22：飞书项目日历——初始化（创建组织内可订阅日历并保存 calendar_id）+ 立即同步（对账式）
+  app.post('/api/v1/admin/calendar/init', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { initProjectCalendar } = await import('../brain/calendar.js')
+    const out = await initProjectCalendar(db, req.member.id)
+    auth.audit(db, { memberId: req.member.id, action: 'calendar.init', objectType: 'calendar', objectId: out.calendarId })
+    return out
+  })
+
+  app.post('/api/v1/admin/calendar/sync', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { syncProjectCalendar } = await import('../brain/calendar.js')
+    const out = await syncProjectCalendar(db)
+    auth.audit(db, {
+      memberId: req.member.id, action: 'calendar.sync', objectType: 'calendar',
+      detail: { created: out.created ?? 0, updated: out.updated ?? 0, skipped: out.skipped === true ? '未初始化' : out.skipped ?? 0, errors: out.errors?.length ?? 0 },
+    })
+    return out
+  })
+
   // S17-8：项目类型与任务模板管理（仅系统管理员）
   app.post('/api/v1/admin/project-types', async (req, reply) => {
     if (!requireAdmin(req, reply)) return

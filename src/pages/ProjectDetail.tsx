@@ -42,6 +42,17 @@ export default function ProjectDetail({ id }: { id: number }) {
           try { await api.patchProject(id, { status: v }); toast('状态已更新'); await refresh() } catch (e) { toast((e as Error).message, 'bad') }
         }} />
         <span className="text-[12px] text-[var(--color-ink-soft)]">牵头人 {p.leadName}{p.clientName ? ` · 客户 ${p.clientName}` : ''}{readonly ? ' · 已归档只读' : ''}</span>
+        <span className="num flex items-center gap-1.5 text-[12px] text-[var(--color-ink-soft)]">
+          交付日期（S21）
+          {readonly ? (p.planEndDate || '—') : (
+            <InlineText type="date" value={p.planEndDate} onSubmit={async (v) => {
+              try { await api.patchProject(id, { planEndDate: v }); toast('交付日期已更新'); await refresh() } catch (e) { toast((e as Error).message, 'bad') }
+            }} />
+          )}
+          {p.daysToDelivery != null && (p.daysToDelivery >= 0
+            ? <Badge tone={p.daysToDelivery <= 3 ? 'warn' : 'muted'}>{p.daysToDelivery === 0 ? '今日交付' : `剩 ${p.daysToDelivery} 天`}</Badge>
+            : <Badge tone="bad">超期 {-p.daysToDelivery} 天</Badge>)}
+        </span>
         <div className="ml-auto flex gap-2">
           <Btn onClick={async () => setDigesting(true)} disabled={digesting}>🧠 生成梳理（S15）</Btn>
           {!readonly && <Btn kind="danger" onClick={() => setClosing(true)}>结项（S8）</Btn>}

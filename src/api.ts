@@ -88,6 +88,9 @@ export const api = {
     req<{ channels: { channelId: number; platform: string; pulled?: number; events?: number; suggestions?: number; unrouted?: number; error?: string }[] }>('POST', '/api/v1/admin/extraction/run', body),
   testLlm: (body: object) => req<{ ok: boolean; reason?: string; sample?: string }>('POST', '/api/v1/admin/test-llm', body),
   testIm: (platform: string) => req<{ ok: boolean; reason?: string }>('POST', `/api/v1/admin/test-im/${platform}`, {}),
+  // S22 飞书项目日历：初始化（创建组织级日历）/ 立即同步（对账式）
+  calendarInit: () => req<{ calendarId: string }>('POST', '/api/v1/admin/calendar/init', {}),
+  calendarSync: () => req<{ calendarId: string; created: number; updated: number; skipped: number; errors: { projectId: number; name: string; error: string }[] } | { skipped: boolean; reason: string }>('POST', '/api/v1/admin/calendar/sync', {}),
   tokens: () => req<{ tokens: { id: number; name: string; tokenPrefix: string; scope: string; createdAt: number; expiresAt: number; revokedAt?: number | null }[] }>('GET', '/api/v1/auth/tokens'),
   issueToken: (scope: string, name: string) => req<{ token: string; id: number; scope: string; expiresAt: number }>('POST', '/api/v1/auth/tokens', { scope, name }),
   revokeToken: (id: number) => req('DELETE', `/api/v1/auth/tokens/${id}`),

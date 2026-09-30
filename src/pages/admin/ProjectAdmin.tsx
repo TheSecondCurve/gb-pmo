@@ -297,6 +297,7 @@ interface SchedulerCfg {
   extractionCron: string; extractionEnabled: boolean
   alertCron: string; alertEnabled: boolean
   reportCron: string; reportEnabled: boolean
+  calendarSyncCron: string; calendarSyncEnabled: boolean
 }
 
 function ParamsTab() {
@@ -314,7 +315,7 @@ function ParamsTab() {
   const num = (k: keyof Thresholds) => (
     <input type="number" step="0.05" className={inputCls} value={thresholds[k]} onChange={(e) => setThresholds({ ...thresholds, [k]: Number(e.target.value) })} />
   )
-  const task = (cronKey: 'extractionCron' | 'alertCron' | 'reportCron', enabledKey: 'extractionEnabled' | 'alertEnabled' | 'reportEnabled', label: string) => (
+  const task = (cronKey: 'extractionCron' | 'alertCron' | 'reportCron' | 'calendarSyncCron', enabledKey: 'extractionEnabled' | 'alertEnabled' | 'reportEnabled' | 'calendarSyncEnabled', label: string) => (
     <div className="flex items-end gap-2">
       <Field label={label}>
         <input className={inputCls + ' font-mono !w-40'} value={sched[cronKey]} onChange={(e) => setSched({ ...sched, [cronKey]: e.target.value })} />
@@ -342,6 +343,7 @@ function ParamsTab() {
           {task('extractionCron', 'extractionEnabled', '信息更新对齐')}
           {task('alertCron', 'alertEnabled', '预警提醒')}
           {task('reportCron', 'reportEnabled', '日报提醒')}
+          {task('calendarSyncCron', 'calendarSyncEnabled', '项目日历同步')}
           <Btn kind="primary" onClick={async () => {
             try {
               await api.putSetting('scheduler', sched)
@@ -350,7 +352,7 @@ function ParamsTab() {
           }}>保存</Btn>
         </div>
         <p className="mt-2 text-[12px] leading-5 text-[var(--color-ink-soft)]">
-          调度器随进程默认运行，心跳每分钟按配置判定。支持 *、*/n、a-b、a,b 与数字（周 0/7 均为周日）。日报停机错过时点当日补发、当日已发不重复。
+          调度器随进程默认运行，心跳每分钟按配置判定。支持 *、*/n、a-b、a,b 与数字（周 0/7 均为周日）。日报停机错过时点当日补发、当日已发不重复。项目日历同步（S22）为对账式——初始化与手动同步在「外部依赖→飞书」。
         </p>
       </Card>
     </div>
