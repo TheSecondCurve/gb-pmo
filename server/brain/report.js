@@ -3,7 +3,6 @@
 import { camelizeRows, camelizeRow } from '../db/index.mjs'
 import { getSetting } from '../engine/settings.js'
 import { expireStaleSuggestions } from '../engine/events.js'
-import { evaluateDependencyStatus, overdueDependenciesOf } from '../engine/tasks.js'
 import { queryMetric } from '../engine/metrics.js'
 import { notifyMember } from './push.js'
 
@@ -14,7 +13,6 @@ export async function dailyReport(db, { force = false } = {}) {
     return { skipped: true, reason: `未到推送时点（${push.dailyReportHour}:00）` }
   }
   expireStaleSuggestions(db, getSetting(db, 'thresholds').suggestTimeoutHours)
-  evaluateDependencyStatus(db)
 
   const members = camelizeRows(db.prepare(`SELECT * FROM members WHERE status = 'active'`).all())
   const projects = camelizeRows(
@@ -40,7 +38,7 @@ export async function dailyReport(db, { force = false } = {}) {
     const myTasks = camelizeRows(
       db.prepare(
         `SELECT t.id, t.title, t.plan_end_date, p.name AS project_name FROM tasks t JOIN projects p ON p.id = t.project_id
-         WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing','blocked')`
+         WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing')`
       ).all(m.id)
     )
     const tomorrow = new Date(now.getTime() + 86400000).toISOString().slice(0, 10)
@@ -69,16 +67,10 @@ export async function dailyReport(db, { force = false } = {}) {
         const evts = eventsOf(p.id)
         return `- [${p.priority}] ${p.name}：${evts.length ? `${evts.length} 条更新` : '今日无更新'}`
       })
-      const depAlerts = []
-      for (const p of projects) {
-        if (!p.leadMemberId) continue
-        const ods = overdueDependenciesOf(db, p.leadMemberId)
-        if (ods.length) depAlerts.push(`${p.lead_name} 被依赖项逾期 ${ods.length} 项`)
-      }
       const load = queryMetric(db, 'keyperson_load', { groupBy: 'member' })
       const overloaded = load.rows.filter((r) => r.overloaded)
       sections.push(
-        `【全局】\n${lines.join('\n')}${depAlerts.length ? `\n【依赖预警】\n${depAlerts.join('\n')}` : ''}${overloaded.length ? `\n【负载预警】${overloaded.map((r) => `${r.member}(${r.parallelProjects} 项目)`).join('、')}` : ''}`
+        `【全局】\n${lines.join('\n')}${overloaded.length ? `\n【负载预警】${overloaded.map((r) => `${r.member}(${r.parallelProjects} 项目)`).join('、')}` : ''}`
       )
     }
 

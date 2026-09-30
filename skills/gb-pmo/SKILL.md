@@ -37,8 +37,9 @@ client.sh action generate_person_digest '{}'
 2. **写 SQL 守则**：手动补 `updated_at`（epoch 毫秒）与审计需要的字段；软删不硬删（人员改 status='offboarded'，不要 DELETE）；403 不换字段重试；只改自己为责任人/牵头人的对象，跨人变更走建议。
 3. **LLM 信任边界**：口述更新一律 `INSERT INTO project_events (nature='suggestion', status='pending', ...)` 生成建议，等人在页面/接口确认；绝不直接 `UPDATE tasks` 改状态/日期/责任人。
 4. 常用查询模式：
-   - 「我本周的任务」：`SELECT t.id, t.title, t.plan_end_date, p.name FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.responsible_member_id=<我> AND t.status IN ('todo','doing','blocked')`
-   - 「B 项目卡在哪」：看 project_events 最新 blocker/risk + 被阻塞任务（depends_on_task_id 未完成）。
+   - 「我本周的任务」：`SELECT t.id, t.title, t.plan_end_date, p.name FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.responsible_member_id=<我> AND t.status IN ('todo','doing')`
+   - 「B 项目卡在哪」：看 project_events 最新 blocker/risk + 逾期未完任务（plan_end_date < date('now') 且 status != 'done'）。
+   - 任务状态固定三档：todo/doing/done（v0.6，无 blocked/cancelled）；任务相互独立，无前置依赖。
 5. 建议事件的 target 字段组合：task → status/plan_start_date/plan_end_date/responsible_member_id；milestone → target_object='milestone' 且 plan_date。
 
 
@@ -95,22 +96,12 @@ client.sh action generate_person_digest '{}'
 | description | TEXT |  |
 | updated_at | INTEGER |  |
 
-### template_stages
-
-| 列 | 类型 | 说明 |
-|---|---|---|
-| id | INTEGER |  |
-| template_id | INTEGER |  |
-| name | TEXT |  |
-| sort_order | INTEGER |  |
-
 ### template_tasks
 
 | 列 | 类型 | 说明 |
 |---|---|---|
 | id | INTEGER |  |
 | template_id | INTEGER |  |
-| stage_name | TEXT |  |
 | title | TEXT |  |
 | sort_order | INTEGER |  |
 
@@ -131,15 +122,7 @@ client.sh action generate_person_digest '{}'
 | actual_end_date | TEXT |  |
 | closeout_summary | TEXT |  |
 | updated_at | INTEGER |  |
-
-### stages
-
-| 列 | 类型 | 说明 |
-|---|---|---|
-| id | INTEGER |  |
-| project_id | INTEGER |  |
-| name | TEXT |  |
-| sort_order | INTEGER |  |
+| project_type_id | INTEGER |  |
 
 ### tasks
 
@@ -147,7 +130,6 @@ client.sh action generate_person_digest '{}'
 |---|---|---|
 | id | INTEGER |  |
 | project_id | INTEGER |  |
-| stage_id | INTEGER |  |
 | title | TEXT |  |
 | responsible_member_id | INTEGER |  |
 | status | TEXT | todo|doing|blocked|done|cancelled |
@@ -156,7 +138,6 @@ client.sh action generate_person_digest '{}'
 | actual_end_date | TEXT |  |
 | source | TEXT | template|manual|extraction|suggestion |
 | updated_at | INTEGER |  |
-| depends_on_task_id | INTEGER |  |
 
 ### milestones
 
@@ -168,19 +149,6 @@ client.sh action generate_person_digest '{}'
 | plan_date | TEXT |  |
 | actual_date | TEXT |  |
 | status | TEXT | planned|met|missed|cancelled |
-| updated_at | INTEGER |  |
-
-### dependencies
-
-| 列 | 类型 | 说明 |
-|---|---|---|
-| id | INTEGER |  |
-| task_id | INTEGER |  |
-| depends_on_task_id | INTEGER |  |
-| depends_on_member_id | INTEGER |  |
-| note | TEXT |  |
-| due_date | TEXT |  |
-| status | TEXT | pending|satisfied|overdue |
 | updated_at | INTEGER |  |
 
 ### channels
@@ -276,16 +244,37 @@ client.sh action generate_person_digest '{}'
 | name | TEXT |  |
 | applied_at | INTEGER |  |
 
+### project_types
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| code | TEXT | software_delivery | consulting | custom | 自定义 |
+| name | TEXT |  |
+| description | TEXT |  |
+| default_template_id | INTEGER |  |
+| status | TEXT | active | disabled |
+| updated_at | INTEGER |  |
+
+### task_records
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| task_id | INTEGER |  |
+| member_id | INTEGER |  |
+| content | TEXT |  |
+
 ## 枚举（值 ↔ 中文 label，双向对齐）
 
-- **memberRole**: admin=管理员、member=普通成员
+- **memberRole**: admin=系统管理员、member=成员
 - **memberStatus**: active=在职、offboarded=离职
 - **projectStatus**: planning=待启动、active=进行中、paused=已暂停、closed=已结项、cancelled=已取消
+- **projectTypeStatus**: active=启用、disabled=停用
 - **priority**: high=高、medium=中、low=低
-- **taskStatus**: todo=未开始、doing=进行中、blocked=被阻塞、done=已完成、cancelled=已取消
+- **taskStatus**: todo=未开始、doing=进行中、done=完成
 - **taskSource**: template=模板、manual=手动、extraction=抽取、suggestion=建议采纳
 - **milestoneStatus**: planned=计划中、met=已达成、missed=已延误、cancelled=已取消
-- **dependencyStatus**: pending=待满足、satisfied=已满足、overdue=已逾期
 - **channelPlatform**: feishu=飞书、wecom=企业微信
 - **channelType**: dedicated=专题渠道、general=通用群
 - **eventNature**: record=记录型、suggestion=建议型

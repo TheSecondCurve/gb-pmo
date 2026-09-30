@@ -113,3 +113,115 @@ describe('S17 配置台', () => {
     expect(fs.body.reason).toContain('A.1')
   })
 })
+
+describe('S17 配置台改版：角色治理与类型/模板管理', () => {
+  it('S17-6: 系统管理员变更成员角色后，配置台访问权立即随新角色生效', async () => {
+    const local = await setupApp()
+    try {
+      const adminCookie = await loginCookie(local.app, 'admin', 'admin-pass-123')
+      const lisiCookie = await loginCookie(local.app, 'lisi', 'pass-123456')
+
+      const before = await authed(local.app, lisiCookie, 'GET', '/api/v1/admin/settings')
+      expect(before.status).toBe(403)
+
+      const up = await authed(local.app, adminCookie, 'PATCH', `/api/v1/members/${local.members.dev.id}`, { role: 'admin' })
+      expect(up.status).toBe(200)
+      const during = await authed(local.app, lisiCookie, 'GET', '/api/v1/admin/settings')
+      expect(during.status).toBe(200)
+
+      const down = await authed(local.app, adminCookie, 'PATCH', `/api/v1/members/${local.members.dev.id}`, { role: 'member' })
+      expect(down.status).toBe(200)
+      const after = await authed(local.app, lisiCookie, 'GET', '/api/v1/admin/settings')
+      expect(after.status).toBe(403)
+
+      // 普通成员不能配置任何人的角色
+      const forbidden = await authed(local.app, lisiCookie, 'PATCH', `/api/v1/members/${local.members.key.id}`, { role: 'admin' })
+      expect(forbidden.status).toBe(403)
+    } finally {
+      local.db.close()
+    }
+  })
+
+  it('S17-8: 停用类型后立项不可选且历史项目不受影响；模板编辑只影响未来立项', async () => {
+    const local = await setupApp()
+    try {
+    const adminCookie = await loginCookie(local.app, 'admin', 'admin-pass-123')
+    const memberCookie = await loginCookie(local.app, 'lisi', 'pass-123456')
+
+    // 新建任务模板（阶段 + 任务）
+    const tpl = await authed(local.app, adminCookie, 'POST', '/api/v1/admin/templates', {
+      code: 'sre_ops', name: '运维专项',
+      tasks: [{ title: '变更评审' }, { title: '执行割接' }], // v0.6：纯任务清单，无阶段层
+    })
+    expect(tpl.status).toBe(201)
+    expect(tpl.body.template.stages).toBeUndefined()
+    expect(tpl.body.template.tasks.map((t) => t.title)).toEqual(['变更评审', '执行割接'])
+
+    // 新建项目类型并绑定该模板
+    const t = await authed(local.app, adminCookie, 'POST', '/api/v1/admin/project-types', {
+      code: 'ops', name: '运维', defaultTemplateId: tpl.body.template.id,
+    })
+    expect(t.status).toBe(201)
+    expect(t.body.type.defaultTemplateName).toBe('运维专项')
+    expect(t.body.type.status).toBe('active')
+
+    // 类型清单全员可读（立项表单用，D1 透明）
+    const list = await authed(local.app, memberCookie, 'GET', '/api/v1/project-types')
+    expect(list.status).toBe(200)
+    expect(list.body.types.map((x) => x.code)).toContain('ops')
+
+    // 按类型立项：套用绑定模板，任务责任人默认=牵头人
+    const p1 = await authed(local.app, adminCookie, 'POST', '/api/v1/projects', {
+      name: '割接项目', typeCode: 'ops', leadMemberId: local.members.lead.id,
+    })
+    expect(p1.status).toBe(201)
+    expect(p1.body.typeName).toBe('运维')
+    expect(p1.body.templateCode).toBe('sre_ops')
+    expect(p1.body.tasks.map((x) => x.title)).toEqual(['变更评审', '执行割接'])
+    expect(p1.body.tasks.every((x) => x.responsibleMemberId === local.members.lead.id)).toBe(true)
+
+    // 编辑模板（整体替换任务清单）→ 只影响未来立项
+    const upd = await authed(local.app, adminCookie, 'PATCH', `/api/v1/admin/templates/${tpl.body.template.id}`, {
+      tasks: [{ title: '变更评审' }, { title: '执行割接' }, { title: '回滚预案验证' }],
+    })
+    expect(upd.status).toBe(200)
+    expect(upd.body.template.tasks).toHaveLength(3)
+    const hist1 = await authed(local.app, adminCookie, 'GET', `/api/v1/projects/${p1.body.id}`)
+    expect(hist1.body.tasks.map((x) => x.title)).toEqual(['变更评审', '执行割接'])
+    const p2 = await authed(local.app, adminCookie, 'POST', '/api/v1/projects', {
+      name: '第二次割接', typeCode: 'ops', leadMemberId: local.members.lead.id,
+    })
+    expect(p2.body.tasks.map((x) => x.title)).toEqual(['变更评审', '执行割接', '回滚预案验证'])
+
+    // 停用类型 → 立项 400，历史项目不受影响
+    const dis = await authed(local.app, adminCookie, 'PATCH', `/api/v1/admin/project-types/${t.body.type.id}`, { status: 'disabled' })
+    expect(dis.status).toBe(200)
+    const list2 = await authed(local.app, memberCookie, 'GET', '/api/v1/project-types')
+    expect(list2.body.types.find((x) => x.code === 'ops').status).toBe('disabled')
+    const blocked = await authed(local.app, adminCookie, 'POST', '/api/v1/projects', {
+      name: '不该成功', typeCode: 'ops', leadMemberId: local.members.lead.id,
+    })
+    expect(blocked.status).toBe(400)
+    expect(blocked.body.message).toContain('停用')
+    const hist2 = await authed(local.app, adminCookie, 'GET', `/api/v1/projects/${p1.body.id}`)
+    expect(hist2.body.typeName).toBe('运维')
+    expect(hist2.body.tasks).toHaveLength(2)
+
+    // 被类型绑定的模板不可删除（防引用悬空）
+    const del = await authed(local.app, adminCookie, 'DELETE', `/api/v1/admin/templates/${tpl.body.template.id}`)
+    expect(del.status).toBe(409)
+
+    // 校验：类型编码唯一、绑定不存在的模板 → 400
+    const dup = await authed(local.app, adminCookie, 'POST', '/api/v1/admin/project-types', {
+      code: 'ops', name: '重复', defaultTemplateId: tpl.body.template.id,
+    })
+    expect(dup.status).toBe(400)
+    const badTpl = await authed(local.app, adminCookie, 'POST', '/api/v1/admin/project-types', {
+      code: 'ops2', name: '坏绑定', defaultTemplateId: 99999,
+    })
+    expect(badTpl.status).toBe(400)
+    } finally {
+      local.db.close()
+    }
+  })
+})

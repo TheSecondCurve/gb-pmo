@@ -70,21 +70,15 @@ describe('S15 by 项目梳理', () => {
 })
 
 describe('S16 by 员工梳理', () => {
-  it('S16-1: 覆盖名下全部任务与被依赖项，跨项目聚合', async () => {
-    const p1 = await mkProject('项目一', ctx.members.lead.id)
-    const p2 = await mkProject('项目二', ctx.members.lead.id)
-    // 张三已各领 6 个模板任务（两项目），再造一条被王五依赖张三的记录
-    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
-    const t2 = p2.tasks[0]
-    await authed(ctx.app, cookie, 'POST', '/api/v1/dependencies', { taskId: t2.id, dependsOnMemberId: ctx.members.key.id, dueDate: '2026-10-15' })
+  it('S16-1: 覆盖名下全部任务，跨项目聚合（v0.6：无被依赖项）', async () => {
+    await mkProject('项目一', ctx.members.lead.id)
+    await mkProject('项目二', ctx.members.lead.id)
     const out = await personDigest(ctx.db, ctx.members.lead.id, { llm: null })
     const expected = ctx.db
-      .prepare(`SELECT COUNT(*) AS n FROM tasks WHERE responsible_member_id = ? AND status IN ('todo','doing','blocked')`)
+      .prepare(`SELECT COUNT(*) AS n FROM tasks WHERE responsible_member_id = ? AND status IN ('todo','doing')`)
       .get(ctx.members.lead.id).n
     expect(out.taskCount).toBe(expected)
-    expect(out.dependencyCount).toBe(0) // 张三不被依赖（王五依赖张三方向相反）
-    const outKey = await personDigest(ctx.db, ctx.members.key.id, { llm: null })
-    expect(outKey.dependencyCount).toBe(1)
+    expect(out.dependencyCount).toBeUndefined() // 依赖已裁剪（v0.6）
   })
 
   it('S16-2: 名下两项任务排期重叠 → 标出冲突并给建议', async () => {

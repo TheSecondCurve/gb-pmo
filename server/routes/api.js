@@ -3,6 +3,7 @@ import * as members from '../engine/members.js'
 import * as projects from '../engine/projects.js'
 import * as tasks from '../engine/tasks.js'
 import * as events from '../engine/events.js'
+import * as projectTypes from '../engine/projectTypes.js'
 import * as auth from '../engine/auth.js'
 import { getAllSettings, setSetting, getSetting } from '../engine/settings.js'
 import { queryMetric, listMetrics } from '../engine/metrics.js'
@@ -77,6 +78,9 @@ export function registerApiRoutes(app) {
 
   // —— 项目 ——
 
+  // 项目类型清单：登录可读（立项表单选项；D1 全员透明），维护在 /admin 段
+  app.get('/api/v1/project-types', async () => ({ types: projectTypes.listProjectTypes(db) }))
+
   app.get('/api/v1/projects', async (req) => {
     const statuses = req.query.status ? String(req.query.status).split(',') : undefined
     return { projects: projects.listProjects(db, { statuses }) }
@@ -90,18 +94,14 @@ export function registerApiRoutes(app) {
 
   app.patch('/api/v1/projects/:id', async (req) => projects.updateProject(db, Number(req.params.id), req.body, req.member.id))
 
-  app.post('/api/v1/projects/:id/stages', async (req, reply) => {
-    return reply.status(201).send(projects.addStage(db, Number(req.params.id), req.body?.name))
-  })
-
   app.post('/api/v1/projects/:id/close', async (req) => {
-    // S8-2：未提供摘要时由大脑基于事件流自动生成（LLM 可用则归纳，人工可改）
+    // S8-2：未提供摘要时由大脑基于事件流自动生成（LLM 可用则归纳，人工可改）；v0.6 规则=全部任务完成才可结项
     let summary = req.body?.summary
     if (!summary) {
       const { closeoutSummary } = await import('../brain/digest.js')
       summary = await closeoutSummary(db, Number(req.params.id))
     }
-    return projects.closeProject(db, Number(req.params.id), { summary, dispositions: req.body?.dispositions || [] }, req.member.id)
+    return projects.closeProject(db, Number(req.params.id), { summary }, req.member.id)
   })
 
   app.get('/api/v1/projects/:id/events', async (req) =>
@@ -138,17 +138,18 @@ export function registerApiRoutes(app) {
 
   app.patch('/api/v1/tasks/:id', async (req) => tasks.updateTask(db, Number(req.params.id), req.body, req.member.id))
 
+  // 任务更新记录（S2-3，v0.6）：追加式时间线
+  app.get('/api/v1/tasks/:id/records', async (req) => ({ records: tasks.listTaskRecords(db, Number(req.params.id)) }))
+
+  app.post('/api/v1/tasks/:id/records', async (req, reply) => {
+    return reply.status(201).send({ record: tasks.addTaskRecord(db, { taskId: Number(req.params.id), content: req.body?.content }, req.member.id) })
+  })
+
   app.post('/api/v1/milestones', async (req, reply) => {
     return reply.status(201).send(tasks.createMilestone(db, req.body, req.member.id))
   })
 
   app.patch('/api/v1/milestones/:id', async (req) => tasks.updateMilestone(db, Number(req.params.id), req.body, req.member.id))
-
-  app.post('/api/v1/dependencies', async (req, reply) => {
-    return reply.status(201).send(tasks.createDependency(db, req.body, req.member.id))
-  })
-
-  app.post('/api/v1/dependencies/evaluate', async (req) => ({ updated: tasks.evaluateDependencyStatus(db) }))
 
   app.get('/api/v1/channels', async () => ({ channels: tasks.listChannels(db) }))
 
@@ -239,6 +240,38 @@ export function registerApiRoutes(app) {
     if (!['feishu', 'wecom'].includes(platform)) return reply.status(400).send({ message: 'platform 仅支持 feishu/wecom' })
     const mod = await import(`../brain/connectors/${platform}.js`)
     return mod.testConnection(getSetting(db, `im.${platform}`))
+  })
+
+  // S17-8：项目类型与任务模板管理（仅系统管理员）
+  app.post('/api/v1/admin/project-types', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    return reply.status(201).send({ type: projectTypes.createProjectType(db, req.body, req.member.id) })
+  })
+
+  app.patch('/api/v1/admin/project-types/:id', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    return { type: projectTypes.updateProjectType(db, Number(req.params.id), req.body, req.member.id) }
+  })
+
+  app.get('/api/v1/admin/templates', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    return { templates: projectTypes.listTemplates(db) }
+  })
+
+  app.post('/api/v1/admin/templates', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    return reply.status(201).send({ template: projectTypes.createTemplate(db, req.body, req.member.id) })
+  })
+
+  app.patch('/api/v1/admin/templates/:id', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    return { template: projectTypes.updateTemplate(db, Number(req.params.id), req.body, req.member.id) }
+  })
+
+  app.delete('/api/v1/admin/templates/:id', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    projectTypes.deleteTemplate(db, Number(req.params.id), req.member.id)
+    return { ok: true }
   })
 
   app.get('/api/v1/admin/tokens', async (req, reply) => {

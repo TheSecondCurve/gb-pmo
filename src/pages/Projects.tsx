@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useStore } from '../store'
 import { Badge, Btn, Card, Empty, Field, InlineSelect, Modal, Spinner, inputCls } from '../components/ui'
-import { PRIORITY_LABEL, type Member, type ProjectRow } from '../types'
+import { PRIORITY_LABEL, type Member, type ProjectRow, type ProjectType } from '../types'
 
 export default function Projects() {
   const { toast } = useStore()
@@ -32,7 +32,7 @@ export default function Projects() {
             <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
               <tr className="border-b border-[var(--color-line)]">
                 <th className="py-1.5">优先级</th><th>项目</th><th>牵头人</th><th>状态</th>
-                <th className="num">逾期</th><th>计划周期</th><th>模板</th>
+                <th className="num">逾期</th><th>计划周期</th><th>类型</th>
               </tr>
             </thead>
             <tbody>
@@ -52,7 +52,7 @@ export default function Projects() {
                   </td>
                   <td className={`num ${p.overdueTasks ? 'text-[var(--color-bad)]' : ''}`}>{p.overdueTasks}</td>
                   <td className="num">{p.planStartDate || '?'} ~ {p.planEndDate || '?'}</td>
-                  <td className="text-[var(--color-ink-soft)]">{p.templateCode === 'software_delivery' ? '软件交付' : p.templateCode === 'consulting' ? '咨询服务' : p.templateCode === 'custom' ? '自由创建' : p.templateCode}</td>
+                  <td className="text-[var(--color-ink-soft)]">{p.typeName || p.templateCode}</td>
                 </tr>
               ))}
             </tbody>
@@ -66,9 +66,19 @@ export default function Projects() {
 }
 
 function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose: () => void; onDone: () => Promise<void> }) {
-  const [form, setForm] = useState({ name: '', templateCode: 'software_delivery', leadMemberId: '', priority: 'medium', clientName: '', planStartDate: '', planEndDate: '' })
+  const [types, setTypes] = useState<ProjectType[]>([])
+  const [form, setForm] = useState({ name: '', typeCode: '', leadMemberId: '', priority: 'medium', clientName: '', planStartDate: '', planEndDate: '' })
   const [err, setErr] = useState('')
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }))
+  useEffect(() => {
+    void (async () => {
+      const t = await api.projectTypes()
+      const active = t.types.filter((x) => x.status === 'active')
+      setTypes(active)
+      if (active.length) setForm((f) => ({ ...f, typeCode: f.typeCode || active[0].code }))
+    })()
+  }, [])
+  const chosen = types.find((t) => t.code === form.typeCode)
   const submit = async () => {
     try {
       await api.createProject({ ...form, leadMemberId: Number(form.leadMemberId) })
@@ -78,13 +88,14 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
   return (
     <Modal title="立项（S1）" onClose={onClose}>
       <Field label="项目名 *"><input className={inputCls} value={form.name} onChange={(e) => set('name', e.target.value)} /></Field>
-      <Field label="项目模板">
-        <select className={inputCls} value={form.templateCode} onChange={(e) => set('templateCode', e.target.value)}>
-          <option value="software_delivery">软件交付（需求→开发→测试→验收→结项）</option>
-          <option value="consulting">咨询服务（调研→方案→实施→结项）</option>
-          <option value="custom">自由创建（仅启动/结项锚点）</option>
+      <Field label="项目类型（决定默认任务模板；类型与模板在配置台维护）">
+        <select className={inputCls} value={form.typeCode} onChange={(e) => set('typeCode', e.target.value)}>
+          {types.map((t) => (
+            <option key={t.code} value={t.code}>{t.name}（{t.defaultTemplateName || ''}）</option>
+          ))}
         </select>
       </Field>
+      {chosen?.description && <div className="-mt-2 mb-3 text-[11px] text-[var(--color-ink-soft)]">{chosen.description}</div>}
       <Field label="牵头人 *（必填，模板任务默认责任人）">
         <select className={inputCls} value={form.leadMemberId} onChange={(e) => set('leadMemberId', e.target.value)}>
           <option value="">选择成员…</option>

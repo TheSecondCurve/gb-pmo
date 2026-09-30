@@ -120,3 +120,24 @@ export function Card({ title, children, actions }: { title?: string; children: R
 export function Empty({ hint }: { hint: string }) {
   return <div className="py-10 text-center text-[13px] text-[var(--color-ink-soft)]">{hint}</div>
 }
+
+/** Tab 条（配置台每页内部分区；无路由库，选中态由调用方管理） */
+export function Tabs({ tabs, value, onChange }: {
+  tabs: { key: string; label: string }[]; value: string; onChange: (key: string) => void
+}) {
+  return (
+    <div className="mb-4 flex flex-wrap gap-1 border-b border-[var(--color-line)]">
+      {tabs.map((t) => (
+        <button
+          key={t.key} type="button"
+          className={`-mb-px border-b-2 px-3 py-2 text-[13px] transition-colors ${
+            value === t.key
+              ? 'border-[var(--color-brand)] font-medium text-[var(--color-brand)]'
+              : 'border-transparent text-[var(--color-ink-soft)] hover:text-[var(--color-ink)]'
+          }`}
+          onClick={() => onChange(t.key)}
+        >{t.label}</button>
+      ))}
+    </div>
+  )
+}

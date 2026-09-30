@@ -2,10 +2,9 @@ import { describe, it, expect, afterAll } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { dailyReport } from '../brain/report.js'
 import { evaluateAlerts } from '../brain/alert.js'
-import { createDependency } from '../engine/tasks.js'
 import { queryMetric } from '../engine/metrics.js'
 
-// PRD S6 / S7 — 日报分视角与「今日无更新」；依赖逾期与关键人过载预警
+// PRD S6 / S7 — 日报分视角与「今日无更新」；关键人逾期任务与过载预警（v0.6：S7-1 改逾期任务口径）
 
 let ctx
 afterAll(() => ctx?.db.close())
@@ -45,18 +44,22 @@ describe('S6 日报', () => {
 })
 
 describe('S7 预警', () => {
-  it('S7-1: 关键人被依赖且逾期 → 推老板（管理员）与本人，列出被阻塞项目', async () => {
-    const p = await mkProject('客户H系统', ctx.members.lead.id)
+  it('S7-1: 关键人名下逾期未完任务 ≥1 → 推老板（管理员）与本人，列出任务与项目（v0.6 口径）', async () => {
+    const p = await mkProject('客户H系统', ctx.members.key.id)
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
-    createDependency(ctx.db, { taskId: p.tasks[0].id, dependsOnMemberId: ctx.members.key.id, dueDate: yesterday, note: '等王五出接口文档' })
+    // 王五（关键人）名下任务逾期：直接把模板任务责任人改给王五并设过期截止日
+    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    const task = p.tasks[0]
+    await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${task.id}`, { responsibleMemberId: ctx.members.key.id, planEndDate: yesterday })
 
     const { alerts } = evaluateAlerts(ctx.db)
-    const dep = alerts.find((a) => a.type === 'dependency_overdue' && a.memberId === ctx.members.key.id)
-    expect(dep).toBeTruthy()
-    expect(dep.projects).toContain(p.id)
-    const toKey = ctx.db.prepare(`SELECT * FROM pushes WHERE push_type = 'alert' AND recipient_member_id = ? AND title LIKE '%依赖逾期%'`).get(ctx.members.key.id)
-    const toBoss = ctx.db.prepare(`SELECT * FROM pushes WHERE push_type = 'alert' AND recipient_member_id = ? AND title LIKE '%依赖逾期%'`).get(ctx.members.admin.id)
+    const ovd = alerts.find((a) => a.type === 'overdue_tasks' && a.memberId === ctx.members.key.id)
+    expect(ovd).toBeTruthy()
+    expect(ovd.projects).toContain(p.id)
+    const toKey = ctx.db.prepare(`SELECT * FROM pushes WHERE push_type = 'alert' AND recipient_member_id = ? AND title LIKE '%逾期任务预警%'`).get(ctx.members.key.id)
+    const toBoss = ctx.db.prepare(`SELECT * FROM pushes WHERE push_type = 'alert' AND recipient_member_id = ? AND title LIKE '%逾期任务预警%'`).get(ctx.members.admin.id)
     expect(toKey.body).toContain('客户H系统')
+    expect(toKey.body).toContain(task.title)
     expect(toBoss).toBeTruthy()
   })
 

@@ -8,11 +8,9 @@ const TASK_COLS = `t.*, m.name AS responsible_name, p.name AS project_name, p.st
 
 function decorate(rows) {
   const today = todayStr()
-  const done = new Set(rows.filter((r) => r.status === 'done' || r.status === 'cancelled').map((r) => r.id))
   return rows.map((r) => ({
     ...camelizeRow(r),
-    isBlocked: Boolean(r.depends_on_task_id && !done.has(r.depends_on_task_id)),
-    isOverdue: Boolean(r.plan_end_date && r.plan_end_date < today && r.status !== 'done' && r.status !== 'cancelled'),
+    isOverdue: Boolean(r.plan_end_date && r.plan_end_date < today && r.status !== 'done'),
   }))
 }
 
@@ -43,13 +41,13 @@ export function listUnassigned(db) {
   return decorate(
     db.prepare(
       `SELECT ${TASK_COLS} FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id LEFT JOIN projects p ON p.id = t.project_id
-       WHERE t.responsible_member_id IS NULL AND t.plan_start_date IS NOT NULL AND t.status IN ('todo','doing','blocked') ORDER BY t.plan_start_date`
+       WHERE t.responsible_member_id IS NULL AND t.plan_start_date IS NOT NULL AND t.status IN ('todo','doing') ORDER BY t.plan_start_date`
     ).all()
   )
 }
 
 export function createTask(db, input, by) {
-  const { projectId, title, responsibleMemberId, planStartDate, planEndDate, stageId, dependsOnTaskId } = input
+  const { projectId, title, responsibleMemberId, planStartDate, planEndDate } = input
   if (!projectId || !title) throw Object.assign(new Error('projectId/title 必填'), { statusCode: 400 })
   const project = getProject(db, projectId)
   if (project.status === 'closed' || project.status === 'cancelled') {
@@ -59,9 +57,9 @@ export function createTask(db, input, by) {
   const owner = responsibleMemberId ?? project.leadMemberId
   const now = Date.now()
   const info = db.prepare(
-    `INSERT INTO tasks (project_id, stage_id, title, responsible_member_id, status, plan_start_date, plan_end_date, source, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'todo', ?, ?, 'manual', ?, ?)`
-  ).run(projectId, stageId || null, title, owner, planStartDate || null, planEndDate || null, now, now)
+    `INSERT INTO tasks (project_id, title, responsible_member_id, status, plan_start_date, plan_end_date, source, created_at, updated_at)
+     VALUES (?, ?, ?, 'todo', ?, ?, 'manual', ?, ?)`
+  ).run(projectId, title, owner, planStartDate || null, planEndDate || null, now, now)
   audit(db, { memberId: by, action: 'task.create', objectType: 'task', objectId: info.lastInsertRowid })
   return getTask(db, Number(info.lastInsertRowid))
 }
@@ -76,7 +74,6 @@ export function updateTask(db, id, patch, by) {
   }
   const fields = {}
   if ('title' in patch) fields.title = patch.title
-  if ('stageId' in patch) fields.stage_id = patch.stageId || null
   if ('responsibleMemberId' in patch) {
     fields.responsible_member_id = patch.responsibleMemberId === '' ? null : patch.responsibleMemberId
     if (patch.responsibleMemberId && cur.responsible_member_id !== patch.responsibleMemberId) {
@@ -89,7 +86,6 @@ export function updateTask(db, id, patch, by) {
   }
   if ('planStartDate' in patch) fields.plan_start_date = patch.planStartDate || null
   if ('planEndDate' in patch) fields.plan_end_date = patch.planEndDate || null
-  if ('dependsOnTaskId' in patch) fields.depends_on_task_id = patch.dependsOnTaskId || null
   if ('status' in patch && patch.status !== cur.status) {
     fields.status = assertValue('taskStatus', patch.status)
     if (patch.status === 'done') fields.actual_end_date = todayStr()
@@ -130,47 +126,44 @@ export function updateMilestone(db, id, patch, by) {
   return camelizeRow(db.prepare('SELECT * FROM milestones WHERE id = ?').get(id))
 }
 
-// —— 依赖（任务→任务 / 任务→人）——
+// —— 任务更新记录（S2-3，v0.6）：追加式，只插不改；项目归档后任务面只读 ——
 
-export function createDependency(db, { taskId, dependsOnTaskId, dependsOnMemberId, dueDate, note }, by) {
-  if (!taskId || (!dependsOnTaskId && !dependsOnMemberId)) {
-    throw Object.assign(new Error('taskId 与 dependsOnTaskId/dependsOnMemberId 至少一项必填'), { statusCode: 400 })
+export function addTaskRecord(db, { taskId, content }, by) {
+  if (!taskId || !content || !String(content).trim()) {
+    throw Object.assign(new Error('taskId/content 必填'), { statusCode: 400 })
   }
-  const now = Date.now()
+  const cur = db
+    .prepare('SELECT t.id, p.status AS project_status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?')
+    .get(taskId)
+  if (!cur) throw Object.assign(new Error('任务不存在'), { statusCode: 404 })
+  if (cur.project_status === 'closed' || cur.project_status === 'cancelled') {
+    throw Object.assign(new Error('项目已结项/取消，任务面只读'), { statusCode: 409 })
+  }
   const info = db.prepare(
-    `INSERT INTO dependencies (task_id, depends_on_task_id, depends_on_member_id, note, due_date, status, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`
-  ).run(taskId, dependsOnTaskId || null, dependsOnMemberId || null, note || null, dueDate || null, now, now)
-  audit(db, { memberId: by, action: 'dependency.create', objectType: 'dependency', objectId: info.lastInsertRowid })
-  return camelizeRow(db.prepare('SELECT * FROM dependencies WHERE id = ?').get(Number(info.lastInsertRowid)))
+    'INSERT INTO task_records (task_id, member_id, content, created_at) VALUES (?, ?, ?, ?)'
+  ).run(taskId, by ?? null, String(content).trim(), Date.now())
+  audit(db, { memberId: by, action: 'task.record.create', objectType: 'task_record', objectId: info.lastInsertRowid })
+  return listTaskRecords(db, taskId).find((r) => r.id === Number(info.lastInsertRowid))
 }
 
-/** 依赖逾期推导：due_date < 今日 且 pending → overdue（S7 用）。 */
-export function evaluateDependencyStatus(db) {
-  const today = todayStr()
-  const info = db.prepare(
-    `UPDATE dependencies SET status = 'overdue', updated_at = ? WHERE status = 'pending' AND due_date IS NOT NULL AND due_date < ?`
-  ).run(Date.now(), today)
-  return info.changes
-}
-
-/** S7-1：某人被依赖且已逾期、且关联任务未完的清单。 */
-export function overdueDependenciesOf(db, memberId) {
+export function listTaskRecords(db, taskId) {
   return camelizeRows(
     db.prepare(
-      `SELECT d.*, t.title AS task_title, t.status AS task_status, p.id AS project_id, p.name AS project_name, p.priority AS project_priority
-       FROM dependencies d JOIN tasks t ON t.id = d.task_id JOIN projects p ON p.id = t.project_id
-       WHERE d.depends_on_member_id = ? AND d.status = 'overdue' AND t.status IN ('todo','doing','blocked')`
-    ).all(memberId)
+      `SELECT r.*, m.name AS member_name FROM task_records r LEFT JOIN members m ON m.id = r.member_id
+       WHERE r.task_id = ? ORDER BY r.created_at, r.id`
+    ).all(taskId)
   )
 }
 
-/** S7-2：关键人并行进行中项目数。 */
-export function memberParallelProjects(db, memberId) {
-  return db.prepare(
-    `SELECT COUNT(DISTINCT p.id) AS n FROM projects p WHERE p.status = 'active' AND p.lead_member_id = ?
-       OR p.id IN (SELECT project_id FROM tasks WHERE responsible_member_id = ? AND status IN ('todo','doing','blocked'))`
-  ).get(memberId, memberId).n
+/** S7-1（v0.6 口径）：某人名下逾期未完任务清单。 */
+export function overdueTasksOf(db, memberId) {
+  return camelizeRows(
+    db.prepare(
+      `SELECT t.id, t.title, t.plan_end_date, p.id AS project_id, p.name AS project_name
+       FROM tasks t JOIN projects p ON p.id = t.project_id
+       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.plan_end_date IS NOT NULL AND t.plan_end_date < date('now')`
+    ).all(memberId)
+  )
 }
 
 // —— 渠道（S1 绑定 / S3 抽取源；D5 通用群）——

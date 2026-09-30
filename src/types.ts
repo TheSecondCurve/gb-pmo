@@ -4,8 +4,19 @@ export interface Member {
   team?: string | null; isKeyPerson: boolean; maxParallelProjects: number; role: 'admin' | 'member'
   status: 'active' | 'offboarded'
 }
+export interface ProjectType {
+  id: number; code: string; name: string; description?: string | null
+  defaultTemplateId: number; defaultTemplateName?: string | null; defaultTemplateCode?: string | null
+  status: 'active' | 'disabled'; projectCount: number; openProjectCount: number
+}
+export interface TemplateRow {
+  id: number; code: string; name: string; description?: string | null
+  stages: string[]; tasks: { stageName: string; title: string }[]
+  typeCount: number; projectCount: number
+}
 export interface ProjectRow {
-  id: number; name: string; templateCode: string; status: string; priority: 'high' | 'medium' | 'low'
+  id: number; name: string; templateCode: string; projectTypeId?: number | null; typeName?: string | null
+  status: string; priority: 'high' | 'medium' | 'low'
   leadMemberId: number; leadName: string; clientName?: string | null
   planStartDate?: string | null; planEndDate?: string | null
   overdueTasks: number; silentDays: number | null; lastEventAt?: number | null; updatedAt: number
@@ -13,8 +24,9 @@ export interface ProjectRow {
 export interface TaskRow {
   id: number; projectId: number; title: string; responsibleMemberId: number | null; responsibleName?: string | null
   status: string; planStartDate?: string | null; planEndDate?: string | null
-  isBlocked: boolean; isOverdue: boolean; dependsOnTaskId?: number | null; stageId?: number | null
+  isOverdue: boolean
 }
+export interface TaskRecordRow { id: number; taskId: number; memberId: number | null; memberName?: string | null; content: string; createdAt: number }
 export interface MilestoneRow { id: number; projectId: number; name: string; planDate?: string | null; actualDate?: string | null; status: string }
 export interface EventRow {
   id: number; projectId: number; businessTime: number; createdAt: number; nature: 'record' | 'suggestion'
@@ -27,7 +39,6 @@ export interface ChannelRow {
   channelType: 'dedicated' | 'general'; projectId?: number | null; projectName?: string | null
 }
 export interface ProjectDetail extends ProjectRow {
-  stages: { id: number; name: string; sortOrder: number }[]
   tasks: TaskRow[]
   milestones: MilestoneRow[]
   channels: ChannelRow[]
@@ -37,8 +48,9 @@ export interface MetricQuery { metric: { id: string; name: string; definition: s
 export interface MetricCard { id: string; name: string; domain: string; definition: string; dims: string[]; freq: string }
 
 export const PRIORITY_LABEL: Record<string, string> = { high: '高', medium: '中', low: '低' }
+export const ROLE_LABEL: Record<string, string> = { admin: '系统管理员', member: '成员' }
 export const PROJECT_STATUS_LABEL: Record<string, string> = { planning: '待启动', active: '进行中', paused: '已暂停', closed: '已结项', cancelled: '已取消' }
-export const TASK_STATUS_LABEL: Record<string, string> = { todo: '未开始', doing: '进行中', blocked: '被阻塞', done: '已完成', cancelled: '已取消' }
+export const TASK_STATUS_LABEL: Record<string, string> = { todo: '未开始', doing: '进行中', done: '完成' } // v0.6 固定三档
 export const EVENT_TYPE_LABEL: Record<string, string> = {
   progress: '进展', risk: '风险', decision: '决策', blocker: '阻塞', schedule_change: '排期变更',
   status_change: '状态变更', suggestion: '建议', owner_change: '责任人变更', priority_change: '优先级变更',
