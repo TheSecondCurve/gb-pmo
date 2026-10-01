@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { today } from '../db/time.js'
-import { setSetting } from '../engine/settings.js'
+import { setSetting, getSetting } from '../engine/settings.js'
 import { closeProject } from '../engine/projects.js'
 import { TASKS, dueTasks } from '../brain/scheduler.js'
 import { syncProjectCalendar } from '../brain/calendar.js'
@@ -208,6 +208,39 @@ describe('S22 飞书项目日历', () => {
       expect(ctx.db.prepare('SELECT * FROM calendar_sync WHERE project_id = ?').get(bad.id)).toBeTruthy()
     } finally {
       stub.restore()
+    }
+  })
+
+  it('S22-6: 上游失败——502 信息携带飞书业务码；服务端落 error 级日志不静默；不误存 calendar_id', async () => {
+    const errs = []
+    const sink = {
+      level: 'info',
+      info() {}, debug() {}, warn() {}, trace() {}, fatal() {},
+      error: (e) => errs.push(e),
+      child() { return sink },
+    }
+    ctx = await setupApp({ loggerInstance: sink })
+    const cookie = await admin()
+    setSetting(ctx.db, 'im.feishu', { appId: 'cli_x', appSecret: 'sec' }, 1)
+
+    // 日历创建被飞书拒（业务码 99991679 = 权限类），token 正常——复现「测试连接通、初始化 502」
+    const real = globalThis.fetch
+    globalThis.fetch = async (url) => {
+      const u = String(url)
+      if (u.includes('tenant_access_token')) return { ok: true, json: async () => ({ code: 0, tenant_access_token: 'tk' }) }
+      if (u.includes('/calendar/v4/calendars')) return { ok: true, json: async () => ({ code: 99991679, msg: 'You have no permission to access calendar' }) }
+      return { ok: true, json: async () => ({ code: 0, data: {} }) }
+    }
+    try {
+      const r = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/calendar/init', {})
+      expect(r.status).toBe(502)
+      expect(r.body.message).toMatch(/99991679/)
+      expect(r.body.message).toMatch(/no permission/)
+      expect(errs.length).toBeGreaterThan(0) // 不静默：5xx 必落 error 日志
+      expect(errs.some((e) => String(e?.message || e).includes('99991679'))).toBe(true)
+      expect(getSetting(ctx.db, 'calendar').feishuCalendarId).toBe('') // 失败不误存
+    } finally {
+      globalThis.fetch = real
     }
   })
 

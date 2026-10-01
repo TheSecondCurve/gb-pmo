@@ -9,7 +9,7 @@ async function tenantToken(cfg) {
   })
   if (!res.ok) throw Object.assign(new Error(`飞书 token HTTP ${res.status}`), { statusCode: 502 })
   const data = await res.json()
-  if (data.code !== 0) throw Object.assign(new Error(`飞书 token 失败: ${data.msg}`), { statusCode: 502 })
+  if (data.code !== 0) throw Object.assign(new Error(`飞书 token 失败(${data.code}): ${data.msg}`), { statusCode: 502 })
   return data.tenant_access_token
 }
 
@@ -60,7 +60,7 @@ export async function fetchMessages(cfg, channel, cursor) {
     const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } })
     if (!res.ok) throw Object.assign(new Error(`飞书消息 HTTP ${res.status}`), { statusCode: 502 })
     const data = await res.json()
-    if (data.code !== 0) throw Object.assign(new Error(`飞书消息失败: ${data.msg}`), { statusCode: 502 })
+    if (data.code !== 0) throw Object.assign(new Error(`飞书消息失败(${data.code}): ${data.msg}`), { statusCode: 502 })
     for (const item of data.data?.items || []) {
       const sec = Number(item.create_time)
       messages.push({
@@ -143,7 +143,7 @@ async function postMessage(cfg, receiveIdType, receiveId, msgType, content) {
   })
   if (!res.ok) throw Object.assign(new Error(`飞书发送 HTTP ${res.status}`), { statusCode: 502 })
   const data = await res.json()
-  if (data.code !== 0) throw Object.assign(new Error(`飞书发送失败: ${data.msg}`), { statusCode: 502 })
+  if (data.code !== 0) throw Object.assign(new Error(`飞书发送失败(${data.code}): ${data.msg}`), { statusCode: 502 })
   return { messageId: data.data?.message_id || null }
 }
 
@@ -165,7 +165,7 @@ export async function getChat(cfg, chatId) {
   })
   if (!res.ok) throw Object.assign(new Error(`飞书群信息 HTTP ${res.status}`), { statusCode: 502 })
   const data = await res.json()
-  if (data.code !== 0) throw Object.assign(new Error(`飞书群信息失败: ${data.msg}`), { statusCode: 502 })
+  if (data.code !== 0) throw Object.assign(new Error(`飞书群信息失败(${data.code}): ${data.msg}`), { statusCode: 502 })
   return data.data || {}
 }
 
@@ -180,7 +180,7 @@ async function callApi(cfg, path, method, body) {
   })
   if (!res.ok) throw Object.assign(new Error(`飞书日历 HTTP ${res.status}`), { statusCode: 502 })
   const data = await res.json()
-  if (data.code !== 0) throw Object.assign(new Error(`飞书日历失败: ${data.msg}`), { statusCode: 502 })
+  if (data.code !== 0) throw Object.assign(new Error(`飞书日历失败(${data.code}): ${data.msg}`), { statusCode: 502 })
   return data.data || {}
 }
 
