@@ -321,6 +321,24 @@ export function registerApiRoutes(app) {
     return mod.testConnection(getSetting(db, `im.${platform}`))
   })
 
+  // —— S26（v0.19）管理员诊断台：诊断 shell（开关默认关）+ 飞书长连接三段自检；全程审计 ——
+  app.post('/api/v1/admin/debug/shell', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { runShell } = await import('../engine/debug.js')
+    return runShell(db, req.body?.command, req.member.id)
+  })
+
+  app.post('/api/v1/admin/debug/feishu-selfcheck', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const feishu = await import('../brain/connectors/feishu.js')
+    const out = await feishu.selfCheck(getSetting(db, 'im.feishu'))
+    auth.audit(db, {
+      memberId: req.member.id, action: 'debug.feishuSelfcheck', objectType: 'debug',
+      detail: { ok: out.ok, stages: out.stages.map((s) => `${s.stage}:${s.ok ? 'ok' : 'fail'}`) },
+    })
+    return out
+  })
+
   // S22：飞书项目日历——初始化（创建组织内可订阅日历并保存 calendar_id）+ 立即同步（对账式）
   app.post('/api/v1/admin/calendar/init', async (req, reply) => {
     if (!requireAdmin(req, reply)) return

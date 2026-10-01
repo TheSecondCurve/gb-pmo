@@ -24,4 +24,11 @@ export const ADMIN_SECTIONS: { key: string; label: string; tabs: { key: string; 
       { key: 'wecom', label: '企业微信' },
     ],
   },
+  {
+    key: 'ops', label: '运维诊断',
+    tabs: [
+      { key: 'shell', label: '诊断 Shell' },
+      { key: 'selfcheck', label: '飞书自检' },
+    ],
+  },
 ]
