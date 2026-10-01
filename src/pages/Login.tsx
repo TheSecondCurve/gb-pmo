@@ -22,8 +22,8 @@ export default function Login({ onLogin }: { onLogin: () => Promise<void> }) {
   }
 
   return (
-    <div className="flex h-full items-center justify-center">
-      <div className="w-80 rounded-lg border border-[var(--color-line)] bg-[var(--color-card)] p-6 pop-in">
+    <div className="flex h-full items-center justify-center p-4">
+      <div className="w-full max-w-[20rem] rounded-lg border border-[var(--color-line)] bg-[var(--color-card)] p-6 pop-in">
         <div className="mb-1 text-lg font-bold">🧠 项目大脑</div>
         <div className="mb-4 text-[12px] text-[var(--color-ink-soft)]">企业多项目管理 · LLM 大脑 · 全员透明</div>
         <Field label="用户名">
