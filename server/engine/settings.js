@@ -30,6 +30,12 @@ const VALIDATORS = {
       throw Object.assign(new Error(`llm.provider 须为 ${Object.keys(LLM_PROVIDERS).join(' / ')}`), { statusCode: 400 })
     }
   },
+  // S24（v0.16）：AI 助手每日指令限额（正整数）
+  chat(value) {
+    if (value?.quotaPerDay !== undefined && (!Number.isInteger(value.quotaPerDay) || value.quotaPerDay < 0)) {
+      throw Object.assign(new Error('chat.quotaPerDay 须为非负整数'), { statusCode: 400 })
+    }
+  },
 }
 
 // 保存前归一化（按 key，整体重写 value）：v0.15 起 llm 按类别分开存储——写入只作用于目标类别的子配置

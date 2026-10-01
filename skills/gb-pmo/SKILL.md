@@ -36,7 +36,7 @@ client.sh action generate_person_digest '{}'
 
 - `upsert_channel` `{platform: 'feishu'|'wecom', groupKey, name?, channelType: 'dedicated'|'general', projectId?}`（专题渠道必填 projectId）
 - `delete_channel` `{id}`
-- `put_setting` `{key, value}`（key ∈ thresholds / push / scheduler / llm / im.feishu / im.wecom；scheduler 含 cron 与每任务 enabled 开关，非法值 400 并指明字段；llm 按类别分开存储：value 传 `{provider, apiKey?, baseUrl?, model?}`，只作用于该类别子配置、其他类别不覆盖，provider=当前生效类别，S17-11 v0.15）
+- `put_setting` `{key, value}`（key ∈ thresholds / push / scheduler / llm / chat / im.feishu / im.wecom；scheduler 含 cron 与每任务 enabled 开关，非法值 400 并指明字段；llm 按类别分开存储：value 传 `{provider, apiKey?, baseUrl?, model?}`，只作用于该类别子配置、其他类别不覆盖，provider=当前生效类别，S17-11 v0.15）
 - `create_template` `{code, name, description?, tasks: [{title}, ...]}`
 - `draft_template_tasks` `{name, description?}` → `{tasks: [...]}`（LLM 产任务清单草稿，**不落库**，确认后再 create_template）
 - `reset_channel_cursor` `{channelId, days?}`（默认 7，1~90；重置后下次抽取回看 N 天，重放会追加新事件流）
@@ -326,6 +326,26 @@ client.sh action generate_person_digest '{}'
 | url | TEXT | 链接（http/https；飞书文档/wiki 均可） |
 | note | TEXT | 备注（可选：适用时机/范围） |
 | deleted_at | INTEGER | 软删时刻（NULL=在用） |
+
+### chat_sessions
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| member_id | INTEGER |  |
+| title | TEXT |  |
+| updated_at | INTEGER | 最后活跃时刻（列表排序） |
+| deleted_at | INTEGER | 软删时刻（NULL=在用） |
+
+### chat_messages
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| session_id | INTEGER |  |
+| role | TEXT | user / assistant |
+| content | TEXT |  |
+| meta | TEXT | JSON：{result, llmCalls, queries, sql[], eventId?, writeKind?} |
 
 ## 枚举（值 ↔ 中文 label，双向对齐）
 

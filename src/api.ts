@@ -5,6 +5,16 @@ export class ApiError extends Error {
   }
 }
 
+// S24 助手回复 meta（engine/brain/chat.js 落库）
+export interface ChatMeta {
+  result?: string
+  llmCalls?: number
+  queries?: number
+  sql?: string[]
+  eventId?: number
+  writeKind?: string
+}
+
 async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, {
     method,
@@ -63,6 +73,18 @@ export const api = {
   confirmEvent: (id: number) => req('POST', `/api/v1/events/${id}/confirm`, {}),
   rejectEvent: (id: number) => req('POST', `/api/v1/events/${id}/reject`, {}),
   pendingEvents: () => req<{ events: import('./types').EventRow[] }>('GET', '/api/v1/events/pending'),
+
+  // S24 Web AI 助手会话（会话仅本人；软删）
+  chatSessions: () =>
+    req<{ sessions: { id: number; title: string; created_at: number; updated_at: number }[] }>('GET', '/api/v1/chat/sessions'),
+  createChatSession: (title?: string) =>
+    req<{ id: number; title: string }>('POST', '/api/v1/chat/sessions', title ? { title } : {}),
+  renameChatSession: (id: number, title: string) => req('PATCH', `/api/v1/chat/sessions/${id}`, { title }),
+  deleteChatSession: (id: number) => req<{ ok: boolean }>('DELETE', `/api/v1/chat/sessions/${id}`),
+  chatMessages: (id: number) =>
+    req<{ messages: { id: number; role: string; content: string; meta: ChatMeta | null; created_at: number }[] }>('GET', `/api/v1/chat/sessions/${id}/messages`),
+  sendChatMessage: (id: number, text: string) =>
+    req<{ user: { id: number; role: string; content: string; meta: ChatMeta | null; created_at: number }; assistant: { id: number; role: string; content: string; meta: ChatMeta | null; created_at: number }; session: { id: number; title: string } }>('POST', `/api/v1/chat/sessions/${id}/messages`, { text }),
 
   members: () => req<{ members: import('./types').Member[] }>('GET', '/api/v1/members'),
   createMember: (p: Record<string, unknown>) => req('POST', '/api/v1/members', p),

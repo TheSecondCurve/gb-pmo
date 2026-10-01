@@ -28,7 +28,7 @@ export function runMetricTool(db, id, params) {
 }
 
 /**
- * 写分发。ctx: { member(绑定成员), evt(原始消息事件), llm(已解析适配器) }。
+ * 写分发。ctx: { member(绑定成员), evt(原始消息事件), llm(已解析适配器), sourcePlatform('web'|'feishu'，S24) }。
  * 返回 { type: 'receipt'|'card'|'refused', text?, result?, ...card 数据 }。
  */
 export async function runWriteTool(db, { kind, payload = {} }, ctx) {
@@ -58,7 +58,7 @@ function writeRecordEvent(db, payload, ctx) {
   const evt = addEvent(db, {
     projectId, businessTime: ctx.evt?.ts || Date.now(), nature: 'record', eventType,
     summary: summary.slice(0, 200), rawSnapshot: (ctx.evt?.text || '').slice(0, 2000) || null,
-    sourcePlatform: 'feishu', sourceRef: ctx.evt?.messageId || null,
+    sourcePlatform: ctx.sourcePlatform || 'feishu', sourceRef: ctx.evt?.messageId || null,
     speakerMemberId: ctx.member.id, speakerLabel: ctx.member.name, generatedBy: 'agent',
   })
   return { type: 'receipt', text: `已登记${label('eventType', eventType)}事件 #${evt.id}（项目「${project.name}」），归因 ${ctx.member.name}。` }
@@ -96,7 +96,7 @@ function writeSuggestEvent(db, payload, ctx) {
     projectId: task.pid, businessTime: ctx.evt?.ts || Date.now(), nature: 'suggestion',
     eventType: SUGGEST_FIELDS[field], summary: summary.slice(0, 200),
     rawSnapshot: (ctx.evt?.text || '').slice(0, 2000) || null,
-    sourcePlatform: 'feishu', sourceRef: ctx.evt?.messageId || null,
+    sourcePlatform: ctx.sourcePlatform || 'feishu', sourceRef: ctx.evt?.messageId || null,
     speakerMemberId: ctx.member.id, speakerLabel: ctx.member.name,
     targetTaskId: taskId, targetField: field, targetValue: String(value), generatedBy: 'agent',
   })
