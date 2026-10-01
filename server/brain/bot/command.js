@@ -16,13 +16,15 @@ import { upsertChannel } from '../../engine/tasks.js'
 import { listMetrics } from '../../engine/metrics.js'
 import { runWriteTool, runQueryTool, runMetricTool } from './tools.js'
 import { runAgentLoop } from './agent.js'
+import { listBotHistory } from './history.js'
 
 const HELP_TEXT = `我是项目大脑机器人，可以直接用自然语言使唤我：
 · 查询/汇总：「我的任务」「A 项目现在怎么样」「逾期有哪些」「总结一下 A 项目」
 · 登记：「登记进展：接口联调完成」「登记风险：等客户环境」（记录型，直接生效）
 · 变更提议：「把任务 #12 标为完成」「任务 #12 推迟到 2026-10-05」（出确认卡，责任人/牵头人确认后生效）
 · 群登记：管理员或牵头人在群里 @我 说「这是 XX 项目的群」
-· 命令：/bind <绑定码>（绑定飞书账号，仅私聊）、/help`
+· 记忆：我记得本会话最近的对话（约 2 小时内、群聊含他人发言），发 /new 立刻清空重新开始
+· 命令：/bind <绑定码>（绑定飞书账号，仅私聊）、/new（开新话题，清空上下文）、/help`
 
 // —— 签名与卡片 ——
 
@@ -149,7 +151,7 @@ export async function handleBotEvent(db, evt, opts = {}) {
   }
   const reply = async (replyText, patch = {}) => {
     const sent = await send({ chatId: evt.chatId, text: replyText })
-    recordReplyRow(db, sent?.messageId, evt)
+    recordReplyRow(db, sent?.messageId, evt, replyText, patch.intent)
     return finish(patch)
   }
 
@@ -192,7 +194,7 @@ export async function handleBotEvent(db, evt, opts = {}) {
     return reply('系统未配置 LLM，自然语言指令暂不可用（管理员可在配置台填写 DeepSeek 参数）。可用命令：/help', { memberId: member.id, intent: 'gate', result: 'no_llm' })
   }
 
-  // ⑧ 有界循环（读自由写收敛）
+  // ⑧ 有界循环（读自由写收敛）；S20-13：同会话多轮上下文（装配失败降级为无历史，不阻塞主链路）
   const sqlLog = []
   const execTool = async (parsed) => {
     if (parsed.action === 'query') {
@@ -216,8 +218,21 @@ export async function handleBotEvent(db, evt, opts = {}) {
     }
     return '未知动作'
   }
-  const out = await runAgentLoop({ llm, systemPrompt: buildSystemPrompt(db, { member, channel, chatType: evt.chatType }), userText: text, execTool })
-  const detail = { turns: out.turns, queries: out.queries, sql: sqlLog }
+  let history = []
+  let historyDegraded = false
+  try {
+    history = listBotHistory(db, { platform, chatId: evt.chatId, chatType: evt.chatType }, {
+      turns: cfg.contextTurns, idleMs: Math.max(0, cfg.contextIdleMinutes) * 60_000,
+    })
+  } catch {
+    historyDegraded = true
+  }
+  const out = await runAgentLoop({
+    llm,
+    systemPrompt: buildSystemPrompt(db, { member, channel, chatType: evt.chatType, hasHistory: history.length > 0 }),
+    userText: text, history, execTool,
+  })
+  const detail = { turns: out.turns, queries: out.queries, sql: sqlLog, history: history.length, ...(historyDegraded ? { historyDegraded: true } : {}) }
 
   if (out.kind === 'reply') {
     return reply(out.text || '（空回复）', { memberId: member.id, intent: 'reply', result: out.result, llmCalls: out.turns, detail })
@@ -227,7 +242,13 @@ export async function handleBotEvent(db, evt, opts = {}) {
     const secret = opts.secret ?? (process.env.GB_PMO_SESSION_SECRET || '')
     const card = w.cardKind === 'bind' ? buildBindCard(w, secret) : w.cardKind === 'propose' ? buildProposalCard(w, secret) : buildSuggestCard(w, secret)
     const sent = await send({ chatId: evt.chatId, card })
-    recordReplyRow(db, sent?.messageId, evt)
+    // 卡片回执合成文本（S20-15）：人可读、LLM 可指代——「确认一下」的指代对象
+    const cardDesc = w.cardKind === 'bind'
+      ? `[群登记确认卡] 将本群绑定为项目「${w.projectName}」的专题渠道，待确认`
+      : w.cardKind === 'propose'
+        ? `[已生成提议 #${w.proposalId}] ${w.summary}，待有权人确认`
+        : `[已生成待确认事件 #${w.eventId}] ${w.summary}，待确认`
+    recordReplyRow(db, sent?.messageId, evt, cardDesc, `write:${w.cardKind}`)
     return finish({ memberId: member.id, intent: `write:${w.cardKind}`, result: 'card_sent', llmCalls: out.turns, detail: { ...detail, eventId: w.eventId ?? null } })
   }
   return reply(w?.text || '操作完成。', { memberId: member.id, intent: `write:${w?.type ?? '?'}`, result: w?.result || 'replied', llmCalls: out.turns, detail })
@@ -246,6 +267,15 @@ async function handleSlash(db, evt, member, text, reply) {
     }
     const hint = consumed.reason === 'conflict' ? '（该飞书账号似乎已绑定其他成员，请联系管理员处理）' : ''
     return reply(`绑定码无效或已过期${hint}。请在系统 web 端登录后重新生成（10 分钟内有效），再私聊我发送 /bind <绑定码>。`, { intent: 'bind', result: 'guidance' })
+  }
+  if (cmd === '/new' || cmd === '/clear') {
+    // S20-14：开新话题——落水位线立即清空当前会话上下文（append-only，审计行不删；群聊全群生效）
+    if (!member) {
+      return reply('还未识别你的飞书账号，暂时没有对话记忆可清空。请先在系统 web 端登录生成飞书绑定码，再私聊我发送 /bind <绑定码> 完成绑定。', { intent: 'context', result: 'guidance' })
+    }
+    db.prepare('INSERT INTO bot_context_resets (platform, chat_id, member_id, message_id, cleared_at) VALUES (?, ?, ?, ?, ?)')
+      .run(evt.platform || 'feishu', evt.chatId || '', member.id, evt.messageId, Date.now())
+    return reply('已开启新话题：我不再引用此前的对话（之前的登记与提议不受影响）。', { memberId: member.id, intent: 'context', result: 'reset' })
   }
   if (cmd === '/help') return reply(HELP_TEXT, { memberId: member?.id, intent: 'help', result: 'replied' })
   return reply(`不认识的命令 ${cmd}。${HELP_TEXT}`, { memberId: member?.id, intent: 'help', result: 'replied' })
@@ -350,7 +380,11 @@ export async function handleCardAction(db, cardEvt, opts = {}) {
     result = 'error'
     replyText = `处理失败：${e.message}`
   }
-  if (replyText) await send({ chatId: cardEvt?.chatId, text: replyText })
+  if (replyText) {
+    const sent = await send({ chatId: cardEvt?.chatId, text: replyText })
+    // 点按结果落 bot_reply 回执（S20-15）：后续「它生效了吗」的指代依据
+    recordReplyRow(db, sent?.messageId, { platform: 'feishu', chatId: cardEvt?.chatId }, replyText, `card:${v.a || '?'}`)
+  }
   db.prepare('UPDATE bot_commands SET member_id = ?, intent = ?, result = ?, duration_ms = ? WHERE message_id = ?')
     .run(member?.id ?? null, `card:${v.a || '?'}`, result, Date.now() - startedAt, mid)
   return { result, text: replyText }
@@ -370,7 +404,7 @@ export function schemaDigest(db) {
     .join('\n')
 }
 
-export function buildSystemPrompt(db, { member, channel, chatType, surface = 'im' }) {
+export function buildSystemPrompt(db, { member, channel, chatType, surface = 'im', hasHistory = false }) {
   const now = new Date()
   const weekday = '日一二三四五六'[new Date(now.getTime() + 8 * 3_600_000).getUTCDay()]
   const web = surface === 'web' // S24：web AI 助手会话（同一核心 Agent 的 web 入口）
@@ -411,18 +445,20 @@ ${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅
 3. 纯进展/风险/决策/阻塞 → record_event 直接登记；任务变更（状态/日期/责任人）→ suggest_event ${web ? '生成待确认事件（用户会在页面上确认生效），不得谎称已改' : '出确认卡，不得谎称已改'}。
 4. 项目级/配置级操作（项目状态/结项/立项/项目类型）→ propose 起草提议，待有权人确认后才生效，不得谎称已执行。
 5. 不支持的事（财务/合同/绩效/自动重排期求解等）直接说明不支持。
-6. 回复用简洁中文，短段/列表即可。${web ? '\n6. 这是多轮会话：参考对话历史理解指代（「它/这个项目」等），历史里已有的查询结果可直接引用。' : ''}`
+6. 回复用简洁中文，短段/列表即可。${web ? '\n6. 这是多轮会话：参考对话历史理解指代（「它/这个项目」等），历史里已有的查询结果可直接引用。' : ''}${hasHistory ? '\n7. 本次附带「对话历史」：仅供理解指代（如「它/这个项目/刚才那条」，群聊历史带说话人名）；事实与最新数据一律以本轮 query/metric 取回为准，历史结论可能已过时，不得直接引用历史数字回答现状。' : ''}`
 }
 
 function metricIdList() {
   return listMetrics().map((m) => `${m.id}=${m.name}`).join('、')
 }
 
-/** 机器人发出的回复也落 bot_commands（kind=bot_reply）：定时抽取据此跳过自己的消息（S20-10）。 */
-function recordReplyRow(db, messageId, evt) {
+/** 机器人回复落 bot_commands（kind=bot_reply）：定时抽取据此跳过自己的消息（S20-10），
+ *  回执文本与意图一并留痕——多轮上下文的 assistant 侧来源与完整审计（S20-13/15）。 */
+function recordReplyRow(db, messageId, evt, text, intent) {
   if (!messageId) return
   db.prepare(
-    `INSERT OR IGNORE INTO bot_commands (message_id, platform, chat_id, chat_type, kind, created_at)
-     VALUES (?, ?, ?, ?, 'bot_reply', ?)`
-  ).run(messageId, evt.platform || 'feishu', evt.chatId || null, evt.chatType || null, Date.now())
+    `INSERT OR IGNORE INTO bot_commands (message_id, platform, chat_id, chat_type, kind, raw_text, intent, created_at)
+     VALUES (?, ?, ?, ?, 'bot_reply', ?, ?, ?)`
+  ).run(messageId, evt.platform || 'feishu', evt.chatId || null, evt.chatType || null,
+    text ? String(text).slice(0, 2000) : null, intent ?? null, Date.now())
 }
