@@ -147,14 +147,15 @@ async function postMessage(cfg, receiveIdType, receiveId, msgType, content) {
   return { messageId: data.data?.message_id || null }
 }
 
-/** 发文本（chat_id 定向：私聊会话与群均适用）。 */
+/** 发文本（chat_id 定向：私聊会话与群均适用）。注意 receive_id_type 合法值是 chat_id，
+ *  不是消息拉取接口的 container_id_type=chat——此前误传 'chat' 被飞书拒参，所有机器人回复发送失败（S20 排障）。 */
 export async function sendText(cfg, chatId, text) {
-  return postMessage(cfg, 'chat', chatId, 'text', { text })
+  return postMessage(cfg, 'chat_id', chatId, 'text', { text })
 }
 
 /** 发消息卡片（S20 确认卡）。 */
 export async function sendCard(cfg, chatId, card) {
-  return postMessage(cfg, 'chat', chatId, 'interactive', card)
+  return postMessage(cfg, 'chat_id', chatId, 'interactive', card)
 }
 
 /** 群信息（external 字段用于 S20-7 外部群拒答；调用方负责缓存）。 */

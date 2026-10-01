@@ -4,6 +4,7 @@ import { upsertChannel } from '../engine/tasks.js'
 import { ingestMessages } from '../brain/extract.js'
 import { handleBotEvent, handleCardAction, issueBindCode, buildBindCard } from '../brain/bot/command.js'
 import { syncBot, parseSdkMessage } from '../brain/bot/gateway.js'
+import { sendText, sendCard } from '../brain/connectors/feishu.js'
 import { runReadOnlyQuery } from '../agent/sqlGuard.js'
 import { runWriteTool } from '../brain/bot/tools.js'
 import { runAgentLoop } from '../brain/bot/agent.js'
@@ -499,5 +500,36 @@ describe('S20 网关事件载荷解析', () => {
     const r = parseSdkMessage({})
     expect(r.msg).toEqual({})
     expect(r.senderOpenId).toBe('')
+  })
+})
+
+// 出站连接器回归锚点：receive_id_type 合法值为 chat_id（此前误传消息拉取接口的 'chat'，
+// 飞书拒参导致所有机器人回复/卡片发送失败——线上实测暴露，globalThis.fetch 注桩同 S22 手法）。
+describe('S20 机器人出站发送', () => {
+  it('sendText/sendCard 以 receive_id_type=chat_id 调用发送接口', async () => {
+    const real = globalThis.fetch
+    const urls = []
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url)
+      urls.push(u + ' ' + String(opts?.method || 'GET'))
+      if (u.includes('/auth/v3/tenant_access_token')) return new Response(JSON.stringify({ code: 0, tenant_access_token: 't-1' }), { status: 200 })
+      if (u.includes('/im/v1/messages') && opts?.method === 'POST') {
+        return new Response(JSON.stringify({ code: 0, data: { message_id: 'om_out_1' } }), { status: 200 })
+      }
+      throw new Error('unexpected fetch: ' + u)
+    }
+    try {
+      const cfg = { appId: 'cli_x', appSecret: 's' }
+      const r1 = await sendText(cfg, 'oc_test', '你好')
+      const r2 = await sendCard(cfg, 'oc_test', { config: {}, elements: [] })
+      expect(r1.messageId).toBe('om_out_1')
+      expect(r2.messageId).toBe('om_out_1')
+      // 发送调用必须带 receive_id_type=chat_id（'chat' 会被飞书拒参）
+      const sends = urls.filter((u) => u.includes('receive_id_type='))
+      expect(sends.every((u) => u.includes('receive_id_type=chat_id'))).toBe(true)
+      expect(sends).toHaveLength(2)
+    } finally {
+      globalThis.fetch = real
+    }
   })
 })
