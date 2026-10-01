@@ -36,6 +36,15 @@ const VALIDATORS = {
       throw Object.assign(new Error('chat.quotaPerDay 须为非负整数'), { statusCode: 400 })
     }
   },
+  // S20-13/14（v0.23）：机器人多轮上下文——条数 0~24（0=关闭记忆），空闲窗 1~1440 分钟
+  'im.feishu'(value) {
+    if (value?.contextTurns !== undefined && (!Number.isInteger(value.contextTurns) || value.contextTurns < 0 || value.contextTurns > 24)) {
+      throw Object.assign(new Error('im.feishu.contextTurns 须为 0~24 的整数（0=关闭多轮记忆）'), { statusCode: 400 })
+    }
+    if (value?.contextIdleMinutes !== undefined && (!Number.isInteger(value.contextIdleMinutes) || value.contextIdleMinutes < 1 || value.contextIdleMinutes > 1440)) {
+      throw Object.assign(new Error('im.feishu.contextIdleMinutes 须为 1~1440 的整数（分钟）'), { statusCode: 400 })
+    }
+  },
   // S26（v0.19）：诊断台——shell 开关布尔；超时 1~60 秒；输出上限 1KB~1MB
   debug(value) {
     if (value?.shellEnabled !== undefined && typeof value.shellEnabled !== 'boolean') {

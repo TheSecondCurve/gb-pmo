@@ -91,6 +91,7 @@ function FeishuCard() {
   const [cfg, setCfg] = useState<{
     appId: string; appSecret: string
     botEnabled?: boolean; answerUnregisteredGroups?: boolean; commandQuotaPerDay?: number
+    contextTurns?: number; contextIdleMinutes?: number
   } | null>(null)
   const [calendarId, setCalendarId] = useState<string | null>(null)
   const [calMsg, setCalMsg] = useState('')
@@ -156,9 +157,23 @@ function FeishuCard() {
               value={cfg.commandQuotaPerDay ?? 50} onChange={(e) => setCfg({ ...cfg, commandQuotaPerDay: Math.max(0, Number(e.target.value) || 0) })}
             />
           </label>
+          <label className="flex items-center gap-1.5">
+            多轮记忆条数
+            <input
+              type="number" min={0} max={24} className="w-16 rounded-md border border-[var(--color-line)] px-2 py-1 text-[13px] outline-none focus:border-[var(--color-brand)]"
+              value={cfg.contextTurns ?? 8} onChange={(e) => setCfg({ ...cfg, contextTurns: Math.min(24, Math.max(0, Number(e.target.value) || 0)) })}
+            />
+          </label>
+          <label className="flex items-center gap-1.5">
+            空闲开新话题（分钟）
+            <input
+              type="number" min={1} max={1440} className="w-20 rounded-md border border-[var(--color-line)] px-2 py-1 text-[13px] outline-none focus:border-[var(--color-brand)]"
+              value={cfg.contextIdleMinutes ?? 120} onChange={(e) => setCfg({ ...cfg, contextIdleMinutes: Math.max(1, Number(e.target.value) || 120) })}
+            />
+          </label>
         </div>
         <p className="mb-3 text-[12px] leading-5 text-[var(--color-ink-soft)]">
-          机器人开关与限额「保存即热生效」：长连接立即建立或断开，无需重启进程（S20-12）；开启前需完成应用侧配置（机器人能力 + 长连接事件订阅，附录 A.1 第 7 步），可先点「测试连接」验证。
+          机器人开关与限额「保存即热生效」：长连接立即建立或断开，无需重启进程（S20-12）；「多轮记忆条数」= 机器人记住的本会话最近消息数（0 = 关闭记忆，用户随时可发 /new 清空）；「空闲开新话题」= 超过该时长未说话自动遗忘此前对话。开启前需完成应用侧配置（机器人能力 + 长连接事件订阅，附录 A.1 第 7 步），可先点「测试连接」验证。
         </p>
         <div className="flex items-center gap-2">
           <Btn kind="primary" onClick={async () => {
