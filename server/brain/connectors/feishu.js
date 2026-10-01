@@ -87,6 +87,51 @@ export async function testConnection(cfg) {
   }
 }
 
+// —— S26（v0.19）诊断台：长连接三段自检 ——
+
+// ①凭证/网络 → ②WSClient 握手 → ③事件接收为人工段（回检查清单）。
+// 未配置凭证时①即返回指引，不发外网；②用空分发器只验握手（autoReconnect=false 快速失败）。
+export async function selfCheck(cfg, { waitMs = 8000 } = {}) {
+  const stages = []
+  if (!cfg.appId || !cfg.appSecret) {
+    return { ok: false, stages: [{ stage: 'token', ok: false, reason: '未配置 appId/appSecret：请在配置台「外部依赖→飞书」保存凭证（附录 A.1）' }] }
+  }
+  try {
+    await tenantToken(cfg)
+    stages.push({ stage: 'token', ok: true, note: '凭证有效，open.feishu.cn 可达' })
+  } catch (e) {
+    return { ok: false, stages: [...stages, { stage: 'token', ok: false, reason: `${e.message}（appId/appSecret 错误或容器网络不通）` }] }
+  }
+  let sdk
+  try {
+    sdk = await import('@larksuiteoapi/node-sdk')
+  } catch {
+    return { ok: false, stages: [...stages, { stage: 'ws', ok: false, reason: '未安装 @larksuiteoapi/node-sdk（npm i 后重启进程）' }] }
+  }
+  const mod = sdk.default ?? sdk
+  // SDK 语义（1.74 源码）：握手失败时 start() 正常 resolve、错误走 onError 回调，
+  // 成功走 onReady——所以信号源必须是回调，不能依赖 promise reject 路径。
+  const verdict = await new Promise((resolve) => {
+    const ws = new mod.WSClient({
+      appId: cfg.appId, appSecret: cfg.appSecret, loggerLevel: 'warn',
+      autoReconnect: false, handshakeTimeoutMs: 15000,
+      onReady: () => resolve({ ok: true, ws }),
+      onError: (err) => resolve({ ok: false, reason: err?.message || String(err), ws }),
+    })
+    ws.start({ eventDispatcher: new mod.EventDispatcher({}) }).catch((err) => resolve({ ok: false, reason: err?.message || String(err), ws }))
+    setTimeout(() => resolve({ ok: false, reason: `握手超时（${waitMs}ms 无结果）`, ws }), waitMs)
+  })
+  try { verdict.ws?.close?.() } catch { /* 已关闭 */ }
+  if (!verdict.ok) {
+    return { ok: false, stages: [...stages, { stage: 'ws', ok: false, reason: `长连接握手失败：${verdict.reason}（检查：事件与回调是否选「使用长连接接收事件」；应用是否已发布版本）` }] }
+  }
+  stages.push({
+    stage: 'ws', ok: true,
+    note: '长连接握手成功。第③段（收消息）需人工验证：私聊机器人发一句话应答即通；不通时依次检查——「接收消息 v2.0」事件已订阅（长连接方式）、im:message.p2p_msg:readonly 已开通并发布版本、发消息人在应用可用范围内。',
+  })
+  return { ok: true, stages }
+}
+
 // —— S20 机器人指令通道：以应用身份发消息/卡片 + 读群信息（判定外部群） ——
 
 async function postMessage(cfg, receiveIdType, receiveId, msgType, content) {

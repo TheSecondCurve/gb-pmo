@@ -191,6 +191,17 @@
 | S25-5 | 当提议新建项目类型（含内嵌 `tasks`）时，仅管理员确认生效（engine 校验同构：编码唯一、任务标题非空）；非管理员 403；`create_task_template`/`update_task_template` 类提议 refused（v0.18 已裁撤） | 同上 |
 | S25-6 | 当飞书侧点确认卡时，HMAC 签名校验 + 点按人实时权限判定；web 按钮走同一 confirmProposal 口子 | 同上 |
 
+## S26（P0）— 管理员 — 诊断台（v0.19）
+
+Docker/PaaS 容器不可 exec，配置台「运维诊断」段排障：诊断 shell（开关默认关+审计+超时+截断）与飞书长连接三段自检。仅系统管理员。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S26-1 | 当普通成员调用任一诊断接口时应 403；当 shell 开关关闭（默认）时管理员执行命令应 400 并提示配置台开启路径 | `server/test/s26-debug.test.mjs` |
+| S26-2 | 当管理员开启开关执行命令时，回显 stdout/stderr/退出码，且 `audit_logs` 落 `debug.shell` 审计行（含命令原文与退出码） | 同上 |
+| S26-3 | 当命令超过 `debug.timeoutMs` 时终止并回显 timedOut=true（不挂死）；输出超 `debug.maxOutputBytes` 时截断并标 truncated=true | 同上 |
+| S26-4 | 当飞书凭证未配置时自检第①段即失败并回配置指引（不发外网）；已配置时逐段回显通过/失败与断点提示，留 `debug.feishuSelfcheck` 审计 | 同上 |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |
