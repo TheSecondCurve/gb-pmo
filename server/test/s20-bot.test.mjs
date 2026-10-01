@@ -3,7 +3,7 @@ import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { upsertChannel } from '../engine/tasks.js'
 import { ingestMessages } from '../brain/extract.js'
 import { handleBotEvent, handleCardAction, issueBindCode, buildBindCard } from '../brain/bot/command.js'
-import { syncBot } from '../brain/bot/gateway.js'
+import { syncBot, parseSdkMessage } from '../brain/bot/gateway.js'
 import { runReadOnlyQuery } from '../agent/sqlGuard.js'
 import { runWriteTool } from '../brain/bot/tools.js'
 import { runAgentLoop } from '../brain/bot/agent.js'
@@ -473,5 +473,31 @@ describe('S20-12 配置台热生效', () => {
     } finally {
       await hot.db.close()
     }
+  })
+})
+
+// 网关接线层：SDK 真实载荷形态（1.74 官方 README：EventDispatcher 直接传入解包后 {sender, message}）。
+// 此前 gateway 只取 data.event.message 恒为空，所有入站消息在审计落库前被静默丢弃——线上实测暴露的盲区。
+describe('S20 网关事件载荷解析', () => {
+  it('SDK 解包形态 {sender, message} 正确映射（线上实测形态，修复回归锚点）', () => {
+    const r = parseSdkMessage({
+      sender: { sender_id: { open_id: 'ou_x' }, sender_type: 'user' },
+      message: { message_id: 'om_1', chat_id: 'oc_1', chat_type: 'p2p', message_type: 'text', content: '{"text":"你好"}' },
+    })
+    expect(r.msg.message_id).toBe('om_1')
+    expect(r.msg.message_type).toBe('text')
+    expect(r.senderOpenId).toBe('ou_x')
+  })
+
+  it('event 包络形态（{event:{sender,message}}）同样兼容', () => {
+    const r = parseSdkMessage({ event: { sender: { sender_id: { open_id: 'ou_y' } }, message: { message_id: 'om_2', message_type: 'text' } } })
+    expect(r.msg.message_id).toBe('om_2')
+    expect(r.senderOpenId).toBe('ou_y')
+  })
+
+  it('空载荷不抛错，返回空对象由调用方按非 text 过滤', () => {
+    const r = parseSdkMessage({})
+    expect(r.msg).toEqual({})
+    expect(r.senderOpenId).toBe('')
   })
 })
