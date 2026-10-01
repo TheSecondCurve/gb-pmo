@@ -54,12 +54,14 @@ export function deepseekAdapter(cfg) {
   return buildLlmAdapter({ ...cfg, provider: 'deepseek' })
 }
 
-/** 统一入口：优先注入的 override（测试/调用方），其次按配置构建（类别见 LLM_PROVIDERS），未配置返回 null。 */
+/** 统一入口：优先注入的 override（测试/调用方），其次按配置构建——v0.15 起按类别分开存储，
+ *  生效类别（cfg.provider）未配 apiKey 返回 null（走确定性降级），另一类别已配不顶用。 */
 export function getLlm(db, override) {
   if (override !== undefined) return override
   const cfg = getSetting(db, 'llm')
-  if (!cfg.apiKey) return null
-  return buildLlmAdapter(cfg)
+  const sub = cfg[cfg.provider] ?? {}
+  if (!sub.apiKey) return null
+  return buildLlmAdapter({ provider: cfg.provider, ...sub, timeoutMs: cfg.timeoutMs })
 }
 
 /** S17-4 测试连接：按类别（未填 baseUrl/model 取默认）发一次最小 completion，回显成败原因。 */

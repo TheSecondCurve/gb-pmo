@@ -18,7 +18,8 @@ export default function IntegrationAdmin({ tab }: { tab: string }) {
   )
 }
 
-interface LlmCfg { provider?: string; baseUrl: string; apiKey: string; model: string; timeoutMs?: number }
+interface LlmSub { apiKey: string; baseUrl: string; model: string }
+interface LlmCfg { provider: string; deepseek: LlmSub; 'glm-coding': LlmSub; timeoutMs?: number }
 
 // LLM 类别目录（S17-11）：与 server/engine/enums.js 的 LLM_PROVIDERS 保持一致
 const LLM_PROVIDERS: { key: string; label: string; baseUrl: string; model: string; note?: string }[] = [
@@ -33,38 +34,52 @@ const LLM_PROVIDERS: { key: string; label: string; baseUrl: string; model: strin
 function LlmCard() {
   const { toast } = useStore()
   const [cfg, setCfg] = useState<LlmCfg | null>(null)
+  const [active, setActive] = useState('deepseek') // 当前编辑/测试的类别；「保存」后成为生效类别
   const [result, setResult] = useState('')
   useEffect(() => {
-    void (async () => { const s = await api.settings(); setCfg(s.llm as LlmCfg) })()
+    void (async () => {
+      const s = await api.settings()
+      const llm = s.llm as LlmCfg
+      // 两类分开存（v0.15）：子配置端点/模型为空时按类别默认补齐展示（保存时服务端同样归一化）
+      const backfilled = { ...llm } as Record<string, unknown>
+      for (const p of LLM_PROVIDERS) {
+        const cur = (llm as unknown as Record<string, LlmSub | undefined>)[p.key] ?? { apiKey: '', baseUrl: '', model: '' }
+        backfilled[p.key] = { apiKey: cur.apiKey ?? '', baseUrl: cur.baseUrl || p.baseUrl, model: cur.model || p.model }
+      }
+      setCfg(backfilled as unknown as LlmCfg)
+      setActive(llm.provider || 'deepseek')
+    })()
   }, [])
   if (!cfg) return <Spinner />
-  const provider = LLM_PROVIDERS.find((p) => p.key === cfg.provider) ?? LLM_PROVIDERS[0]
-  // 切类别时：当前 baseUrl/model 为空或等于任一类别默认 → 回填新类别默认；自定义值保留（与服务端保存归一化同规则）
-  const switchProvider = (key: string) => {
-    const next = LLM_PROVIDERS.find((p) => p.key === key)!
-    const swap = (v: string, dft: string) => (!v || LLM_PROVIDERS.some((p) => p.baseUrl === v || p.model === v)) ? dft : v
-    setCfg({ ...cfg, provider: key, baseUrl: swap(cfg.baseUrl, next.baseUrl), model: swap(cfg.model, next.model) })
-  }
+  const provider = LLM_PROVIDERS.find((p) => p.key === active) ?? LLM_PROVIDERS[0]
+  const sub: LlmSub = (cfg as unknown as Record<string, LlmSub | undefined>)[provider.key] ?? { apiKey: '', baseUrl: provider.baseUrl, model: provider.model }
+  const shown = { baseUrl: sub.baseUrl || provider.baseUrl, model: sub.model || provider.model, apiKey: sub.apiKey ?? '' }
+  const setSub = (patch: Partial<LlmSub>) =>
+    setCfg({ ...cfg, [provider.key]: { ...shown, ...patch } } as LlmCfg)
   return (
-    <Card title="LLM（OpenAI 兼容：DeepSeek / GLM 国内 Coding Plan；未配置时大脑走确定性降级）">
+    <Card title="LLM（OpenAI 兼容：DeepSeek / GLM 国内 Coding Plan；各类别分开保存，切换即生效；未配置时大脑走确定性降级）">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
-        <Field label="类别">
-          <select className={inputCls} value={provider.key} onChange={(e) => switchProvider(e.target.value)}>
-            {LLM_PROVIDERS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+        <Field label="类别（当前编辑；保存后生效）">
+          <select className={inputCls} value={provider.key} onChange={(e) => setActive(e.target.value)}>
+            {LLM_PROVIDERS.map((p) => <option key={p.key} value={p.key}>{p.label}{cfg.provider === p.key ? '（生效中）' : ''}</option>)}
           </select>
         </Field>
-        <Field label="Base URL（留空=类别默认）"><input className={inputCls} value={cfg.baseUrl} onChange={(e) => setCfg({ ...cfg, baseUrl: e.target.value })} /></Field>
-        <Field label="API Key（留空=不改）"><input className={inputCls} type="password" value={cfg.apiKey} onChange={(e) => setCfg({ ...cfg, apiKey: e.target.value })} /></Field>
-        <Field label="模型"><input className={inputCls} value={cfg.model} onChange={(e) => setCfg({ ...cfg, model: e.target.value })} /></Field>
+        <Field label="Base URL（留空=类别默认）"><input className={inputCls} value={shown.baseUrl} onChange={(e) => setSub({ baseUrl: e.target.value })} /></Field>
+        <Field label="API Key"><input className={inputCls} type="password" value={shown.apiKey} onChange={(e) => setSub({ apiKey: e.target.value })} /></Field>
+        <Field label="模型"><input className={inputCls} value={shown.model} onChange={(e) => setSub({ model: e.target.value })} /></Field>
       </div>
       {provider.note && <p className="mb-3 text-[12px] text-[var(--color-ink-soft)]">{provider.note}</p>}
       <div className="flex items-center gap-2">
-        <Btn kind="primary" onClick={async () => { await api.putSetting('llm', cfg); toast('LLM 配置已保存'); const s = await api.settings(); setCfg(s.llm as LlmCfg) }}>保存</Btn>
+        <Btn kind="primary" onClick={async () => {
+          await api.putSetting('llm', { provider: provider.key, ...shown })
+          toast(`已保存并切换生效类别：${provider.label}`)
+          const s = await api.settings(); setCfg(s.llm as LlmCfg); setActive((s.llm as LlmCfg).provider)
+        }}>保存（含切换生效类别）</Btn>
         <Btn onClick={async () => {
-          const r = await api.testLlm(cfg)
-          setResult(r.ok ? `✅ 连接成功：${r.sample || ''}` : `❌ ${r.reason}`)
+          const r = await api.testLlm({ provider: provider.key, ...shown })
+          setResult(r.ok ? `✅ 连接成功（${provider.label}）：${r.sample || ''}` : `❌ ${r.reason}`)
           if (!r.ok) toast(r.reason || '连接失败', 'bad')
-        }}>测试连接（S17-4）</Btn>
+        }}>测试连接（当前类别，S17-4）</Btn>
         {result && <span className="text-[12px]">{result}</span>}
       </div>
     </Card>

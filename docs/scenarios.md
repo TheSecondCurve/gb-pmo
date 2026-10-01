@@ -101,7 +101,7 @@
 | S17-8 | 当停用项目类型后立项不可再选该类型、历史项目不受影响；编辑任务模板只影响未来立项 | `server/test/s17-admin.test.mjs` |
 | S17-9 | 当管理员在模板编辑器点「AI 起草」时，LLM 按模板名+说明生成任务清单草稿（3~15 条、无阶段无依赖）回填编辑器；草稿不落库，确认后走既有保存；LLM 未配置返回指引；成员 403（v0.8） | `server/test/s17-admin.test.mjs` |
 | S17-10 | 当系统管理员 PAT 经 action 端点发起配置类操作（upsert_channel / delete_channel / put_setting / draft_template_tasks / create_template / reset_channel_cursor）时，与 web 配置台同构生效并留审计；成员 PAT 403；游标重置回看 1~90 天（v0.9） | `server/test/s4-agent.test.mjs` |
-| S17-11 | 当系统管理员将 LLM 类别切换为「GLM 国内 Coding Plan」保存后，大脑改经智谱官方 OpenAI 兼容编码端点调用（baseUrl/model 按类别默认补齐、可覆写）；测试连接按类别端点发起；未知 provider 保存 400；存量无 provider 配置按 DeepSeek 兼容；JSON 模式 400 时自动去参重试（v0.14） | `server/test/s17-admin.test.mjs`、`server/test/misc-units.test.mjs` |
+| S17-11 | 当系统管理员配置 LLM 时，各类别（DeepSeek / GLM 国内 Coding Plan）分别保存 apiKey/baseUrl/model 互不覆盖；切换 provider 即生效（含定时任务、无需重启），切回后原配置可用；生效类别未配 key 走降级；baseUrl/model 按类别默认补齐；测试连接按所选类别端点；未知 provider 400；存量扁平配置自动迁移不丢 key；未配置指引不绑定类别（v0.14/v0.15） | `server/test/s17-admin.test.mjs`、`server/test/misc-units.test.mjs`、`server/test/s18-scheduler.test.mjs` |
 
 ## S18（P0）— 管理员 — 大脑调度与手动对齐（v0.7）
 

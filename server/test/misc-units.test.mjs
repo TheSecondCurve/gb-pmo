@@ -8,6 +8,7 @@ import { safeBaseUrl } from '../agent/scripts.mjs'
 import { listPushes, notifyMember } from '../brain/push.js'
 import { label, values, assertValue, ENUMS } from '../engine/enums.js'
 import { getSetting, setSetting, getAllSettings } from '../engine/settings.js'
+import { migrate } from '../db/index.mjs'
 import { createMember } from '../engine/members.js'
 
 // 单元补齐：LLM 解析/适配器、分拣降级、连接器（fetch 桩）、脚本渲染安全、推送/枚举/配置
@@ -199,37 +200,66 @@ describe('push / enums / settings 单元', () => {
     expect(getSetting(db, 'thresholds').silentDays).toBe(3)
     expect(getSetting(db, 'thresholds').keypersonMaxProjects).toBe(3) // 默认值仍在
     const all = getAllSettings(db)
-    expect(all.llm.model).toBe('deepseek-chat')
+    expect(all.llm.deepseek.model).toBe('deepseek-chat') // v0.15 起按类别嵌套存储
     expect(all._updatedAt.thresholds).toBeTruthy()
     expect(() => setSetting(db, 'nope', {}, 1)).toThrow()
     db.close()
   })
 
-  it('S17-11: llm.provider 校验与向后兼容——未知值 400；存量无 provider 行按 deepseek；getLlm 按类别构建', () => {
+  it('S17-11: llm 按类别分开存储——各类别独立 key/端点/模型，切换互不覆盖；getLlm 按生效类别构建', () => {
     const { db } = setupDb()
-    expect(getSetting(db, 'llm').provider).toBe('deepseek') // 默认类别
+    const def = getSetting(db, 'llm')
+    expect(def.provider).toBe('deepseek')
+    expect(def.deepseek).toMatchObject({ apiKey: '', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' })
+    expect(def['glm-coding']).toMatchObject({ apiKey: '', baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4', model: 'glm-5.3' })
     expect(() => setSetting(db, 'llm', { provider: 'nope' }, 1)).toThrow(/llm\.provider/)
-    const saved = setSetting(db, 'llm', { provider: 'glm-coding', apiKey: 'sk-glm' }, 1)
-    expect(saved.baseUrl).toBe('https://open.bigmodel.cn/api/coding/paas/v4') // 未填按类别默认补齐
-    expect(getLlm(db).name).toBe('glm-coding')
-    // 归一化分支：自定义 baseUrl 保留；空值回填类别默认；value 缺 provider 时沿用已存类别
-    const custom = setSetting(db, 'llm', { provider: 'glm-coding', apiKey: 'k', baseUrl: 'http://my-proxy', model: 'glm-5.3-Flash' }, 1)
-    expect(custom.baseUrl).toBe('http://my-proxy')
-    expect(custom.model).toBe('glm-5.3-Flash')
-    const refilled = setSetting(db, 'llm', { provider: 'glm-coding', apiKey: 'k', baseUrl: '', model: '' }, 1)
-    expect(refilled.baseUrl).toBe('https://open.bigmodel.cn/api/coding/paas/v4')
-    expect(refilled.model).toBe('glm-5.3')
-    const kept = setSetting(db, 'llm', { apiKey: 'k2' }, 1)
-    expect(kept.provider).toBe('glm-coding')
-    expect(kept.baseUrl).toBe('https://open.bigmodel.cn/api/coding/paas/v4')
-    // 存量部署兼容：老配置行没有 provider 字段 → 按 deepseek 解释
-    db.prepare("UPDATE settings SET value = ? WHERE key = 'llm'").run(
-      JSON.stringify({ baseUrl: 'https://api.deepseek.com', apiKey: 'sk-ds', model: 'deepseek-chat', timeoutMs: 60000 })
-    )
+
+    // 两类分别配置；切到 glm 只写 glm 子配置，deepseek 的 key 不被覆盖
+    setSetting(db, 'llm', { provider: 'deepseek', apiKey: 'sk-ds' }, 1)
+    const g = setSetting(db, 'llm', { provider: 'glm-coding', apiKey: 'sk-glm' }, 1)
+    expect(g['glm-coding']).toMatchObject({ apiKey: 'sk-glm', baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4', model: 'glm-5.3' })
+    expect(g.deepseek.apiKey).toBe('sk-ds')
+    expect(getLlm(db).name).toBe('glm-coding') // 生效类别 = provider
+
+    // 切回 deepseek：原 key 原样可用；自定义 baseUrl/model 保留、空值回填类别默认
+    setSetting(db, 'llm', { provider: 'deepseek', baseUrl: 'http://my-proxy', model: 'glm-5.3-Flash' }, 1)
+    const back = setSetting(db, 'llm', { provider: 'deepseek' }, 1)
+    expect(back.deepseek).toMatchObject({ apiKey: 'sk-ds', baseUrl: 'http://my-proxy', model: 'glm-5.3-Flash' })
     expect(getLlm(db).name).toBe('deepseek')
-    // 未配置 apiKey → null（大脑走确定性降级）
-    db.prepare("UPDATE settings SET value = ? WHERE key = 'llm'").run(JSON.stringify({ provider: 'glm-coding' }))
+    const refilled = setSetting(db, 'llm', { provider: 'deepseek', baseUrl: '', model: '' }, 1)
+    expect(refilled.deepseek.baseUrl).toBe('https://api.deepseek.com')
+    expect(refilled.deepseek.model).toBe('deepseek-chat')
+
+    // 生效类别未配 key → null（另一类别已配也不顶用，大脑走确定性降级）
+    setSetting(db, 'llm', { provider: 'deepseek', apiKey: '' }, 1)
     expect(getLlm(db)).toBeNull()
+    db.close()
+  })
+
+  it('S17-11: migration 0010——存量扁平 llm 行自动迁移为按类别结构，老 key/自定义值搬进当时生效类别', () => {
+    const { db } = setupDb()
+    const plant = (v) =>
+      db.prepare("INSERT OR REPLACE INTO settings (key, value, updated_at, updated_by) VALUES ('llm', ?, 1, 1)").run(JSON.stringify(v))
+    const replay = () => {
+      db.prepare("DELETE FROM migrations_meta WHERE name = '0010_llm_per_provider.sql'").run()
+      expect(migrate(db)).toBeGreaterThanOrEqual(1)
+    }
+    // v0.14 扁平行（provider=glm-coding）：key/端点/模型应搬进 glm 子配置
+    plant({ provider: 'glm-coding', baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4', apiKey: 'sk-old-glm', model: 'glm-5.3', timeoutMs: 30000 })
+    replay()
+    let cfg = getSetting(db, 'llm')
+    expect(cfg.provider).toBe('glm-coding')
+    expect(cfg['glm-coding']).toMatchObject({ apiKey: 'sk-old-glm', baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4', model: 'glm-5.3' })
+    expect(cfg.deepseek.apiKey).toBe('')
+    expect(cfg.timeoutMs).toBe(30000)
+    expect(getLlm(db).name).toBe('glm-coding')
+    // 更早的无 provider 扁平行：按 deepseek 解释，老 key 不丢
+    plant({ baseUrl: 'https://api.deepseek.com', apiKey: 'sk-legacy-ds', model: 'deepseek-chat', timeoutMs: 60000 })
+    replay()
+    cfg = getSetting(db, 'llm')
+    expect(cfg.provider).toBe('deepseek')
+    expect(cfg.deepseek).toMatchObject({ apiKey: 'sk-legacy-ds', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' })
+    expect(getLlm(db).name).toBe('deepseek')
     db.close()
   })
 })

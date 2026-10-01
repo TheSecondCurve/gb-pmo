@@ -260,14 +260,22 @@ export function registerApiRoutes(app) {
     return result
   })
 
-  // S17-4：DeepSeek 测试连接（最小 completion，回显成败原因）
+  // S17-4：LLM 测试连接（最小 completion，回显成败原因）。v0.15：按类别分开存储——
+  // body 可带 provider（未保存的切换也可先测）与 apiKey/baseUrl/model 覆盖值，缺省取该类别已存子配置。
   app.post('/api/v1/admin/test-llm', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     const { testLlmConnection } = await import('../brain/llm.js')
-    const cfg = req.body?.baseUrl || req.body?.apiKey || req.body?.model
-      ? { ...getSetting(db, 'llm'), ...req.body }
-      : getSetting(db, 'llm')
-    return testLlmConnection(cfg)
+    const saved = getSetting(db, 'llm')
+    const body = req.body || {}
+    const provider = body.provider ?? saved.provider
+    const sub = saved[provider] ?? {}
+    return testLlmConnection({
+      provider,
+      apiKey: body.apiKey ?? sub.apiKey,
+      baseUrl: body.baseUrl ?? sub.baseUrl,
+      model: body.model ?? sub.model,
+      timeoutMs: saved.timeoutMs,
+    })
   })
 
   // S17-5：IM 连通性验证（企微未部署 SDK 时给出明确指引错误）

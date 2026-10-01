@@ -32,19 +32,34 @@ const VALIDATORS = {
   },
 }
 
-// 保存前归一化（按 key，可原地改 value）：llm 的 baseUrl/model 随类别走——
-// 未显式给值、或当前值是「别的类别的默认」时，回填目标类别默认；用户自定义值（非任何类别默认）保留。
+// 保存前归一化（按 key，整体重写 value）：v0.15 起 llm 按类别分开存储——写入只作用于目标类别的子配置
+// （apiKey 未传=沿用该类别已存；baseUrl/model 空或等于别的类别默认时回填本类别默认，自定义值保留），
+// 其他类别的子配置原样保留（切换互不覆盖），provider 显式落库。
 const NORMALIZERS = {
   llm(value, prev) {
     if (!value || typeof value !== 'object') return
     const provider = value.provider ?? prev?.provider ?? DEFAULT_SETTINGS.llm.provider
-    const meta = LLM_PROVIDERS[provider] ?? LLM_PROVIDERS[DEFAULT_SETTINGS.llm.provider]
-    value.provider = provider // 解析出的有效类别显式落库，存库行自洽（读取不再依赖默认值合并）
-    for (const field of ['baseUrl', 'model']) {
-      const current = value[field] ?? prev?.[field]
-      const othersDefault = Object.entries(LLM_PROVIDERS).some(([k, p]) => k !== provider && p[field] === current)
-      value[field] = (!current || othersDefault) ? meta[field] : current
+    const out = { provider }
+    for (const [key, meta] of Object.entries(LLM_PROVIDERS)) {
+      const prevSub = prev?.[key] ?? {}
+      if (key !== provider) {
+        out[key] = { apiKey: prevSub.apiKey ?? '', baseUrl: prevSub.baseUrl ?? meta.baseUrl, model: prevSub.model ?? meta.model }
+        continue
+      }
+      const isOthersDefault = (field, cur) => Object.entries(LLM_PROVIDERS).some(([k, m]) => k !== key && m[field] === cur)
+      const resolve = (field, given, prevVal) => {
+        const cur = given ?? prevVal
+        return (!cur || isOthersDefault(field, cur)) ? meta[field] : cur
+      }
+      out[key] = {
+        apiKey: value.apiKey ?? prevSub.apiKey ?? '',
+        baseUrl: resolve('baseUrl', value.baseUrl, prevSub.baseUrl),
+        model: resolve('model', value.model, prevSub.model),
+      }
     }
+    out.timeoutMs = value.timeoutMs ?? prev?.timeoutMs ?? DEFAULT_SETTINGS.llm.timeoutMs
+    for (const k of Object.keys(value)) delete value[k]
+    Object.assign(value, out)
   },
 }
 
