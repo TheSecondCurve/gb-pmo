@@ -20,12 +20,12 @@ export function seedMembers(db) {
   return { admin, lead, dev, key }
 }
 
-/** 组装测试应用：真库 + 完整路由栈（inject 调用，不 listen）。 */
-export async function setupApp({ baseUrl = 'http://pmo.test' } = {}) {
+/** 组装测试应用：真库 + 完整路由栈（inject 调用，不 listen）。额外 opts（如 loggerInstance）透传 buildApp。 */
+export async function setupApp({ baseUrl = 'http://pmo.test', ...opts } = {}) {
   const { db, dir } = setupDb()
   const members = seedMembers(db)
   const { buildApp } = await import('../routes/app.js')
-  const app = buildApp(db, { baseUrl, cookieSecret: 'unit-test-cookie-secret-32bytes!!' })
+  const app = buildApp(db, { baseUrl, cookieSecret: 'unit-test-cookie-secret-32bytes!!', ...opts })
   await app.ready()
   return { app, db, dir, members }
 }

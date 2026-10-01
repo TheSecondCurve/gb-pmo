@@ -12,7 +12,10 @@ const ROOT = path.resolve(__dirname, '../..')
 const PUBLIC_API = new Set(['/api/v1/auth/login', '/api/v1/auth/agent-login', '/api/v1/health'])
 
 export function buildApp(db, opts = {}) {
-  const app = Fastify({ logger: opts.logger ?? false })
+  // loggerInstance：注入自定义 logger（测试用）；Fastify 5 不再接受 logger 传实例
+  const app = Fastify(
+    opts.loggerInstance ? { loggerInstance: opts.loggerInstance } : { logger: opts.logger ?? false }
+  )
 
   const cookieSecret = opts.cookieSecret || process.env.GB_PMO_SESSION_SECRET || ''
   if (cookieSecret.length < 32) {
@@ -32,7 +35,7 @@ export function buildApp(db, opts = {}) {
     const status = err.statusCode || 500
     const extra = {}
     for (const k of ['openTasks', 'missingTasks', 'missingProjects']) if (err[k]) extra[k] = err[k]
-    if (status >= 500 && !opts.logger) req.log?.error?.(err)
+    if (status >= 500) req.log.error(err) // S22-6：5xx 必落 error 日志（logger 关闭时 req.log 为空操作，无副作用）
     reply.status(status).send({ message: err.message, ...extra })
   })
 
