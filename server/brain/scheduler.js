@@ -57,7 +57,9 @@ export function startScheduler(db, { llm = null, logger = console, tickMs = 60_0
       const cfg = getSetting(db, 'scheduler')
       for (const key of dueTasks(cfg, lastRuns, now())) {
         try {
-          await runs[key](db, { llm })
+          // v0.15：未注入适配器时传 undefined——runner 内 getLlm(db) 每次执行按当前配置动态解析
+          //（后台切换 LLM 类别/后配 key 对定时任务即时生效，无需重启；注入的 fake/适配器仍原样透传）
+          await runs[key](db, { llm: llm ?? undefined })
         } catch (e) {
           logger.error(`[scheduler] ${key}:`, e.message) // 失败也推进锚点，下个周期再试
         }

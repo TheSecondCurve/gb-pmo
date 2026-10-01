@@ -91,7 +91,14 @@ export const DEFAULT_SETTINGS = {
   },
   // S22 项目日历：feishuCalendarId 空=未初始化（配置台「外部依赖→飞书」初始化写入；同步任务静默跳过）
   calendar: { feishuCalendarId: '' },
-  llm: { provider: 'deepseek', baseUrl: 'https://api.deepseek.com', apiKey: '', model: 'deepseek-chat', timeoutMs: 60000 },
+  // v0.15（S17-11）：LLM 按类别分开存储——各类别独立 apiKey/baseUrl/model（互不覆盖），provider=当前生效类别，
+  // timeoutMs 全局共用；存量扁平行由 migration 0010 迁移。
+  llm: {
+    provider: 'deepseek',
+    deepseek: { apiKey: '', baseUrl: LLM_PROVIDERS.deepseek.baseUrl, model: LLM_PROVIDERS.deepseek.model },
+    'glm-coding': { apiKey: '', baseUrl: LLM_PROVIDERS['glm-coding'].baseUrl, model: LLM_PROVIDERS['glm-coding'].model },
+    timeoutMs: 60000,
+  },
   'im.feishu': {
     appId: '', appSecret: '',
     botEnabled: false,                       // S20 机器人指令通道总开关（默认关）
