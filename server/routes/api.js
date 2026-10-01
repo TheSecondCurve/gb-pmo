@@ -100,6 +100,24 @@ export function registerApiRoutes(app) {
     return reply.status(201).send(projects.createProject(db, req.body, req.member.id))
   })
 
+  // S17-9（v0.18）：任务清单 AI 起草——类型编辑器/立项弹窗共用（立项全员可用，故本端点全员；草稿不落库）
+  app.post('/api/v1/projects/draft-tasks', async (req) => {
+    const { name, description } = req.body || {}
+    if (!name || !String(name).trim()) throw Object.assign(new Error('name 必填（项目名或类型名）'), { statusCode: 400 })
+    const { draftTaskList } = await import('../brain/templates.js')
+    const out = await draftTaskList(db, { name: String(name).trim(), description }, { llm: app.llm ?? undefined })
+    auth.audit(db, { memberId: req.member.id, action: 'tasks.draft', objectType: 'project', detail: { name: String(name).trim(), tasks: out.tasks.length } })
+    return out
+  })
+
+  // S1-7：倒排预览——engine 同一公式（不落库），立项弹窗与 AI 提议共用
+  app.post('/api/v1/projects/preview-schedule', async (req) => {
+    const { planStartDate, planEndDate, count } = req.body || {}
+    const n = Number(count)
+    if (!Number.isInteger(n) || n < 1 || n > 100) throw Object.assign(new Error('count 须为 1~100 的整数'), { statusCode: 400 })
+    return { schedule: projects.backScheduleDates({ planStartDate: planStartDate || undefined, planEndDate, count: n }) }
+  })
+
   app.get('/api/v1/projects/:id', async (req) => projects.getProjectDetail(db, Number(req.params.id)))
 
   app.patch('/api/v1/projects/:id', async (req) => projects.updateProject(db, Number(req.params.id), req.body, req.member.id))
@@ -323,7 +341,7 @@ export function registerApiRoutes(app) {
     return out
   })
 
-  // S17-8：项目类型与任务模板管理（仅系统管理员）
+  // S17-8（v0.18）：项目类型管理（内嵌任务清单；任务模板对象已裁撤，仅系统管理员）
   app.post('/api/v1/admin/project-types', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     return reply.status(201).send({ type: projectTypes.createProjectType(db, req.body, req.member.id) })
@@ -332,38 +350,6 @@ export function registerApiRoutes(app) {
   app.patch('/api/v1/admin/project-types/:id', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     return { type: projectTypes.updateProjectType(db, Number(req.params.id), req.body, req.member.id) }
-  })
-
-  app.get('/api/v1/admin/templates', async (req, reply) => {
-    if (!requireAdmin(req, reply)) return
-    return { templates: projectTypes.listTemplates(db) }
-  })
-
-  app.post('/api/v1/admin/templates', async (req, reply) => {
-    if (!requireAdmin(req, reply)) return
-    return reply.status(201).send({ template: projectTypes.createTemplate(db, req.body, req.member.id) })
-  })
-
-  app.patch('/api/v1/admin/templates/:id', async (req, reply) => {
-    if (!requireAdmin(req, reply)) return
-    return { template: projectTypes.updateTemplate(db, Number(req.params.id), req.body, req.member.id) }
-  })
-
-  app.delete('/api/v1/admin/templates/:id', async (req, reply) => {
-    if (!requireAdmin(req, reply)) return
-    projectTypes.deleteTemplate(db, Number(req.params.id), req.member.id)
-    return { ok: true }
-  })
-
-  // S17-9：任务模板 AI 起草——LLM 按名称+说明产任务清单草稿（只回填编辑器，不落库；保存走既有通道）
-  app.post('/api/v1/admin/templates/draft', async (req, reply) => {
-    if (!requireAdmin(req, reply)) return
-    const { name, description } = req.body || {}
-    if (!name || !String(name).trim()) return reply.status(400).send({ message: 'name 必填（模板名）' })
-    const { draftTemplateTasks } = await import('../brain/templates.js')
-    const out = await draftTemplateTasks(db, { name: String(name).trim(), description }, { llm: app.llm ?? undefined })
-    auth.audit(db, { memberId: req.member.id, action: 'template.draft', objectType: 'template', detail: { name: String(name).trim(), tasks: out.tasks.length } })
-    return out
   })
 
   app.get('/api/v1/admin/tokens', async (req, reply) => {

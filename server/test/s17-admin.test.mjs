@@ -181,50 +181,40 @@ describe('S17 配置台改版：角色治理与类型/模板管理', () => {
     }
   })
 
-  it('S17-8: 停用类型后立项不可选且历史项目不受影响；模板编辑只影响未来立项', async () => {
+  it('S17-8: 类型内嵌任务清单——停用后立项不可选且历史项目不受影响；编辑清单只影响未来立项；模板端点已裁撤', async () => {
     const local = await setupApp()
     try {
     const adminCookie = await loginCookie(local.app, 'admin', 'admin-pass-123')
     const memberCookie = await loginCookie(local.app, 'lisi', 'pass-123456')
 
-    // 新建任务模板（阶段 + 任务）
-    const tpl = await authed(local.app, adminCookie, 'POST', '/api/v1/admin/templates', {
-      code: 'sre_ops', name: '运维专项',
-      tasks: [{ title: '变更评审' }, { title: '执行割接' }], // v0.6：纯任务清单，无阶段层
-    })
-    expect(tpl.status).toBe(201)
-    expect(tpl.body.template.stages).toBeUndefined()
-    expect(tpl.body.template.tasks.map((t) => t.title)).toEqual(['变更评审', '执行割接'])
-
-    // 新建项目类型并绑定该模板
+    // 新建项目类型：任务清单内嵌（v0.18 单对象，无模板绑定）
     const t = await authed(local.app, adminCookie, 'POST', '/api/v1/admin/project-types', {
-      code: 'ops', name: '运维', defaultTemplateId: tpl.body.template.id,
+      code: 'ops', name: '运维', tasks: [{ title: '变更评审' }, { title: '执行割接' }],
     })
     expect(t.status).toBe(201)
-    expect(t.body.type.defaultTemplateName).toBe('运维专项')
-    expect(t.body.type.status).toBe('active')
+    expect(t.body.type.tasks.map((x) => x.title)).toEqual(['变更评审', '执行割接'])
 
     // 类型清单全员可读（立项表单用，D1 透明）
     const list = await authed(local.app, memberCookie, 'GET', '/api/v1/project-types')
     expect(list.status).toBe(200)
     expect(list.body.types.map((x) => x.code)).toContain('ops')
 
-    // 按类型立项：套用绑定模板，任务责任人默认=牵头人
+    // 按类型立项：套用内嵌清单，任务责任人默认=牵头人；template_code=类型编码快照
     const p1 = await authed(local.app, adminCookie, 'POST', '/api/v1/projects', {
       name: '割接项目', typeCode: 'ops', leadMemberId: local.members.lead.id,
     })
     expect(p1.status).toBe(201)
     expect(p1.body.typeName).toBe('运维')
-    expect(p1.body.templateCode).toBe('sre_ops')
+    expect(p1.body.templateCode).toBe('ops')
     expect(p1.body.tasks.map((x) => x.title)).toEqual(['变更评审', '执行割接'])
     expect(p1.body.tasks.every((x) => x.responsibleMemberId === local.members.lead.id)).toBe(true)
 
-    // 编辑模板（整体替换任务清单）→ 只影响未来立项
-    const upd = await authed(local.app, adminCookie, 'PATCH', `/api/v1/admin/templates/${tpl.body.template.id}`, {
+    // 编辑类型（整体替换任务清单）→ 只影响未来立项
+    const upd = await authed(local.app, adminCookie, 'PATCH', `/api/v1/admin/project-types/${t.body.type.id}`, {
       tasks: [{ title: '变更评审' }, { title: '执行割接' }, { title: '回滚预案验证' }],
     })
     expect(upd.status).toBe(200)
-    expect(upd.body.template.tasks).toHaveLength(3)
+    expect(upd.body.type.tasks).toHaveLength(3)
     const hist1 = await authed(local.app, adminCookie, 'GET', `/api/v1/projects/${p1.body.id}`)
     expect(hist1.body.tasks.map((x) => x.title)).toEqual(['变更评审', '执行割接'])
     const p2 = await authed(local.app, adminCookie, 'POST', '/api/v1/projects', {
@@ -246,65 +236,66 @@ describe('S17 配置台改版：角色治理与类型/模板管理', () => {
     expect(hist2.body.typeName).toBe('运维')
     expect(hist2.body.tasks).toHaveLength(2)
 
-    // 被类型绑定的模板不可删除（防引用悬空）
-    const del = await authed(local.app, adminCookie, 'DELETE', `/api/v1/admin/templates/${tpl.body.template.id}`)
-    expect(del.status).toBe(409)
-
-    // 校验：类型编码唯一、绑定不存在的模板 → 400
+    // 校验：类型编码唯一、清单空白标题 → 400；成员不可维护类型
     const dup = await authed(local.app, adminCookie, 'POST', '/api/v1/admin/project-types', {
-      code: 'ops', name: '重复', defaultTemplateId: tpl.body.template.id,
+      code: 'ops', name: '重复', tasks: [],
     })
     expect(dup.status).toBe(400)
-    const badTpl = await authed(local.app, adminCookie, 'POST', '/api/v1/admin/project-types', {
-      code: 'ops2', name: '坏绑定', defaultTemplateId: 99999,
+    const badTitle = await authed(local.app, adminCookie, 'POST', '/api/v1/admin/project-types', {
+      code: 'ops2', name: '坏清单', tasks: [{ title: '  ' }],
     })
-    expect(badTpl.status).toBe(400)
+    expect(badTitle.status).toBe(400)
+    const forbidden = await authed(local.app, memberCookie, 'POST', '/api/v1/admin/project-types', {
+      code: 'ops3', name: '越权', tasks: [],
+    })
+    expect(forbidden.status).toBe(403)
+
+    // 模板端点已裁撤（v0.18）：404
+    expect((await authed(local.app, adminCookie, 'GET', '/api/v1/admin/templates')).status).toBe(404)
+    expect((await authed(local.app, adminCookie, 'POST', '/api/v1/admin/templates', { code: 'x', name: 'x' })).status).toBe(404)
     } finally {
       local.db.close()
     }
   })
 
-  it('S17-9: 模板 AI 起草——LLM 产草稿回填不落库；未配置给指引；成员 403；留审计', async () => {
+  it('S17-9: 任务清单 AI 起草——类型编辑器/立项弹窗共用端点；LLM 产草稿回填不落库；未配置给指引；留审计', async () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
-    const leadCookie = await loginCookie(ctx.app, 'zhangsan', 'pass-123456')
+    const memberCookie = await loginCookie(ctx.app, 'lisi', 'pass-123456')
 
     // LLM 未配置（默认 settings 无 apiKey）→ 明确指引，不降级瞎生成
-    const noLlm = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/templates/draft', { name: '硬件部署' })
+    const noLlm = await authed(ctx.app, cookie, 'POST', '/api/v1/projects/draft-tasks', { name: '硬件部署' })
     expect(noLlm.status).toBe(503)
     expect(JSON.stringify(noLlm.body)).toMatch(/LLM 未配置/)
 
-    // 普通成员 403
-    const denied = await authed(ctx.app, leadCookie, 'POST', '/api/v1/admin/templates/draft', { name: '硬件部署' })
-    expect(denied.status).toBe(403)
-
-    // 正常草稿：清洗序号前缀（"1. " / "2、"）
+    // 正常草稿：清洗序号前缀（"1. " / "2、"）；立项起草全员可用（立项本身全员可用，v0.18）
     ctx.app.llm = fakeLlm(() => JSON.stringify({ tasks: ['1. 设备到货验收', '2、机柜上架与布线', '应用部署与联调', '割接上线', '结项移交'] }))
-    const ok = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/templates/draft', { name: '硬件部署交付', description: '机房设备安装到割接上线' })
+    const ok = await authed(ctx.app, memberCookie, 'POST', '/api/v1/projects/draft-tasks', { name: '硬件部署交付', description: '机房设备安装到割接上线' })
     expect(ok.status).toBe(200)
     expect(ok.body.tasks).toEqual(['设备到货验收', '机柜上架与布线', '应用部署与联调', '割接上线', '结项移交'])
-    // 草稿不落库（信任边界：确认保存走既有通道）
-    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM project_templates WHERE name = '硬件部署交付'`).get().n).toBe(0)
+    // 草稿不落库（信任边界：确认保存走既有通道）——不产生任何任务/类型/项目
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM tasks`).get().n).toBe(0)
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM project_types WHERE name = '硬件部署交付'`).get().n).toBe(0)
     // 留审计
-    expect(ctx.db.prepare(`SELECT * FROM audit_logs WHERE action = 'template.draft'`).get()).toBeTruthy()
+    expect(ctx.db.prepare(`SELECT * FROM audit_logs WHERE action = 'tasks.draft'`).get()).toBeTruthy()
   })
 
   it('S17-9: AI 起草边界——超 15 条截断、少于 3 条拒绝、非 JSON 502、缺 name 400', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     ctx.app.llm = fakeLlm(() => JSON.stringify({ tasks: Array.from({ length: 18 }, (_, i) => `任务${i + 1}`) }))
-    const many = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/templates/draft', { name: '大模板' })
+    const many = await authed(ctx.app, cookie, 'POST', '/api/v1/projects/draft-tasks', { name: '大清单' })
     expect(many.status).toBe(200)
     expect(many.body.tasks).toHaveLength(15)
 
     ctx.app.llm = fakeLlm(() => JSON.stringify({ tasks: ['仅一条', '两条'] }))
-    const few = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/templates/draft', { name: '小模板' })
+    const few = await authed(ctx.app, cookie, 'POST', '/api/v1/projects/draft-tasks', { name: '小清单' })
     expect(few.status).toBe(502)
 
     ctx.app.llm = fakeLlm(() => '抱歉我无法生成')
-    const bad = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/templates/draft', { name: '坏模板' })
+    const bad = await authed(ctx.app, cookie, 'POST', '/api/v1/projects/draft-tasks', { name: '坏清单' })
     expect(bad.status).toBe(502)
 
-    const noName = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/templates/draft', {})
+    const noName = await authed(ctx.app, cookie, 'POST', '/api/v1/projects/draft-tasks', {})
     expect(noName.status).toBe(400)
   })
 })

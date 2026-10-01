@@ -98,7 +98,7 @@ describe('S25 Agent 提议式项目与配置操作', () => {
     expect(ctx.db.prepare('SELECT status FROM projects WHERE id = ?').get(p.id).status).toBe('closed')
   })
 
-  it('S25-4: 提议新建项目——拟任牵头人/管理员确认后按模板实例化；无权人 403；缺载荷 refused', async () => {
+  it('S25-4: 提议新建项目——类型实例化/自定义任务+倒排同构；拟任牵头人/管理员确认；无权人 403；缺载荷 refused', async () => {
     ctx = await setupApp()
     const admin = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const member = await loginCookie(ctx.app, 'lisi', 'pass-123456')
@@ -107,58 +107,66 @@ describe('S25 Agent 提议式项目与配置操作', () => {
     const bad = await chatPropose(member, sid, '建个项目', { kind: 'create_project', leadMemberId: ctx.members.lead.id })
     expect(bad.body.assistant.content).toMatch(/必填/)
 
+    // 自定义任务清单 + 倒排（v0.18）：AI 起草 tasks，日期算术由 engine 确定性完成
     const ok = await chatPropose(member, sid, '立项：客户Q系统，软件交付', {
       kind: 'create_project', name: '客户Q系统', typeCode: 'software_delivery',
-      leadMemberId: ctx.members.lead.id, planEndDate: '2026-12-31',
+      leadMemberId: ctx.members.lead.id, planStartDate: '2026-10-01', planEndDate: '2026-12-31',
+      tasks: ['需求冻结', '方案评审', '开发联调', '验收上线'], autoSchedule: true,
     })
     const proposalId = ok.body.assistant.meta.proposalId
     expect(proposalId).toBeTruthy()
     // 提议人（普通成员，非管理员非拟任牵头人）确认 403
     expect((await authed(ctx.app, member, 'POST', `/api/v1/proposals/${proposalId}/confirm`)).status).toBe(403)
-    // 拟任牵头人确认 → 项目 + 模板任务实例化
+    // 拟任牵头人确认 → 项目 + 自定义任务实例化（source=manual）+ 倒排填计划起止
     const lead = await loginCookie(ctx.app, 'zhangsan', 'pass-123456')
     expect((await authed(ctx.app, lead, 'POST', `/api/v1/proposals/${proposalId}/confirm`)).status).toBe(200)
     const created = ctx.db.prepare(`SELECT * FROM projects WHERE name = '客户Q系统'`).get()
     expect(created).toBeTruthy()
     expect(created.lead_member_id).toBe(ctx.members.lead.id)
-    const n = ctx.db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE project_id = ?').get(created.id).n
+    const tasks = ctx.db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY id').all(created.id)
+    expect(tasks.map((t) => t.title)).toEqual(['需求冻结', '方案评审', '开发联调', '验收上线'])
+    expect(tasks.every((t) => t.source === 'manual')).toBe(true)
+    // 倒排：末条截止=交付日期，全部任务有计划起止（S1-7 公式）
+    expect(tasks.every((t) => t.plan_start_date && t.plan_end_date)).toBe(true)
+    expect(tasks.at(-1).plan_end_date).toBe('2026-12-31')
+
+    // 类型实例化路径（无 tasks）仍走类型内嵌清单
+    const plain = await chatPropose(member, sid, '立项：客户T系统', {
+      kind: 'create_project', name: '客户T系统', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+    })
+    const plainId = plain.body.assistant.meta.proposalId
+    expect((await authed(ctx.app, admin, 'POST', `/api/v1/proposals/${plainId}/confirm`)).status).toBe(200)
+    const n = ctx.db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE project_id = (SELECT id FROM projects WHERE name = '客户T系统')`).get().n
     expect(n).toBeGreaterThan(0)
   })
 
-  it('S25-5: 模板与类型提议——仅管理员确认生效（engine 校验同构）；非管理员 403', async () => {
+  it('S25-5: 类型提议——仅管理员确认生效（内嵌任务清单校验同构）；非管理员 403；模板类 kind refused', async () => {
     ctx = await setupApp()
     const admin = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const member = await loginCookie(ctx.app, 'lisi', 'pass-123456')
     const sid = (await authed(ctx.app, member, 'POST', '/api/v1/chat/sessions', {})).body.id
 
-    // 新建任务模板：字符串任务清单（LLM 友好），成员提议 → 管理员确认
-    const tpl = await chatPropose(member, sid, '建个新模板', {
-      kind: 'create_task_template', code: 'tpl_s25', name: 'S25 模板',
-      tasks: ['需求确认', '方案设计', '上线交付'],
-    })
-    const tplId = tpl.body.assistant.meta.proposalId
-    expect((await authed(ctx.app, member, 'POST', `/api/v1/proposals/${tplId}/confirm`)).status).toBe(403)
-    expect((await authed(ctx.app, admin, 'POST', `/api/v1/proposals/${tplId}/confirm`)).status).toBe(200)
-    const tplRow = ctx.db.prepare(`SELECT * FROM project_templates WHERE code = 'tpl_s25'`).get()
-    expect(tplRow).toBeTruthy()
-    expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM template_tasks WHERE template_id = ?').get(tplRow.id).n).toBe(3)
-
-    // 修改模板（整体替换任务清单）
-    const upd = await chatPropose(member, sid, '改模板任务', {
-      kind: 'update_task_template', templateCode: 'tpl_s25', tasks: ['新任务A', '新任务B'],
-    })
-    const updId = upd.body.assistant.meta.proposalId
-    expect((await authed(ctx.app, admin, 'POST', `/api/v1/proposals/${updId}/confirm`)).status).toBe(200)
-    expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM template_tasks WHERE template_id = ?').get(tplRow.id).n).toBe(2)
-
-    // 新建项目类型（绑定上面模板）
+    // 新建项目类型：字符串任务清单（LLM 友好）内嵌，成员提议 → 管理员确认
     const type = await chatPropose(member, sid, '建个类型', {
-      kind: 'create_project_type', code: 'type_s25', name: 'S25 类型', defaultTemplateCode: 'tpl_s25',
+      kind: 'create_project_type', code: 'type_s25', name: 'S25 类型',
+      tasks: ['需求确认', '方案设计', '上线交付'],
     })
     const typeId = type.body.assistant.meta.proposalId
     expect((await authed(ctx.app, member, 'POST', `/api/v1/proposals/${typeId}/confirm`)).status).toBe(403)
     expect((await authed(ctx.app, admin, 'POST', `/api/v1/proposals/${typeId}/confirm`)).status).toBe(200)
-    expect(ctx.db.prepare(`SELECT * FROM project_types WHERE code = 'type_s25'`).get()).toBeTruthy()
+    const typeRow = ctx.db.prepare(`SELECT * FROM project_types WHERE code = 'type_s25'`).get()
+    expect(typeRow).toBeTruthy()
+    expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM project_type_tasks WHERE type_id = ?').get(typeRow.id).n).toBe(3)
+
+    // 模板类 kind 已裁撤（v0.18）→ refused
+    const gone = await chatPropose(member, sid, '建个模板', {
+      kind: 'create_task_template', code: 'tpl_s25', name: '旧模板', tasks: ['需求确认'],
+    })
+    expect(gone.body.assistant.content).toMatch(/create_task_template|提议类型/)
+    const gone2 = await chatPropose(member, sid, '改模板', {
+      kind: 'update_task_template', templateCode: 'tpl_s25', tasks: ['新任务A'],
+    })
+    expect(gone2.body.assistant.content).toMatch(/update_task_template|提议类型/)
   })
 
   it('S25-6: 飞书确认卡——HMAC 签名 + 点按人实时权限；与 web 同一 confirmProposal 口子', async () => {

@@ -6,13 +6,8 @@ export interface Member {
 }
 export interface ProjectType {
   id: number; code: string; name: string; description?: string | null
-  defaultTemplateId: number; defaultTemplateName?: string | null; defaultTemplateCode?: string | null
+  tasks: { title: string }[] // v0.18：任务清单内嵌于类型（立项时预填，可覆盖）
   status: 'active' | 'disabled'; projectCount: number; openProjectCount: number
-}
-export interface TemplateRow {
-  id: number; code: string; name: string; description?: string | null
-  stages: string[]; tasks: { stageName: string; title: string }[]
-  typeCount: number; projectCount: number
 }
 export interface ProjectRow {
   id: number; name: string; templateCode: string; projectTypeId?: number | null; typeName?: string | null

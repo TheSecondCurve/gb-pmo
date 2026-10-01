@@ -2,7 +2,6 @@
 // 新增动作 = 在此加一项，两个入口天然获得白名单/adminOnly/审计语义。
 // ctx: { db, member, llm }；llm 为已解析的适配器（或 undefined 走 settings 动态解析）。
 import * as tasks from '../engine/tasks.js'
-import * as projectTypes from '../engine/projectTypes.js'
 import { setSetting } from '../engine/settings.js'
 
 export const ACTIONS = {
@@ -35,13 +34,10 @@ export const ACTIONS = {
     adminOnly: true,
     run: async (params, ctx) => setSetting(ctx.db, params.key, params.value, ctx.member.id),
   },
-  create_template: {
-    adminOnly: true,
-    run: async (params, ctx) => projectTypes.createTemplate(ctx.db, params, ctx.member.id),
-  },
-  draft_template_tasks: {
-    adminOnly: true,
-    run: async (params, ctx) => (await import('../brain/templates.js')).draftTemplateTasks(ctx.db, params, { llm: ctx.llm ?? undefined }),
+  // 任务清单 AI 起草（S17-9，v0.18 更名并放开到 write scope）：供立项/类型编辑取草稿，不落库
+  draft_task_list: {
+    run: async (params, ctx) =>
+      (await import('../brain/templates.js')).draftTaskList(ctx.db, params, { llm: ctx.llm ?? undefined }),
   },
   reset_channel_cursor: {
     adminOnly: true,
