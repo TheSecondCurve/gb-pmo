@@ -75,7 +75,7 @@ describe('S22 飞书项目日历', () => {
       const create = stub.calls.find((c) => c.method === 'POST' && c.u.includes('/calendar/v4/calendars') && !c.u.includes('/events'))
       expect(create).toBeTruthy()
       expect(create.body.summary).toMatch(/项目日历/)
-      expect(create.body.permissions.share_tenant_permission).toBe('true') // 组织内可搜索订阅
+      expect(create.body.permissions).toBe('public') // v0.21：飞书 v4 枚举权限，组织内可搜索订阅（旧对象格式已被飞书 400 拒绝）
       const saved = JSON.parse(ctx.db.prepare(`SELECT value FROM settings WHERE key = 'calendar'`).get().value)
       expect(saved.feishuCalendarId).toBe('cal_1')
       expect(ctx.db.prepare(`SELECT * FROM audit_logs WHERE action = 'calendar.init'`).get()).toBeTruthy()
@@ -211,7 +211,7 @@ describe('S22 飞书项目日历', () => {
     }
   })
 
-  it('S22-6: 上游失败——502 信息携带飞书业务码；服务端落 error 级日志不静默；不误存 calendar_id', async () => {
+  it('S22-6: 上游失败——200+{ok:false,reason} 携带飞书业务码（含非 2xx 响应体细节）；落 error 日志；不误存 calendar_id', async () => {
     const errs = []
     const sink = {
       level: 'info',
@@ -223,24 +223,38 @@ describe('S22 飞书项目日历', () => {
     const cookie = await admin()
     setSetting(ctx.db, 'im.feishu', { appId: 'cli_x', appSecret: 'sec' }, 1)
 
-    // 日历创建被飞书拒（业务码 99991679 = 权限类），token 正常——复现「测试连接通、初始化 502」
-    const real = globalThis.fetch
-    globalThis.fetch = async (url) => {
-      const u = String(url)
-      if (u.includes('tenant_access_token')) return { ok: true, json: async () => ({ code: 0, tenant_access_token: 'tk' }) }
-      if (u.includes('/calendar/v4/calendars')) return { ok: true, json: async () => ({ code: 99991679, msg: 'You have no permission to access calendar' }) }
-      return { ok: true, json: async () => ({ code: 0, data: {} }) }
-    }
-    try {
-      const r = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/calendar/init', {})
-      expect(r.status).toBe(502)
-      expect(r.body.message).toMatch(/99991679/)
-      expect(r.body.message).toMatch(/no permission/)
-      expect(errs.length).toBeGreaterThan(0) // 不静默：5xx 必落 error 日志
-      expect(errs.some((e) => String(e?.message || e).includes('99991679'))).toBe(true)
-      expect(getSetting(ctx.db, 'calendar').feishuCalendarId).toBe('') // 失败不误存
-    } finally {
-      globalThis.fetch = real
+    // 两个真实出现过的失败形态：A=线上实测（HTTP 400 + 业务码，旧 schema 被飞书拒）；
+    // B=业务层拒绝（HTTP 200 + code!=0，权限类）
+    const cases = [
+      {
+        make: () => ({ ok: false, status: 400, json: async () => ({ code: 99992402, msg: 'field validation failed' }) }),
+        reasonRe: /飞书日历 HTTP 400\(99992402\): field validation failed/,
+      },
+      {
+        make: () => ({ ok: true, json: async () => ({ code: 99991679, msg: 'You have no permission to access calendar' }) }),
+        reasonRe: /飞书日历失败\(99991679\): .*no permission/,
+      },
+    ]
+    for (const c of cases) {
+      errs.length = 0
+      const real = globalThis.fetch
+      globalThis.fetch = async (url) => {
+        const u = String(url)
+        if (u.includes('tenant_access_token')) return { ok: true, json: async () => ({ code: 0, tenant_access_token: 'tk' }) }
+        if (u.includes('/calendar/v4/calendars')) return c.make()
+        return { ok: true, json: async () => ({ code: 0, data: {} }) }
+      }
+      try {
+        const r = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/calendar/init', {})
+        expect(r.status).toBe(200) // v0.21：不走 5xx（PaaS 网关会替换应用 5xx 响应体）
+        expect(r.body.ok).toBe(false)
+        expect(r.body.reason).toMatch(c.reasonRe)
+        expect(errs.length).toBeGreaterThan(0) // 不静默：error 级日志
+        expect(errs.some((e) => String(e?.message || e).match(c.reasonRe))).toBe(true)
+        expect(getSetting(ctx.db, 'calendar').feishuCalendarId).toBe('') // 失败不误存
+      } finally {
+        globalThis.fetch = real
+      }
     }
   })
 
