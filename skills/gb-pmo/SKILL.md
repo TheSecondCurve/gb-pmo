@@ -347,6 +347,19 @@ client.sh action generate_person_digest '{}'
 | content | TEXT |  |
 | meta | TEXT | JSON：{result, llmCalls, queries, sql[], eventId?, writeKind?} |
 
+### proposals
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| kind | TEXT |  |
+| payload | TEXT | JSON（解析后的提议载荷） |
+| summary | TEXT | 人话摘要（确认卡/消息展示） |
+| status | TEXT | pending / effective / rejected |
+| proposed_by | INTEGER |  |
+| decided_by | INTEGER |  |
+| decided_at | INTEGER |  |
+
 ## 枚举（值 ↔ 中文 label，双向对齐）
 
 - **memberRole**: admin=系统管理员、member=成员

@@ -12,6 +12,7 @@ export interface ChatMeta {
   queries?: number
   sql?: string[]
   eventId?: number
+  proposalId?: number
   writeKind?: string
 }
 
@@ -73,6 +74,10 @@ export const api = {
   confirmEvent: (id: number) => req('POST', `/api/v1/events/${id}/confirm`, {}),
   rejectEvent: (id: number) => req('POST', `/api/v1/events/${id}/reject`, {}),
   pendingEvents: () => req<{ events: import('./types').EventRow[] }>('GET', '/api/v1/events/pending'),
+
+  // S25 通用提议：确认/驳回（与飞书卡片同一口子，权限矩阵在 engine）
+  confirmProposal: (id: number) => req('POST', `/api/v1/proposals/${id}/confirm`, {}),
+  rejectProposal: (id: number) => req('POST', `/api/v1/proposals/${id}/reject`, {}),
 
   // S24 Web AI 助手会话（会话仅本人；软删）
   chatSessions: () =>

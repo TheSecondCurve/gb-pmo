@@ -171,7 +171,12 @@ export async function sendChatMessage(db, { memberId, sessionId, text }, opts = 
     finish({ intent: 'reply', result: out.result, ...detail })
   } else {
     const w = out.writeResult ?? {}
-    if (w.type === 'card' && w.cardKind === 'suggest') {
+    if (w.type === 'card' && w.cardKind === 'propose') {
+      // S25 项目/配置级提议：web 无卡片，给提议号 + 生效/驳回按钮（走 /proposals 确认口子）
+      const text = `已生成提议 #${w.proposalId}（${w.summary}），待有权人确认后才会生效——在下方点「生效」或「驳回」。`
+      assistant = insertMessage(db, session.id, 'assistant', text, { result: 'card_sent', proposalId: w.proposalId, writeKind: 'propose', ...detail })
+      finish({ intent: `write:propose:${w.kind}`, result: 'card_sent', ...detail })
+    } else if (w.type === 'card' && w.cardKind === 'suggest') {
       // web 无卡片：直接给事件号 + 生效/驳回指引（页面按钮走既有 confirm/reject 口子）
       const text = `已生成建议事件 #${w.eventId}（${w.summary}），待确认后才会变更任务——在下方点「生效」或「驳回」，确认人留痕。`
       assistant = insertMessage(db, session.id, 'assistant', text, { result: 'card_sent', eventId: w.eventId, writeKind: w.cardKind, ...detail })
