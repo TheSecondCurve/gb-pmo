@@ -128,7 +128,7 @@ export const api = {
   feishuSelfcheck: () =>
     req<{ ok: boolean; stages: { stage: string; ok: boolean; reason?: string; note?: string }[] }>('POST', '/api/v1/admin/debug/feishu-selfcheck', {}),
   // S22 飞书项目日历：初始化（创建组织级日历）/ 立即同步（对账式）
-  calendarInit: () => req<{ calendarId: string }>('POST', '/api/v1/admin/calendar/init', {}),
+  calendarInit: () => req<{ calendarId: string; ok?: boolean; reason?: string }>('POST', '/api/v1/admin/calendar/init', {}),
   calendarSync: () => req<{ calendarId: string; created: number; updated: number; skipped: number; errors: { projectId: number; name: string; error: string }[] } | { skipped: boolean; reason: string }>('POST', '/api/v1/admin/calendar/sync', {}),
   tokens: () => req<{ tokens: { id: number; name: string; tokenPrefix: string; scope: string; createdAt: number; expiresAt: number; revokedAt?: number | null }[] }>('GET', '/api/v1/auth/tokens'),
   issueToken: (scope: string, name: string) => req<{ token: string; id: number; scope: string; expiresAt: number }>('POST', '/api/v1/auth/tokens', { scope, name }),

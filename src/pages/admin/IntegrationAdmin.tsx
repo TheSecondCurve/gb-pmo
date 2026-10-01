@@ -106,6 +106,11 @@ function FeishuCard() {
     try {
       if (kind === 'init') {
         const r = await api.calendarInit()
+        if (r.ok === false) { // v0.21：上游失败 200+reason（网关会替换 5xx 响应体），直接显示原因
+          setCalMsg(`❌ ${r.reason}`)
+          toast(r.reason, 'bad')
+          return
+        }
         setCalendarId(r.calendarId)
         setCalMsg(`✅ 项目日历已创建（${r.calendarId}）。团队成员在飞书日历搜索「项目日历（gb-pmo）」即可订阅。`)
       } else {

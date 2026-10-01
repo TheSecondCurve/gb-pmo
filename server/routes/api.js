@@ -343,9 +343,21 @@ export function registerApiRoutes(app) {
   app.post('/api/v1/admin/calendar/init', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     const { initProjectCalendar } = await import('../brain/calendar.js')
-    const out = await initProjectCalendar(db, req.member.id)
-    auth.audit(db, { memberId: req.member.id, action: 'calendar.init', objectType: 'calendar', objectId: out.calendarId })
-    return out
+    try {
+      const out = await initProjectCalendar(db, req.member.id)
+      auth.audit(db, { memberId: req.member.id, action: 'calendar.init', objectType: 'calendar', objectId: out.calendarId })
+      return out
+    } catch (e) {
+      // S22-6（v0.21）：上游失败不走 5xx——PaaS 网关（Zeabur/Cloudflare）会把应用 5xx 响应体
+      // 替换成网关自己的错误页，错误文案到不了界面；改 200 + {ok:false, reason}（同 testConnection
+      // 模式，4xx 校验错误仍走原样抛出），服务端落 error 日志并留失败审计
+      if (e.statusCode >= 500) {
+        req.log.error(e)
+        auth.audit(db, { memberId: req.member.id, action: 'calendar.init', objectType: 'calendar', detail: { error: e.message } })
+        return { ok: false, reason: e.message }
+      }
+      throw e
+    }
   })
 
   app.post('/api/v1/admin/calendar/sync', async (req, reply) => {
