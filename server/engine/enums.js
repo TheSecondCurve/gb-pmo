@@ -60,6 +60,13 @@ export function assertValue(group, value) {
   return value
 }
 
+// LLM 供应商目录（S17-11，v0.14）：类别枚举 + 默认 baseUrl/model，适配层（brain/llm.js）与配置台共用；均可覆写。
+// glm-coding = GLM 国内 Coding Plan：官方指定自建工具走 OpenAI 兼容编码端点（Claude Code 等官方客户端才走 /api/anthropic）。
+export const LLM_PROVIDERS = {
+  deepseek: { label: 'DeepSeek（OpenAI 兼容）', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
+  'glm-coding': { label: 'GLM 国内 Coding Plan（智谱）', baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4', model: 'glm-5.3' },
+}
+
 // 阈值默认值（配置台 settings 可覆盖；PRD K5）
 export const DEFAULT_SETTINGS = {
   thresholds: {
@@ -84,7 +91,7 @@ export const DEFAULT_SETTINGS = {
   },
   // S22 项目日历：feishuCalendarId 空=未初始化（配置台「外部依赖→飞书」初始化写入；同步任务静默跳过）
   calendar: { feishuCalendarId: '' },
-  llm: { baseUrl: 'https://api.deepseek.com', apiKey: '', model: 'deepseek-chat', timeoutMs: 60000 },
+  llm: { provider: 'deepseek', baseUrl: 'https://api.deepseek.com', apiKey: '', model: 'deepseek-chat', timeoutMs: 60000 },
   'im.feishu': {
     appId: '', appSecret: '',
     botEnabled: false,                       // S20 机器人指令通道总开关（默认关）

@@ -18,7 +18,17 @@ export default function IntegrationAdmin({ tab }: { tab: string }) {
   )
 }
 
-interface LlmCfg { baseUrl: string; apiKey: string; model: string; timeoutMs?: number }
+interface LlmCfg { provider?: string; baseUrl: string; apiKey: string; model: string; timeoutMs?: number }
+
+// LLM 类别目录（S17-11）：与 server/engine/enums.js 的 LLM_PROVIDERS 保持一致
+const LLM_PROVIDERS: { key: string; label: string; baseUrl: string; model: string; note?: string }[] = [
+  { key: 'deepseek', label: 'DeepSeek（OpenAI 兼容）', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' },
+  {
+    key: 'glm-coding', label: 'GLM 国内 Coding Plan（智谱）',
+    baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4', model: 'glm-5.3',
+    note: 'GLM 国内 Coding Plan：用套餐 API Key，走智谱官方 OpenAI 兼容编码端点（模型 glm-5.3 / glm-5.3-Flash）。注意：套餐额度仅对官方指定编码工具抵扣，本系统属自建服务，调用可能按标准 API 按量计费。',
+  },
+]
 
 function LlmCard() {
   const { toast } = useStore()
@@ -28,13 +38,26 @@ function LlmCard() {
     void (async () => { const s = await api.settings(); setCfg(s.llm as LlmCfg) })()
   }, [])
   if (!cfg) return <Spinner />
+  const provider = LLM_PROVIDERS.find((p) => p.key === cfg.provider) ?? LLM_PROVIDERS[0]
+  // 切类别时：当前 baseUrl/model 为空或等于任一类别默认 → 回填新类别默认；自定义值保留（与服务端保存归一化同规则）
+  const switchProvider = (key: string) => {
+    const next = LLM_PROVIDERS.find((p) => p.key === key)!
+    const swap = (v: string, dft: string) => (!v || LLM_PROVIDERS.some((p) => p.baseUrl === v || p.model === v)) ? dft : v
+    setCfg({ ...cfg, provider: key, baseUrl: swap(cfg.baseUrl, next.baseUrl), model: swap(cfg.model, next.model) })
+  }
   return (
-    <Card title="LLM（DeepSeek，OpenAI 兼容；未配置时大脑走确定性降级）">
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        <Field label="Base URL"><input className={inputCls} value={cfg.baseUrl} onChange={(e) => setCfg({ ...cfg, baseUrl: e.target.value })} /></Field>
+    <Card title="LLM（OpenAI 兼容：DeepSeek / GLM 国内 Coding Plan；未配置时大脑走确定性降级）">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+        <Field label="类别">
+          <select className={inputCls} value={provider.key} onChange={(e) => switchProvider(e.target.value)}>
+            {LLM_PROVIDERS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}
+          </select>
+        </Field>
+        <Field label="Base URL（留空=类别默认）"><input className={inputCls} value={cfg.baseUrl} onChange={(e) => setCfg({ ...cfg, baseUrl: e.target.value })} /></Field>
         <Field label="API Key（留空=不改）"><input className={inputCls} type="password" value={cfg.apiKey} onChange={(e) => setCfg({ ...cfg, apiKey: e.target.value })} /></Field>
         <Field label="模型"><input className={inputCls} value={cfg.model} onChange={(e) => setCfg({ ...cfg, model: e.target.value })} /></Field>
       </div>
+      {provider.note && <p className="mb-3 text-[12px] text-[var(--color-ink-soft)]">{provider.note}</p>}
       <div className="flex items-center gap-2">
         <Btn kind="primary" onClick={async () => { await api.putSetting('llm', cfg); toast('LLM 配置已保存'); const s = await api.settings(); setCfg(s.llm as LlmCfg) }}>保存</Btn>
         <Btn onClick={async () => {

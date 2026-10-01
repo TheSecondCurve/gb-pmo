@@ -103,6 +103,36 @@ describe('S17 配置台', () => {
     expect(typeof unreachable.body.reason).toBe('string')
   })
 
+  it('S17-11: GLM 国内 Coding Plan 类别——保存按类别补默认端点、测试连接打对应端点、未知 provider 400', async () => {
+    ctx = await setupApp()
+    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    const save = await authed(ctx.app, cookie, 'PUT', '/api/v1/admin/settings/llm', { provider: 'glm-coding', apiKey: 'sk-glm' })
+    expect(save.status).toBe(200)
+    expect(save.body.value.provider).toBe('glm-coding')
+    expect(save.body.value.baseUrl).toBe('https://open.bigmodel.cn/api/coding/paas/v4') // 未填按类别默认
+    expect(save.body.value.model).toBe('glm-5.3')
+
+    const seen = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = async (url, opts) => {
+      seen.push({ url, auth: opts.headers?.authorization, body: JSON.parse(opts.body) })
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'pong' } }] }) }
+    }
+    try {
+      const t = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/test-llm', {})
+      expect(t.body.ok).toBe(true)
+      expect(seen[0].url).toBe('https://open.bigmodel.cn/api/coding/paas/v4/chat/completions')
+      expect(seen[0].auth).toBe('Bearer sk-glm')
+      expect(seen[0].body.model).toBe('glm-5.3')
+    } finally {
+      globalThis.fetch = realFetch
+    }
+
+    const bad = await authed(ctx.app, cookie, 'PUT', '/api/v1/admin/settings/llm', { provider: 'nope' })
+    expect(bad.status).toBe(400)
+    expect(bad.body.message).toContain('llm.provider')
+  })
+
   it('S17-5: 企微连通性——未部署 SDK 给出明确指引（附录 A.2）', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const res = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/test-im/wecom')

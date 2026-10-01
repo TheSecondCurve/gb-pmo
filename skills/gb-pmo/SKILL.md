@@ -36,7 +36,7 @@ client.sh action generate_person_digest '{}'
 
 - `upsert_channel` `{platform: 'feishu'|'wecom', groupKey, name?, channelType: 'dedicated'|'general', projectId?}`（专题渠道必填 projectId）
 - `delete_channel` `{id}`
-- `put_setting` `{key, value}`（key ∈ thresholds / push / scheduler / llm / im.feishu / im.wecom；scheduler 含 cron 与每任务 enabled 开关，非法值 400 并指明字段）
+- `put_setting` `{key, value}`（key ∈ thresholds / push / scheduler / llm / im.feishu / im.wecom；scheduler 含 cron 与每任务 enabled 开关，非法值 400 并指明字段；llm 含 provider ∈ deepseek / glm-coding，baseUrl/model 未填或随类别切换时按类别默认归一，S17-11）
 - `create_template` `{code, name, description?, tasks: [{title}, ...]}`
 - `draft_template_tasks` `{name, description?}` → `{tasks: [...]}`（LLM 产任务清单草稿，**不落库**，确认后再 create_template）
 - `reset_channel_cursor` `{channelId, days?}`（默认 7，1~90；重置后下次抽取回看 N 天，重放会追加新事件流）

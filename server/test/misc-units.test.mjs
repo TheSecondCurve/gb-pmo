@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { setupDb } from './helpers.mjs'
-import { parseJsonLoose, deepseekAdapter, testLlmConnection } from '../brain/llm.js'
+import { parseJsonLoose, deepseekAdapter, buildLlmAdapter, getLlm, testLlmConnection } from '../brain/llm.js'
 import { routeMessage } from '../brain/routing.js'
 import * as feishu from '../brain/connectors/feishu.js'
 import * as wecom from '../brain/connectors/wecom.js'
@@ -41,6 +41,55 @@ describe('llm.js', () => {
     globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'pong' } }] }) })
     const ok = await testLlmConnection({ baseUrl: 'http://x', apiKey: 'k' })
     expect(ok.ok).toBe(true)
+  })
+
+  // S17-11（PRD v0.14）：GLM 国内 Coding Plan 类别——官方 OpenAI 兼容编码端点 + 默认模型 + 可覆写
+  it('S17-11: glm-coding 适配器按类别默认端点/模型发请求；baseUrl/model 可覆写；Bearer 鉴权', async () => {
+    const calls = []
+    globalThis.fetch = async (url, opts) => {
+      calls.push({ url, auth: opts.headers?.authorization, body: JSON.parse(opts.body) })
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'pong' } }] }) }
+    }
+    const a = buildLlmAdapter({ provider: 'glm-coding', apiKey: 'sk-glm' })
+    expect(a.name).toBe('glm-coding')
+    expect(await a.complete([{ role: 'user', content: 'ping' }])).toBe('pong')
+    expect(calls[0].url).toBe('https://open.bigmodel.cn/api/coding/paas/v4/chat/completions')
+    expect(calls[0].body.model).toBe('glm-5.3')
+    expect(calls[0].auth).toBe('Bearer sk-glm')
+
+    await buildLlmAdapter({ provider: 'glm-coding', apiKey: 'k', baseUrl: 'http://x/', model: 'glm-5.3-Flash' })
+      .complete([{ role: 'user', content: 'x' }])
+    expect(calls[1].url).toBe('http://x/chat/completions')
+    expect(calls[1].body.model).toBe('glm-5.3-Flash')
+  })
+
+  it('S17-11: JSON 模式被端点拒绝（400）时自动去参重试一次；其他 400 不重试', async () => {
+    const bodies = []
+    globalThis.fetch = async (url, opts) => {
+      const body = JSON.parse(opts.body)
+      bodies.push(body.response_format)
+      if (body.response_format) return { ok: false, status: 400, text: async () => 'response_format unsupported' }
+      return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: '{"a":1}' } }] }) }
+    }
+    const a = buildLlmAdapter({ provider: 'glm-coding', apiKey: 'k' })
+    expect(await a.complete([{ role: 'user', content: 'x' }], { json: true })).toBe('{"a":1}')
+    expect(bodies).toEqual([{ type: 'json_object' }, undefined])
+
+    globalThis.fetch = async () => ({ ok: false, status: 400, text: async () => 'bad model' })
+    await expect(a.complete([{ role: 'user', content: 'x' }])).rejects.toThrow('LLM HTTP 400')
+  })
+
+  it('S17-11: 未知 provider 构建/测试连接均明确失败；testLlmConnection 缺 baseUrl 时按类别默认补齐', async () => {
+    expect(() => buildLlmAdapter({ provider: 'nope', apiKey: 'k' })).toThrow('llm.provider')
+    const bad = await testLlmConnection({ provider: 'nope', apiKey: 'k' })
+    expect(bad.ok).toBe(false)
+    expect(bad.reason).toContain('llm.provider')
+
+    const urls = []
+    globalThis.fetch = async (url) => { urls.push(url); return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'pong' } }] }) } }
+    const ok = await testLlmConnection({ provider: 'glm-coding', apiKey: 'k' }) // 未填 baseUrl
+    expect(ok.ok).toBe(true)
+    expect(urls[0]).toBe('https://open.bigmodel.cn/api/coding/paas/v4/chat/completions')
   })
 })
 
@@ -153,6 +202,34 @@ describe('push / enums / settings 单元', () => {
     expect(all.llm.model).toBe('deepseek-chat')
     expect(all._updatedAt.thresholds).toBeTruthy()
     expect(() => setSetting(db, 'nope', {}, 1)).toThrow()
+    db.close()
+  })
+
+  it('S17-11: llm.provider 校验与向后兼容——未知值 400；存量无 provider 行按 deepseek；getLlm 按类别构建', () => {
+    const { db } = setupDb()
+    expect(getSetting(db, 'llm').provider).toBe('deepseek') // 默认类别
+    expect(() => setSetting(db, 'llm', { provider: 'nope' }, 1)).toThrow(/llm\.provider/)
+    const saved = setSetting(db, 'llm', { provider: 'glm-coding', apiKey: 'sk-glm' }, 1)
+    expect(saved.baseUrl).toBe('https://open.bigmodel.cn/api/coding/paas/v4') // 未填按类别默认补齐
+    expect(getLlm(db).name).toBe('glm-coding')
+    // 归一化分支：自定义 baseUrl 保留；空值回填类别默认；value 缺 provider 时沿用已存类别
+    const custom = setSetting(db, 'llm', { provider: 'glm-coding', apiKey: 'k', baseUrl: 'http://my-proxy', model: 'glm-5.3-Flash' }, 1)
+    expect(custom.baseUrl).toBe('http://my-proxy')
+    expect(custom.model).toBe('glm-5.3-Flash')
+    const refilled = setSetting(db, 'llm', { provider: 'glm-coding', apiKey: 'k', baseUrl: '', model: '' }, 1)
+    expect(refilled.baseUrl).toBe('https://open.bigmodel.cn/api/coding/paas/v4')
+    expect(refilled.model).toBe('glm-5.3')
+    const kept = setSetting(db, 'llm', { apiKey: 'k2' }, 1)
+    expect(kept.provider).toBe('glm-coding')
+    expect(kept.baseUrl).toBe('https://open.bigmodel.cn/api/coding/paas/v4')
+    // 存量部署兼容：老配置行没有 provider 字段 → 按 deepseek 解释
+    db.prepare("UPDATE settings SET value = ? WHERE key = 'llm'").run(
+      JSON.stringify({ baseUrl: 'https://api.deepseek.com', apiKey: 'sk-ds', model: 'deepseek-chat', timeoutMs: 60000 })
+    )
+    expect(getLlm(db).name).toBe('deepseek')
+    // 未配置 apiKey → null（大脑走确定性降级）
+    db.prepare("UPDATE settings SET value = ? WHERE key = 'llm'").run(JSON.stringify({ provider: 'glm-coding' }))
+    expect(getLlm(db)).toBeNull()
     db.close()
   })
 })
