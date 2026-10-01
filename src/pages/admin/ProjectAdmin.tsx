@@ -37,32 +37,34 @@ function TypesTab() {
         actions={<Btn small onClick={() => setEditing('new')}>+ 新建类型</Btn>}
       >
         {types.length === 0 ? <Empty hint="暂无项目类型" /> : (
-          <table className="w-full text-[13px]">
-            <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
-              <tr className="border-b border-[var(--color-line)]"><th className="py-1.5">编码</th><th>类型名</th><th>说明</th><th>任务数</th><th>在跑/历史项目</th><th>状态</th><th></th></tr>
-            </thead>
-            <tbody>
-              {types.map((t) => (
-                <tr key={t.id} className="border-b border-[var(--color-line)] last:border-0">
-                  <td className="py-1 font-mono">{t.code}</td>
-                  <td><InlineText value={t.name} onSubmit={async (v) => { await api.patchProjectType(t.id, { name: v }); await refresh() }} /></td>
-                  <td className="max-w-[22rem] truncate text-[var(--color-ink-soft)]" title={t.description || ''}>{t.description || '—'}</td>
-                  <td className="num">{t.tasks.length}</td>
-                  <td className="num">{t.openProjectCount} / {t.projectCount}</td>
-                  <td><Badge tone={t.status === 'active' ? 'ok' : 'muted'}>{t.status === 'active' ? '启用' : '停用'}</Badge></td>
-                  <td className="whitespace-nowrap">
-                    <Btn small kind="ghost" onClick={() => setEditing(t)}>编辑</Btn>{' '}
-                    <Btn small kind="ghost" onClick={async () => {
-                      try {
-                        await api.patchProjectType(t.id, { status: t.status === 'active' ? 'disabled' : 'active' })
-                        toast(t.status === 'active' ? '已停用：立项不可再选，历史项目不受影响' : '已启用'); await refresh()
-                      } catch (e) { toast((e as Error).message, 'bad') }
-                    }}>{t.status === 'active' ? '停用' : '启用'}</Btn>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[40rem] text-[13px]">
+              <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
+                <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap"><th className="py-1.5">编码</th><th>类型名</th><th>说明</th><th>任务数</th><th>在跑/历史项目</th><th>状态</th><th></th></tr>
+              </thead>
+              <tbody>
+                {types.map((t) => (
+                  <tr key={t.id} className="border-b border-[var(--color-line)] last:border-0">
+                    <td className="py-1 font-mono">{t.code}</td>
+                    <td><InlineText value={t.name} onSubmit={async (v) => { await api.patchProjectType(t.id, { name: v }); await refresh() }} /></td>
+                    <td className="max-w-[22rem] truncate text-[var(--color-ink-soft)]" title={t.description || ''}>{t.description || '—'}</td>
+                    <td className="num">{t.tasks.length}</td>
+                    <td className="num">{t.openProjectCount} / {t.projectCount}</td>
+                    <td><Badge tone={t.status === 'active' ? 'ok' : 'muted'}>{t.status === 'active' ? '启用' : '停用'}</Badge></td>
+                    <td className="whitespace-nowrap">
+                      <Btn small kind="ghost" onClick={() => setEditing(t)}>编辑</Btn>{' '}
+                      <Btn small kind="ghost" onClick={async () => {
+                        try {
+                          await api.patchProjectType(t.id, { status: t.status === 'active' ? 'disabled' : 'active' })
+                          toast(t.status === 'active' ? '已停用：立项不可再选，历史项目不受影响' : '已启用'); await refresh()
+                        } catch (e) { toast((e as Error).message, 'bad') }
+                      }}>{t.status === 'active' ? '停用' : '启用'}</Btn>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </Card>
 
@@ -181,15 +183,15 @@ function ChannelsCard({ channels, onDone }: { channels: ChannelRow[]; onDone: ()
         <Btn kind="primary" onClick={() => void align()}>立即对齐（全部渠道）</Btn>
         <span className="text-[12px] text-[var(--color-ink-soft)]">手动增量拉取并抽取新消息，更新项目最新状态（S18）</span>
       </div>
-      <div className="mb-3 flex flex-wrap gap-2">
-        <select className={inputCls + ' !w-28'} value={form.platform} onChange={(e) => setForm({ ...form, platform: e.target.value })}>
+      <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+        <select className={inputCls + ' w-full sm:!w-28'} value={form.platform} onChange={(e) => setForm({ ...form, platform: e.target.value })}>
           <option value="feishu">飞书</option><option value="wecom">企业微信</option>
         </select>
-        <select className={inputCls + ' !w-28'} value={form.channelType} onChange={(e) => setForm({ ...form, channelType: e.target.value })}>
+        <select className={inputCls + ' w-full sm:!w-28'} value={form.channelType} onChange={(e) => setForm({ ...form, channelType: e.target.value })}>
           <option value="general">通用群</option><option value="dedicated">专题渠道</option>
         </select>
-        <input className={inputCls + ' !w-44'} placeholder="群标识" value={form.groupKey} onChange={(e) => setForm({ ...form, groupKey: e.target.value })} />
-        <input className={inputCls + ' !w-36'} placeholder="群名称" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        <input className={inputCls + ' w-full sm:!w-44'} placeholder="群标识" value={form.groupKey} onChange={(e) => setForm({ ...form, groupKey: e.target.value })} />
+        <input className={inputCls + ' w-full sm:!w-36'} placeholder="群名称" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
         <Btn disabled={!form.groupKey} onClick={async () => {
           try {
             const body: Record<string, unknown> = { platform: form.platform, groupKey: form.groupKey, name: form.name, channelType: form.channelType }
@@ -204,25 +206,27 @@ function ChannelsCard({ channels, onDone }: { channels: ChannelRow[]; onDone: ()
         }}>保存</Btn>
       </div>
       {channels.length === 0 ? <Empty hint="暂无渠道" /> : (
-        <table className="w-full text-[13px]">
-          <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
-            <tr className="border-b border-[var(--color-line)]"><th className="py-1.5">平台</th><th>群标识</th><th>名称</th><th>类型</th><th>绑定项目</th><th></th></tr>
-          </thead>
-          <tbody>
-            {channels.map((c) => (
-              <tr key={c.id} className="border-b border-[var(--color-line)] last:border-0">
-                <td className="py-1"><Badge tone="info">{c.platform === 'feishu' ? '飞书' : '企微'}</Badge></td>
-                <td className="num">{c.groupKey}</td><td>{c.name || '—'}</td>
-                <td>{c.channelType === 'dedicated' ? '专题' : '通用'}</td>
-                <td>{c.channelType === 'dedicated' ? `${c.projectId} ${c.projectName || ''}` : '（LLM 分拣）'}</td>
-                <td className="whitespace-nowrap">
-                  <Btn small kind="ghost" onClick={() => void align(c.id)}>对齐</Btn>{' '}
-                  <Btn small kind="ghost" onClick={async () => { await api.deleteChannel(c.id); toast('已删除'); await onDone() }}>删除</Btn>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[36rem] text-[13px]">
+            <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
+              <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap"><th className="py-1.5">平台</th><th>群标识</th><th>名称</th><th>类型</th><th>绑定项目</th><th></th></tr>
+            </thead>
+            <tbody>
+              {channels.map((c) => (
+                <tr key={c.id} className="border-b border-[var(--color-line)] last:border-0">
+                  <td className="py-1"><Badge tone="info">{c.platform === 'feishu' ? '飞书' : '企微'}</Badge></td>
+                  <td className="num">{c.groupKey}</td><td>{c.name || '—'}</td>
+                  <td>{c.channelType === 'dedicated' ? '专题' : '通用'}</td>
+                  <td>{c.channelType === 'dedicated' ? `${c.projectId} ${c.projectName || ''}` : '（LLM 分拣）'}</td>
+                  <td className="whitespace-nowrap">
+                    <Btn small kind="ghost" onClick={() => void align(c.id)}>对齐</Btn>{' '}
+                    <Btn small kind="ghost" onClick={async () => { await api.deleteChannel(c.id); toast('已删除'); await onDone() }}>删除</Btn>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </Card>
   )

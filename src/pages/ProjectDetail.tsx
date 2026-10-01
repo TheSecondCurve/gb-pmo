@@ -66,48 +66,50 @@ export default function ProjectDetail({ id }: { id: number }) {
 
       <Card title={`任务面（${p.tasks.length}）${readonly ? ' · 只读' : ''}`} actions={!readonly ? <Btn small onClick={() => void 0} title="底部添加行">在下方添加</Btn> : undefined}>
         {p.tasks.length === 0 ? <Empty hint="暂无任务（自由创建项目可手工添加）" /> : (
-          <table className="w-full text-[13px]">
-            <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
-              <tr className="border-b border-[var(--color-line)]">
-                <th className="py-1.5">任务</th><th>责任人（唯一）</th><th>状态</th><th>计划开始</th><th>计划结束</th><th>标记</th><th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {p.tasks.map((t) => (
-                <tr key={t.id} className="border-b border-[var(--color-line)] last:border-0 hover:bg-[var(--color-bg)]">
-                  <td className="py-1">
-                    {readonly ? t.title : (
-                      <InlineText value={t.title} onSubmit={async (v) => { await api.patchTask(t.id, { title: v }); await refresh() }} />
-                    )}
-                  </td>
-                  <td>
-                    {readonly ? nameOf(t.responsibleMemberId) : (
-                      <select className="cursor-pointer rounded bg-transparent px-1 py-0.5 hover:bg-[var(--color-brand-soft)]"
-                        value={t.responsibleMemberId ?? ''} onChange={async (e) => { await api.patchTask(t.id, { responsibleMemberId: e.target.value === '' ? '' : Number(e.target.value) }); toast('责任人变更已留痕'); await refresh() }}>
-                        <option value="">（未指派）</option>
-                        {activeMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                      </select>
-                    )}
-                  </td>
-                  <td>
-                    {readonly ? TASK_STATUS_LABEL[t.status] : (
-                      <InlineSelect value={t.status} options={TASK_STATUS_LABEL} onSubmit={async (v) => { await api.patchTask(t.id, { status: v }); await refresh() }} />
-                    )}
-                  </td>
-                  <td className="num">{readonly ? (t.planStartDate || '—') : <InlineText type="date" value={t.planStartDate} onSubmit={async (v) => { await api.patchTask(t.id, { planStartDate: v }); await refresh() }} />}</td>
-                  <td className={`num ${t.isOverdue ? 'text-[var(--color-bad)]' : ''}`}>{readonly ? (t.planEndDate || '—') : <InlineText type="date" value={t.planEndDate} onSubmit={async (v) => { await api.patchTask(t.id, { planEndDate: v }); await refresh() }} />}</td>
-                  <td>
-                    {t.isOverdue && <Badge tone="bad">逾期</Badge>}
-                    {!!t.refCount && <Badge tone="info">参考 {t.refCount}</Badge>}
-                  </td>
-                  <td className="whitespace-nowrap">
-                    <Btn small kind="ghost" onClick={() => setRefsTask({ id: t.id, title: t.title })}>参考</Btn>
-                    <Btn small kind="ghost" onClick={() => setRecordsTaskId(t.id)}>记录</Btn>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[44rem] text-[13px]">
+              <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
+                <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap">
+                  <th className="py-1.5">任务</th><th>责任人（唯一）</th><th>状态</th><th>计划开始</th><th>计划结束</th><th>标记</th><th></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {p.tasks.map((t) => (
+                  <tr key={t.id} className="border-b border-[var(--color-line)] last:border-0 hover:bg-[var(--color-bg)]">
+                    <td className="py-1">
+                      {readonly ? t.title : (
+                        <InlineText value={t.title} onSubmit={async (v) => { await api.patchTask(t.id, { title: v }); await refresh() }} />
+                      )}
+                    </td>
+                    <td>
+                      {readonly ? nameOf(t.responsibleMemberId) : (
+                        <select className="cursor-pointer rounded bg-transparent px-1 py-0.5 hover:bg-[var(--color-brand-soft)]"
+                          value={t.responsibleMemberId ?? ''} onChange={async (e) => { await api.patchTask(t.id, { responsibleMemberId: e.target.value === '' ? '' : Number(e.target.value) }); toast('责任人变更已留痕'); await refresh() }}>
+                          <option value="">（未指派）</option>
+                          {activeMembers.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                        </select>
+                      )}
+                    </td>
+                    <td>
+                      {readonly ? TASK_STATUS_LABEL[t.status] : (
+                        <InlineSelect value={t.status} options={TASK_STATUS_LABEL} onSubmit={async (v) => { await api.patchTask(t.id, { status: v }); await refresh() }} />
+                      )}
+                    </td>
+                    <td className="num">{readonly ? (t.planStartDate || '—') : <InlineText type="date" value={t.planStartDate} onSubmit={async (v) => { await api.patchTask(t.id, { planStartDate: v }); await refresh() }} />}</td>
+                    <td className={`num ${t.isOverdue ? 'text-[var(--color-bad)]' : ''}`}>{readonly ? (t.planEndDate || '—') : <InlineText type="date" value={t.planEndDate} onSubmit={async (v) => { await api.patchTask(t.id, { planEndDate: v }); await refresh() }} />}</td>
+                    <td>
+                      {t.isOverdue && <Badge tone="bad">逾期</Badge>}
+                      {!!t.refCount && <Badge tone="info">参考 {t.refCount}</Badge>}
+                    </td>
+                    <td className="whitespace-nowrap">
+                      <Btn small kind="ghost" onClick={() => setRefsTask({ id: t.id, title: t.title })}>参考</Btn>
+                      <Btn small kind="ghost" onClick={() => setRecordsTaskId(t.id)}>记录</Btn>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
         {!readonly && <AddTask projectId={id} onDone={refresh} />}
       </Card>
@@ -338,9 +340,9 @@ function AddMilestone({ projectId, onDone }: { projectId: number; onDone: () => 
   const [name, setName] = useState('')
   const [date, setDate] = useState('')
   return (
-    <div className="mt-3 flex gap-2">
+    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
       <input className="cell-input" placeholder="里程碑名" value={name} onChange={(e) => setName(e.target.value)} />
-      <input type="date" className="cell-input w-40" value={date} onChange={(e) => setDate(e.target.value)} />
+      <input type="date" className="cell-input w-full sm:w-40" value={date} onChange={(e) => setDate(e.target.value)} />
       <Btn small disabled={!name} onClick={async () => { await api.createMilestone({ projectId, name, planDate: date }); setName(''); setDate(''); await onDone() }}>添加</Btn>
     </div>
   )
@@ -350,8 +352,8 @@ function AddEvent({ projectId, onDone }: { projectId: number; onDone: () => Prom
   const [summary, setSummary] = useState('')
   const [type, setType] = useState('progress')
   return (
-    <div className="mt-3 flex gap-2">
-      <select className="cell-input w-28" value={type} onChange={(e) => setType(e.target.value)}>
+    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+      <select className="cell-input w-full sm:w-28" value={type} onChange={(e) => setType(e.target.value)}>
         {Object.entries(EVENT_TYPE_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
       </select>
       <input className="cell-input" placeholder="手动补充讨论面记录（记录型，Enter 保存）" value={summary}

@@ -58,28 +58,30 @@ export default function Dashboard() {
 
       <Card title="在跑项目（高 → 中 → 低）">
         {projects.length === 0 ? <Empty hint="暂无在跑项目，去项目列表立项" /> : (
-          <table className="w-full text-[13px]">
-            <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
-              <tr className="border-b border-[var(--color-line)]">
-                <th className="py-1.5">优先级</th><th>项目</th><th>牵头人</th><th>状态</th>
-                <th className="num">逾期</th><th className="num">沉默天数</th><th>健康度</th><th>计划截止</th>
-              </tr>
-            </thead>
-            <tbody>
-              {projects.map((p) => (
-                <tr key={p.id} className="border-b border-[var(--color-line)] last:border-0 hover:bg-[var(--color-bg)]">
-                  <td className="py-1.5"><Badge tone={p.priority === 'high' ? 'bad' : p.priority === 'medium' ? 'warn' : 'muted'}>{PRIORITY_LABEL[p.priority]}</Badge></td>
-                  <td><a className="text-[var(--color-brand)] hover:underline" href={`#/projects/${p.id}`}>{p.name}</a></td>
-                  <td>{p.leadName}</td>
-                  <td>{PROJECT_STATUS_LABEL[p.status] || p.status}</td>
-                  <td className={`num ${p.overdueTasks ? 'text-[var(--color-bad)]' : ''}`}>{p.overdueTasks}</td>
-                  <td className="num">{p.silentDays ?? '—'}</td>
-                  <td><Badge tone={healthOf(p)}>{HEALTH_LABEL[healthOf(p)]}</Badge></td>
-                  <td className="num">{p.planEndDate || '—'}</td>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[40rem] text-[13px]">
+              <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
+                <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap">
+                  <th className="py-1.5">优先级</th><th>项目</th><th>牵头人</th><th>状态</th>
+                  <th className="num">逾期</th><th className="num">沉默天数</th><th>健康度</th><th>计划截止</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {projects.map((p) => (
+                  <tr key={p.id} className="border-b border-[var(--color-line)] last:border-0 hover:bg-[var(--color-bg)]">
+                    <td className="py-1.5"><Badge tone={p.priority === 'high' ? 'bad' : p.priority === 'medium' ? 'warn' : 'muted'}>{PRIORITY_LABEL[p.priority]}</Badge></td>
+                    <td><a className="text-[var(--color-brand)] hover:underline" href={`#/projects/${p.id}`}>{p.name}</a></td>
+                    <td>{p.leadName}</td>
+                    <td>{PROJECT_STATUS_LABEL[p.status] || p.status}</td>
+                    <td className={`num ${p.overdueTasks ? 'text-[var(--color-bad)]' : ''}`}>{p.overdueTasks}</td>
+                    <td className="num">{p.silentDays ?? '—'}</td>
+                    <td><Badge tone={healthOf(p)}>{HEALTH_LABEL[healthOf(p)]}</Badge></td>
+                    <td className="num">{p.planEndDate || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </Card>
     </div>

@@ -24,6 +24,13 @@ function useHashRoute(): [string, (to: string) => void] {
 export default function App() {
   const { member, ready, refresh } = useStore()
   const [route] = useHashRoute()
+  const [navOpen, setNavOpen] = useState(false)
+  // 路由变化即收起移动端抽屉（点链接 / 前进后退统一走这里）
+  useEffect(() => {
+    const h = () => setNavOpen(false)
+    window.addEventListener('hashchange', h)
+    return () => window.removeEventListener('hashchange', h)
+  }, [])
 
   if (!ready) return <div className="flex h-full items-center justify-center text-[var(--color-ink-soft)]">加载中…</div>
   if (!member) return <Login onLogin={refresh} />
@@ -44,22 +51,58 @@ export default function App() {
   }
   else page = <div className="p-8">页面不存在：{path}</div>
 
+  const navItems: [string, string][] = [
+    ['#/dashboard', '全局看板'],
+    ['#/projects', '项目列表'],
+    ['#/chat', 'AI 助手'],
+    ...(member.role === 'admin' ? [['#/admin', '配置台'] as [string, string]] : []),
+  ]
+  // 选中态：#/admin 深链（#/admin/<sec>/<tab>）也高亮配置台；#/ 与 #/dashboard 同页
+  const isActive = (href: string) =>
+    href === '#/dashboard' ? route === '#/' || route === '#/dashboard'
+      : href === '#/admin' ? route.startsWith('#/admin')
+        : route === href
+  const linkCls = (href: string) => `block rounded-md px-3 py-2 ${isActive(href) ? 'bg-[var(--color-brand-soft)] font-medium text-[var(--color-brand)]' : 'hover:bg-[var(--color-bg)]'}`
+
   return (
-    <div className="flex h-full">
+    <div className="flex h-full flex-col md:flex-row">
+      {/* 移动端顶栏（<768px）：导航入口在抽屉里，桌面端隐藏本栏 */}
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-[var(--color-line)] bg-[var(--color-card)] px-4 md:hidden">
+        <div className="text-[15px] font-bold">🧠 项目大脑</div>
+        <button
+          type="button" aria-label={navOpen ? '关闭菜单' : '打开菜单'}
+          className="rounded-md px-2 py-1 text-[18px] leading-none text-[var(--color-ink-soft)] hover:bg-[var(--color-bg)]"
+          onClick={() => setNavOpen(!navOpen)}
+        >☰</button>
+      </header>
+
+      {navOpen && (
+        <div className="fixed inset-0 z-50 md:hidden">
+          <div className="absolute inset-0 bg-black/30 fade-in" onClick={() => setNavOpen(false)} />
+          <aside className="pop-in absolute left-0 top-0 flex h-full w-64 flex-col border-r border-[var(--color-line)] bg-[var(--color-card)]">
+            <div className="flex items-center justify-between border-b border-[var(--color-line)] px-4 py-3">
+              <div className="text-[15px] font-bold">🧠 项目大脑</div>
+              <button
+                type="button" aria-label="关闭菜单"
+                className="rounded-md px-2 py-1 text-[var(--color-ink-soft)] hover:bg-[var(--color-bg)]"
+                onClick={() => setNavOpen(false)}
+              >✕</button>
+            </div>
+            <nav aria-label="移动导航" className="flex-1 px-2 py-2 text-[14px]">
+              {navItems.map(([href, label]) => <a key={href} href={href} className={`mb-0.5 ${linkCls(href)}`}>{label}</a>)}
+            </nav>
+            <div className="border-t border-[var(--color-line)] px-4 py-3 text-[12px] text-[var(--color-ink-soft)]">
+              <div className="mb-1">{member.name}（{member.role === 'admin' ? '系统管理员' : '成员'}）</div>
+              <Btn small kind="ghost" onClick={async () => { await api.logout(); await refresh() }}>退出登录</Btn>
+            </div>
+          </aside>
+        </div>
+      )}
+
       <aside className="hidden w-52 shrink-0 flex-col border-r border-[var(--color-line)] bg-[var(--color-card)] md:flex">
         <div className="px-4 py-4 text-[15px] font-bold">🧠 项目大脑</div>
         <nav className="flex-1 px-2 text-[13px]">
-          {[
-            ['#/dashboard', '全局看板'],
-            ['#/projects', '项目列表'],
-            ['#/chat', 'AI 助手'],
-            ...(member.role === 'admin' ? [['#/admin', '配置台']] : []),
-          ].map(([href, label]) => (
-            <a
-              key={href} href={href}
-              className={`mb-0.5 block rounded-md px-3 py-2 ${route === href ? 'bg-[var(--color-brand-soft)] font-medium text-[var(--color-brand)]' : 'hover:bg-[var(--color-bg)]'}`}
-            >{label}</a>
-          ))}
+          {navItems.map(([href, label]) => <a key={href} href={href} className={`mb-0.5 ${linkCls(href)}`}>{label}</a>)}
         </nav>
         <div className="border-t border-[var(--color-line)] px-4 py-3 text-[12px] text-[var(--color-ink-soft)]">
           <div>{member.name}（{member.role === 'admin' ? '系统管理员' : '成员'}）</div>
@@ -67,7 +110,7 @@ export default function App() {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-auto">
+      <main className="min-w-0 flex-1 overflow-auto">
         <div className="mx-auto max-w-6xl p-4 md:p-6 fade-in">{page}</div>
       </main>
     </div>
