@@ -103,14 +103,16 @@ describe('S17 配置台', () => {
     expect(typeof unreachable.body.reason).toBe('string')
   })
 
-  it('S17-11: GLM 国内 Coding Plan 类别——保存按类别补默认端点、测试连接打对应端点、未知 provider 400', async () => {
+  it('S17-11: LLM 按类别分存——双类别各自 key 保存互不覆盖；测试连接按所选/已存类别端点；未知 provider 400', async () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
-    const save = await authed(ctx.app, cookie, 'PUT', '/api/v1/admin/settings/llm', { provider: 'glm-coding', apiKey: 'sk-glm' })
-    expect(save.status).toBe(200)
-    expect(save.body.value.provider).toBe('glm-coding')
-    expect(save.body.value.baseUrl).toBe('https://open.bigmodel.cn/api/coding/paas/v4') // 未填按类别默认
-    expect(save.body.value.model).toBe('glm-5.3')
+    const s1 = await authed(ctx.app, cookie, 'PUT', '/api/v1/admin/settings/llm', { provider: 'deepseek', apiKey: 'sk-ds' })
+    expect(s1.status).toBe(200)
+    const s2 = await authed(ctx.app, cookie, 'PUT', '/api/v1/admin/settings/llm', { provider: 'glm-coding', apiKey: 'sk-glm' })
+    expect(s2.status).toBe(200)
+    expect(s2.body.value.deepseek.apiKey).toBe('sk-ds') // deepseek 配置未被覆盖
+    expect(s2.body.value['glm-coding'].baseUrl).toBe('https://open.bigmodel.cn/api/coding/paas/v4') // 未填按类别默认
+    expect(s2.body.value['glm-coding'].model).toBe('glm-5.3')
 
     const seen = []
     const realFetch = globalThis.fetch
@@ -119,11 +121,18 @@ describe('S17 配置台', () => {
       return { ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'pong' } }] }) }
     }
     try {
-      const t = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/test-llm', {})
-      expect(t.body.ok).toBe(true)
+      // 空请求体：按已存生效类别（glm-coding）端点 + key
+      const t1 = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/test-llm', {})
+      expect(t1.body.ok).toBe(true)
       expect(seen[0].url).toBe('https://open.bigmodel.cn/api/coding/paas/v4/chat/completions')
       expect(seen[0].auth).toBe('Bearer sk-glm')
       expect(seen[0].body.model).toBe('glm-5.3')
+      // body 指定 provider=deepseek（未保存的切换也可先测）：走 deepseek 已存子配置
+      const t2 = await authed(ctx.app, cookie, 'POST', '/api/v1/admin/test-llm', { provider: 'deepseek' })
+      expect(t2.body.ok).toBe(true)
+      expect(seen[1].url).toBe('https://api.deepseek.com/chat/completions')
+      expect(seen[1].auth).toBe('Bearer sk-ds')
+      expect(seen[1].body.model).toBe('deepseek-chat')
     } finally {
       globalThis.fetch = realFetch
     }

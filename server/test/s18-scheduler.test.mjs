@@ -1,10 +1,11 @@
 import { describe, it, expect, afterAll } from 'vitest'
-import { setupApp, loginCookie, authed } from './helpers.mjs'
+import { setupDb, setupApp, loginCookie, authed } from './helpers.mjs'
 import { upsertChannel } from '../engine/tasks.js'
 import { parseCron, isDue } from '../engine/cron.js'
 import { dueTasks, initialLastRun, startScheduler } from '../brain/scheduler.js'
 import { dailyReport } from '../brain/report.js'
 import { setSetting } from '../engine/settings.js'
+import { getLlm } from '../brain/llm.js'
 
 // PRD S18 — 大脑调度与手动对齐（cron 三件套 / 立即对齐 / 日报补发，v0.7）
 
@@ -160,6 +161,29 @@ describe('S18 调度判定（scheduler）', () => {
     } finally {
       sched.stop()
     }
+  })
+  it('S18: LLM 动态解析——调度器不冻结启动时适配器，任务执行时按当前配置解析（S17-11 v0.15）', async () => {
+    const { db } = setupDb()
+    setSetting(db, 'llm', { provider: 'glm-coding', apiKey: 'sk-glm' }, 1)
+    setSetting(db, 'scheduler', { extractionCron: '* * * * *' }, 1)
+    let NOW = Date.now()
+    let gotLlm = 'unset'
+    const sched = startScheduler(db, {
+      llm: null, // 生产默认：不注入启动时适配器，任务执行时动态解析
+      tickMs: 5,
+      now: () => NOW,
+      runners: { extraction: async (_db, opts) => { gotLlm = opts.llm } },
+    })
+    try {
+      await new Promise((r) => setTimeout(r, 20)) // 冷启动锚定 now，不触发
+      NOW += 61_000
+      await new Promise((r) => setTimeout(r, 20))
+      expect(gotLlm).toBeUndefined() // undefined → runner 内 getLlm(db) 按当前生效类别解析
+      expect(getLlm(db).name).toBe('glm-coding') // 执行时视角：配置台切换即时生效
+    } finally {
+      sched.stop()
+    }
+    db.close()
   })
 })
 

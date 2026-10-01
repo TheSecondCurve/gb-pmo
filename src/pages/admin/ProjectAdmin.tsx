@@ -174,7 +174,7 @@ function TemplateEditor({ template, onClose, onDone }: { template: TemplateRow |
             toast(`AI 起草 ${out.tasks.length} 条任务，可继续编辑后保存（草稿未落库）`)
           } catch (e) { setErr((e as Error).message) } finally { setDrafting(false) }
         }}>{drafting ? 'AI 起草中…' : '✨ AI 起草任务清单'}</Btn>
-        <span className="text-[11px] text-[var(--color-ink-soft)]">按模板名+说明生成草稿（S17-9）；需已配置 DeepSeek（外部依赖 → LLM）</span>
+        <span className="text-[11px] text-[var(--color-ink-soft)]">按模板名+说明生成草稿（S17-9）；需已在配置台配置 LLM（外部依赖 → LLM，任一类别均可）</span>
       </div>
       {err && <div className="mb-2 rounded bg-red-50 px-2 py-1 text-[12px] text-[var(--color-bad)]">{err}</div>}
       <div className="text-[11px] text-[var(--color-ink-soft)]">编辑保存 = 任务清单整体替换；已立项项目是立项时的实例拷贝，不受影响。</div>
