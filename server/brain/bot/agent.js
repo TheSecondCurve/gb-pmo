@@ -6,18 +6,21 @@ import { parseJsonLoose } from '../llm.js'
 
 export const MAX_LLM_TURNS = 6
 export const MAX_QUERIES = 8
+export const MAX_HISTORY = 12 // S24 web 会话多轮上下文条数（chat.js 取最近 N 条注入）
 
 /**
  * @param {object} args
  * @param {object} args.llm            适配器（complete(messages, {json}) → string）
  * @param {string} args.systemPrompt   系统提示（含身份/上下文/schema/规则）
  * @param {string} args.userText       用户原话
+ * @param {Array<{role:string,content:string}>} [args.history] 多轮上下文（S24：插在 system 之后，最近 N 条）
  * @param {(parsed:object) => Promise<string|object>} args.execTool 执行动作；查询类返回反馈文本，write 返回 writeResult 对象
  * @returns {Promise<{kind:'reply'|'write', result?:string, text?:string, writeResult?:object, turns:number, queries:number}>}
  */
-export async function runAgentLoop({ llm, systemPrompt, userText, execTool, maxTurns = MAX_LLM_TURNS }) {
+export async function runAgentLoop({ llm, systemPrompt, userText, history = [], execTool, maxTurns = MAX_LLM_TURNS }) {
   const messages = [
     { role: 'system', content: systemPrompt },
+    ...history.slice(-MAX_HISTORY),
     { role: 'user', content: userText },
   ]
   let queries = 0

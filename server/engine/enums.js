@@ -107,4 +107,6 @@ export const DEFAULT_SETTINGS = {
     commandQuotaPerDay: 50,                  // 每成员每日自然语言指令限额（北京日）
   },
   'im.wecom': { corpId: '', secret: '', publicKeyVer: '', privateKey: '', sdkUrl: '' },
+  // S24 Web AI 助手会话：每成员每日指令限额（北京日，与 bot_commands 审计同口径）
+  chat: { quotaPerDay: 50 },
 }
