@@ -279,7 +279,15 @@ export function registerApiRoutes(app) {
 
   app.put('/api/v1/admin/settings/:key', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
-    return { key: req.params.key, value: setSetting(db, req.params.key, req.body, req.member.id) }
+    const value = setSetting(db, req.params.key, req.body, req.member.id)
+    // S20-12（v0.22）：im.feishu 保存即热生效——网关按新配置立即重连/断开，无需重启进程；botSync 注入点供测试
+    let bot
+    if (req.params.key === 'im.feishu') {
+      bot = app.botSync
+        ? await app.botSync()
+        : await (await import('../brain/bot/gateway.js')).syncBot(db, { secret: process.env.GB_PMO_SESSION_SECRET || '' })
+    }
+    return { key: req.params.key, value, bot }
   })
 
   // S18-1：管理员手动「立即对齐」——立即增量拉取并抽取（收集新记录、更新项目最新状态），回显每渠道结果
