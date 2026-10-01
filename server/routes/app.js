@@ -27,6 +27,7 @@ export function buildApp(db, opts = {}) {
   app.decorate('baseUrl', opts.baseUrl || process.env.GB_PMO_BASE_URL || 'http://127.0.0.1:8086')
   app.decorate('skillsDir', opts.skillsDir || path.join(ROOT, 'skills/gb-pmo'))
   app.decorate('llm', opts.llm ?? null) // 大脑注入点（测试传 fake；生产不注入，各模块按 settings 动态解析）
+  app.decorate('botSync', opts.botSync ?? null) // 机器人热同步注入点（S20-12：测试传 fake；生产不注入，路由走真实 syncBot）
   app.decorateRequest('member', null)
   app.decorateRequest('agentAuth', null)
 

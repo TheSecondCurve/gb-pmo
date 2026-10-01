@@ -1,22 +1,52 @@
 // S20 网关：飞书事件长连接（@larksuiteoapi/node-sdk 懒加载）。纯接线层——
 // 全部逻辑在 command.js（测试直调 handleBotEvent/handleCardAction，不经此文件）。
 // botEnabled 未开启 / 凭证未配 / SDK 未安装时明确提示并跳过，不阻塞主进程（K9）。
+// S20-12（v0.22）：syncBot 支持热重启——配置台保存 im.feishu 即按新配置重连/断开，
+// 无需重启进程（与 v0.15「配置生效无需重启」原则对齐）；热同步串行化防并发交错。
 
 import { getSetting } from '../../engine/settings.js'
 import * as feishu from '../connectors/feishu.js'
 import { handleBotEvent, handleCardAction } from './command.js'
 
-export async function startBot(db, { secret } = {}) {
+let currentWs = null
+let syncChain = Promise.resolve()
+
+/** 热同步长连接：按当前 im.feishu 配置重算（旧连接先断，开启且凭证齐全则重建）。connect 注入点供测试。 */
+export function syncBot(db, opts = {}) {
+  const run = syncChain.then(() => doSync(db, opts))
+  syncChain = run.catch(() => {})
+  return run
+}
+
+async function doSync(db, { secret, connect } = {}) {
   const cfg = getSetting(db, 'im.feishu')
+  await stopBot()
   if (!cfg.botEnabled) return { started: false, reason: 'botEnabled 未开启（配置台 im.feishu）' }
   if (!cfg.appId || !cfg.appSecret) return { started: false, reason: '未配置 appId/appSecret' }
+  try {
+    const { ws, result } = connect ? await connect(cfg) : await connectReal(db, cfg, secret)
+    currentWs = ws ?? null
+    return result ?? { started: true }
+  } catch (e) {
+    return { started: false, reason: `启动失败：${e.message}` }
+  }
+}
 
+/** 断开当前长连接（幂等）。 */
+export function stopBot() {
+  const old = currentWs
+  currentWs = null
+  try { old?.close?.() } catch { /* 已关闭 */ }
+  return Boolean(old)
+}
+
+async function connectReal(db, cfg, secret) {
   let sdk
   try {
     sdk = await import('@larksuiteoapi/node-sdk')
   } catch {
     console.warn('[bot] 未安装 @larksuiteoapi/node-sdk，机器人未启动。安装：npm i @larksuiteoapi/node-sdk（PRD 附录 A.1 第 7 步）')
-    return { started: false, reason: 'sdk-missing' }
+    return { result: { started: false, reason: 'sdk-missing' } }
   }
 
   const externalCache = new Map()
@@ -75,8 +105,26 @@ export async function startBot(db, { secret } = {}) {
     },
   })
 
-  const ws = new sdk.WSClient({ appId: cfg.appId, appSecret: cfg.appSecret, loggerLevel: 'warn' })
-  await ws.start({ eventDispatcher: dispatcher })
-  console.log('[bot] 飞书长连接已启动（私聊/群@ 指令 + 卡片确认；订阅与权限见 PRD 附录 A.1 第 7 步）')
-  return { started: true }
+  // SDK 语义（1.74 源码，同 selfCheck）：握手失败时 start() 也正常 resolve、错误走 onError——
+  // 保存回显必须等真实握手信号，否则凭证错误也会回「已建立」假阳性（S20-12）
+  const verdict = await new Promise((resolve) => {
+    const ws = new sdk.WSClient({
+      appId: cfg.appId, appSecret: cfg.appSecret, loggerLevel: 'warn',
+      onReady: () => resolve({ ok: true, ws }),
+      onError: (err) => resolve({ ok: false, err, ws }),
+    })
+    ws.start({ eventDispatcher: dispatcher }).catch((err) => resolve({ ok: false, err, ws }))
+    setTimeout(() => resolve({ ok: null, ws }), 10_000) // 超时不定论：连接保留，回显降级提示
+  })
+  if (verdict.ok === false) {
+    try { verdict.ws?.close?.() } catch { /* 已关闭 */ }
+    return { result: { started: false, reason: `长连接握手失败：${verdict.err?.message || String(verdict.err)}（检查 appId/appSecret、事件订阅方式是否选长连接、应用是否已发布版本）` } }
+  }
+  if (verdict.ok === true) {
+    console.log('[bot] 飞书长连接已启动（私聊/群@ 指令 + 卡片确认；订阅与权限见 PRD 附录 A.1 第 7 步）')
+    return { ws: verdict.ws, result: { started: true } }
+  }
+  // 超时不定论：连接保留（SDK 内部自动重试），回显降级提示
+  console.warn('[bot] 长连接握手确认超时（10s），保留连接并由 SDK 自动重试；如持续无响应请跑运维诊断自检')
+  return { ws: verdict.ws, result: { started: true, note: '连接已发起，握手确认超时（10s）；如私聊无响应，请用「测试连接」或运维诊断自检复核' } }
 }
