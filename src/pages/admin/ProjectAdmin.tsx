@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { api } from '../../api'
 import { useStore } from '../../store'
-import { Badge, Btn, Card, Empty, Field, InlineSelect, InlineText, Modal, Spinner, Tabs, inputCls } from '../../components/ui'
-import type { ChannelRow, ProjectType, TemplateRow } from '../../types'
+import { Badge, Btn, Card, Empty, Field, InlineText, Modal, Spinner, Tabs, inputCls } from '../../components/ui'
+import type { ChannelRow, ProjectType } from '../../types'
 import { ADMIN_SECTIONS } from './sections'
 
 const TABS = ADMIN_SECTIONS[0].tabs
@@ -12,77 +12,46 @@ export default function ProjectAdmin({ tab }: { tab: string }) {
   return (
     <div>
       <Tabs tabs={TABS} value={tab} onChange={nav} />
-      {tab === 'types' && <TypesTemplatesTab />}
+      {tab === 'types' && <TypesTab />}
       {tab === 'channels' && <ChannelsTab />}
       {tab === 'params' && <ParamsTab />}
     </div>
   )
 }
 
-// —— Tab 1：项目类型 ↔ 任务模板（S17-8：一类型绑一默认模板，多类型可共用）——
+// —— Tab 1：项目类型（S17-8，v0.18：任务清单内嵌于类型，单对象；编辑只影响未来立项）——
 
-function TypesTemplatesTab() {
+function TypesTab() {
   const { toast } = useStore()
   const [types, setTypes] = useState<ProjectType[] | null>(null)
-  const [templates, setTemplates] = useState<TemplateRow[] | null>(null)
-  const [addingType, setAddingType] = useState(false)
-  const [typeForm, setTypeForm] = useState({ code: '', name: '', description: '', defaultTemplateId: 0 })
-  const [editingTpl, setEditingTpl] = useState<TemplateRow | 'new' | null>(null)
+  const [editing, setEditing] = useState<ProjectType | 'new' | null>(null)
 
-  const refresh = async () => {
-    const [t, tp] = await Promise.all([api.projectTypes(), api.adminTemplates()])
-    setTypes(t.types); setTemplates(tp.templates)
-  }
+  const refresh = async () => setTypes((await api.projectTypes()).types)
   useEffect(() => { void refresh() }, [])
-  if (!types || !templates) return <Spinner />
-
-  const templateOptions = Object.fromEntries(templates.map((t) => [String(t.id), t.name]))
+  if (!types) return <Spinner />
 
   return (
     <div className="space-y-4">
       <Card
-        title={`项目类型（${types.length}）：立项时选类型即套用其绑定模板`}
-        actions={<Btn small onClick={() => { setAddingType(!addingType); setTypeForm({ code: '', name: '', description: '', defaultTemplateId: templates[0]?.id || 0 }) }}>{addingType ? '收起' : '+ 新建类型'}</Btn>}
+        title={`项目类型（${types.length}）：任务清单内嵌，立项时预填（可增删改，v0.18）`}
+        actions={<Btn small onClick={() => setEditing('new')}>+ 新建类型</Btn>}
       >
-        {addingType && (
-          <div className="mb-3 grid grid-cols-2 gap-2 rounded-md border border-[var(--color-line)] p-3 md:grid-cols-4">
-            <Field label="类型编码 *（如 ops）"><input className={inputCls} value={typeForm.code} onChange={(e) => setTypeForm({ ...typeForm, code: e.target.value })} /></Field>
-            <Field label="类型名 *"><input className={inputCls} value={typeForm.name} onChange={(e) => setTypeForm({ ...typeForm, name: e.target.value })} /></Field>
-            <Field label="绑定默认模板 *">
-              <select className={inputCls} value={typeForm.defaultTemplateId} onChange={(e) => setTypeForm({ ...typeForm, defaultTemplateId: Number(e.target.value) })}>
-                {templates.map((t) => <option key={t.id} value={t.id}>{t.name}（{t.code}）</option>)}
-              </select>
-            </Field>
-            <Field label="说明"><input className={inputCls} value={typeForm.description} onChange={(e) => setTypeForm({ ...typeForm, description: e.target.value })} /></Field>
-            <div>
-              <Btn kind="primary" disabled={!typeForm.code || !typeForm.name || !typeForm.defaultTemplateId} onClick={async () => {
-                try {
-                  await api.createProjectType(typeForm)
-                  setAddingType(false); toast('项目类型已创建'); await refresh()
-                } catch (e) { toast((e as Error).message, 'bad') }
-              }}>创建</Btn>
-            </div>
-          </div>
-        )}
         {types.length === 0 ? <Empty hint="暂无项目类型" /> : (
           <table className="w-full text-[13px]">
             <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
-              <tr className="border-b border-[var(--color-line)]"><th className="py-1.5">编码</th><th>类型名</th><th>绑定默认模板（可换绑）</th><th>在跑/历史项目</th><th>状态</th><th></th></tr>
+              <tr className="border-b border-[var(--color-line)]"><th className="py-1.5">编码</th><th>类型名</th><th>说明</th><th>任务数</th><th>在跑/历史项目</th><th>状态</th><th></th></tr>
             </thead>
             <tbody>
               {types.map((t) => (
                 <tr key={t.id} className="border-b border-[var(--color-line)] last:border-0">
                   <td className="py-1 font-mono">{t.code}</td>
                   <td><InlineText value={t.name} onSubmit={async (v) => { await api.patchProjectType(t.id, { name: v }); await refresh() }} /></td>
-                  <td>
-                    <InlineSelect value={String(t.defaultTemplateId)} options={templateOptions} onSubmit={async (v) => {
-                      try { await api.patchProjectType(t.id, { defaultTemplateId: Number(v) }); toast('已换绑默认模板（只影响之后立项）'); await refresh() }
-                      catch (e) { toast((e as Error).message, 'bad') }
-                    }} />
-                  </td>
+                  <td className="max-w-[22rem] truncate text-[var(--color-ink-soft)]" title={t.description || ''}>{t.description || '—'}</td>
+                  <td className="num">{t.tasks.length}</td>
                   <td className="num">{t.openProjectCount} / {t.projectCount}</td>
                   <td><Badge tone={t.status === 'active' ? 'ok' : 'muted'}>{t.status === 'active' ? '启用' : '停用'}</Badge></td>
-                  <td>
+                  <td className="whitespace-nowrap">
+                    <Btn small kind="ghost" onClick={() => setEditing(t)}>编辑</Btn>{' '}
                     <Btn small kind="ghost" onClick={async () => {
                       try {
                         await api.patchProjectType(t.id, { status: t.status === 'active' ? 'disabled' : 'active' })
@@ -97,48 +66,18 @@ function TypesTemplatesTab() {
         )}
       </Card>
 
-      <Card
-        title={`任务模板（${templates.length}）：任务清单，编辑只影响未来立项`}
-        actions={<Btn small onClick={() => setEditingTpl('new')}>+ 新建模板</Btn>}
-      >
-        {templates.length === 0 ? <Empty hint="暂无模板" /> : (
-          <table className="w-full text-[13px]">
-            <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
-              <tr className="border-b border-[var(--color-line)]"><th className="py-1.5">编码</th><th>模板名</th><th>任务数</th><th>绑定类型/使用项目</th><th></th></tr>
-            </thead>
-            <tbody>
-              {templates.map((t) => (
-                <tr key={t.id} className="border-b border-[var(--color-line)] last:border-0">
-                  <td className="py-1 font-mono">{t.code}</td>
-                  <td>{t.name}</td>
-                  <td className="num">{t.tasks.length}</td>
-                  <td className="num">{t.typeCount} / {t.projectCount}</td>
-                  <td className="whitespace-nowrap">
-                    <Btn small kind="ghost" onClick={() => setEditingTpl(t)}>编辑</Btn>{' '}
-                    <Btn small kind="ghost" onClick={async () => {
-                      if (!confirm(`删除模板「${t.name}」？仅无类型绑定且无项目使用时可删`)) return
-                      try { await api.deleteTemplate(t.id); toast('模板已删除'); await refresh() } catch (e) { toast((e as Error).message, 'bad') }
-                    }}>删除</Btn>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
-
-      {editingTpl && <TemplateEditor template={editingTpl === 'new' ? null : editingTpl} onClose={() => setEditingTpl(null)} onDone={async () => { setEditingTpl(null); await refresh() }} />}
+      {editing && <TypeEditor type={editing === 'new' ? null : editing} onClose={() => setEditing(null)} onDone={async () => { setEditing(null); await refresh() }} />}
     </div>
   )
 }
 
-/** 模板编辑器（v0.6）：纯任务清单，每行一条任务标题；给出即整体替换（S17-8） */
-function TemplateEditor({ template, onClose, onDone }: { template: TemplateRow | null; onClose: () => void; onDone: () => Promise<void> }) {
+/** 类型编辑器（v0.18）：任务清单内嵌，每行一条任务标题；给出即整体替换（S17-8） */
+function TypeEditor({ type, onClose, onDone }: { type: ProjectType | null; onClose: () => void; onDone: () => Promise<void> }) {
   const { toast } = useStore()
-  const [form, setForm] = useState(() => template
+  const [form, setForm] = useState(() => type
     ? {
-        code: template.code, name: template.name, description: template.description || '',
-        tasksText: template.tasks.map((t) => t.title).join('\n'),
+        code: type.code, name: type.name, description: type.description || '',
+        tasksText: type.tasks.map((t) => t.title).join('\n'),
       }
     : { code: '', name: '', description: '', tasksText: '' })
   const [err, setErr] = useState('')
@@ -154,41 +93,40 @@ function TemplateEditor({ template, onClose, onDone }: { template: TemplateRow |
   }
 
   return (
-    <Modal title={template ? `编辑模板：${template.name}` : '新建任务模板'} onClose={onClose} wide>
+    <Modal title={type ? `编辑类型：${type.name}` : '新建项目类型'} onClose={onClose} wide>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        <Field label="模板编码 *（如 sre_ops）">
-          <input className={inputCls} value={form.code} disabled={!!template} onChange={(e) => setForm({ ...form, code: e.target.value })} title={template ? '编码创建后不可改' : undefined} />
+        <Field label="类型编码 *（如 ops）">
+          <input className={inputCls} value={form.code} disabled={!!type} onChange={(e) => setForm({ ...form, code: e.target.value })} title={type ? '编码创建后不可改' : undefined} />
         </Field>
-        <Field label="模板名 *"><input className={inputCls} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
+        <Field label="类型名 *"><input className={inputCls} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
         <Field label="说明"><input className={inputCls} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} /></Field>
       </div>
-      <Field label="默认任务清单（每行一条任务标题，按顺序；v0.6：无阶段、无预设依赖）">
+      <Field label="默认任务清单（每行一条任务标题，按顺序；立项时预填、可增删改；无阶段、无预设依赖）">
         <textarea className={inputCls} rows={10} value={form.tasksText} onChange={(e) => setForm({ ...form, tasksText: e.target.value })} placeholder={'需求确认与范围冻结\n技术方案与排期\n开发联调\n结项复盘'} />
       </Field>
       <div className="mb-2 flex items-center gap-2">
         <Btn small disabled={!form.name.trim() || drafting} onClick={async () => {
           setDrafting(true); setErr('')
           try {
-            const out = await api.draftTemplateTasks({ name: form.name, description: form.description })
+            const out = await api.draftProjectTasks({ name: form.name, description: form.description })
             setForm((f) => ({ ...f, tasksText: out.tasks.join('\n') }))
             toast(`AI 起草 ${out.tasks.length} 条任务，可继续编辑后保存（草稿未落库）`)
           } catch (e) { setErr((e as Error).message) } finally { setDrafting(false) }
         }}>{drafting ? 'AI 起草中…' : '✨ AI 起草任务清单'}</Btn>
-        <span className="text-[11px] text-[var(--color-ink-soft)]">按模板名+说明生成草稿（S17-9）；需已在配置台配置 LLM（外部依赖 → LLM，任一类别均可）</span>
+        <span className="text-[11px] text-[var(--color-ink-soft)]">按类型名+说明生成草稿（S17-9）；需已在配置台配置 LLM（外部依赖 → LLM，任一类别均可）</span>
       </div>
       {err && <div className="mb-2 rounded bg-red-50 px-2 py-1 text-[12px] text-[var(--color-bad)]">{err}</div>}
       <div className="text-[11px] text-[var(--color-ink-soft)]">编辑保存 = 任务清单整体替换；已立项项目是立项时的实例拷贝，不受影响。</div>
       <div className="mt-3 flex justify-end gap-2">
         <Btn onClick={onClose}>取消</Btn>
         <Btn kind="primary" disabled={!form.code || !form.name} onClick={async () => {
-          let parsed
-          try { parsed = parse() } catch (e) { setErr((e as Error).message); return }
           try {
-            if (template) await api.patchTemplate(template.id, { name: form.name, description: form.description, ...parsed })
-            else await api.createTemplate({ code: form.code, name: form.name, description: form.description, ...parsed })
-            toast(template ? '模板已保存（只影响未来立项）' : '模板已创建'); await onDone()
+            const parsed = parse()
+            if (type) await api.patchProjectType(type.id, { name: form.name, description: form.description, ...parsed })
+            else await api.createProjectType({ code: form.code, name: form.name, description: form.description, ...parsed })
+            toast(type ? '类型已保存（只影响未来立项）' : '项目类型已创建'); await onDone()
           } catch (e) { setErr((e as Error).message) }
-        }}>{template ? '保存' : '创建'}</Btn>
+        }}>{type ? '保存' : '创建'}</Btn>
       </div>
     </Modal>
   )

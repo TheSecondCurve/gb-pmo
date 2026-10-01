@@ -280,19 +280,26 @@ describe('S17-10 Agent 配置类 action', () => {
     expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM channels WHERE id = ?').get(channelId).n).toBe(0)
   })
 
-  it('S17-10: draft_template_tasks + create_template 对话式 AI 初始化模板', async () => {
+  it('S17-10: draft_task_list 对话式 AI 起草任务清单（成员可用）；create_template 已裁撤拒绝', async () => {
     ctx.app.llm = fakeLlm(() => JSON.stringify({ tasks: ['设备到货验收', '机柜上架与布线', '应用部署与联调', '割接上线', '结项移交'] }))
+    // 成员 PAT 也可起草（v0.18：立项弹窗起草全员可用，草稿不落库）
+    const tasksBefore = ctx.db.prepare(`SELECT COUNT(*) AS n FROM tasks`).get().n
     const draft = await agent('POST', '/api/v1/agent/actions', {
-      action: 'draft_template_tasks', params: { name: '硬件部署交付', description: '机房设备安装到割接上线' },
-    }, adminToken)
+      action: 'draft_task_list', params: { name: '硬件部署交付', description: '机房设备安装到割接上线' },
+    }, memberToken)
     expect(draft.status).toBe(200)
     expect(draft.body.result.tasks).toHaveLength(5)
+    // 草稿不落库：任务数不变
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM tasks`).get().n).toBe(tasksBefore)
 
-    const create = await agent('POST', '/api/v1/agent/actions', {
-      action: 'create_template', params: { code: 'hw_deploy', name: '硬件部署交付', description: '机房设备安装到割接上线', tasks: draft.body.result.tasks.map((title) => ({ title })) },
+    // v0.18 裁撤：模板对象不存在，create_template / draft_template_tasks 为未知 action
+    const gone = await agent('POST', '/api/v1/agent/actions', {
+      action: 'create_template', params: { code: 'hw_deploy', name: '硬件部署交付', tasks: [] },
     }, adminToken)
-    expect(create.status).toBe(200)
-    expect(create.body.result.tasks).toHaveLength(5)
-    expect(ctx.db.prepare(`SELECT 1 FROM project_templates WHERE code = 'hw_deploy'`).get()).toBeTruthy()
+    expect(gone.status).toBe(400)
+    const gone2 = await agent('POST', '/api/v1/agent/actions', {
+      action: 'draft_template_tasks', params: { name: '硬件部署交付' },
+    }, adminToken)
+    expect(gone2.status).toBe(400)
   })
 })

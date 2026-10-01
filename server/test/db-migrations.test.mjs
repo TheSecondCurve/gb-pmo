@@ -9,14 +9,17 @@ describe('迁移', () => {
     const { db, dir } = setupDb()
     const again = migrate(db)
     expect(again).toBe(0)
-    const templates = db.prepare('SELECT COUNT(*) AS n FROM project_templates').get().n
-    expect(templates).toBe(3)
-    const tasks = db.prepare('SELECT COUNT(*) AS n FROM template_tasks').get().n
-    expect(tasks).toBe(10) // v0.6：模板扁平化（软件交付 6 + 咨询 4）
+    // v0.18：模板对象并入项目类型——模板表已裁撤，任务清单挂在类型下
+    expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN ('project_templates','template_tasks','template_stages','stages','dependencies')`).all()).toEqual([])
+    const types = db.prepare('SELECT COUNT(*) AS n FROM project_types').get().n
+    expect(types).toBe(3)
+    const tasks = db.prepare('SELECT COUNT(*) AS n FROM project_type_tasks').get().n
+    expect(tasks).toBe(10) // 软件交付 6 + 咨询 4（回填自原默认模板；custom 本就为空）
+    // default_template_id 列已随迁移删除
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM pragma_table_info('project_types') WHERE name = 'default_template_id'`).get().n).toBe(0)
     migrate(db)
-    expect(db.prepare('SELECT COUNT(*) AS n FROM template_tasks').get().n).toBe(tasks)
+    expect(db.prepare('SELECT COUNT(*) AS n FROM project_type_tasks').get().n).toBe(tasks)
     // v0.6：阶段与依赖已裁剪，表不存在；任务状态无遗留 blocked/cancelled
-    expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN ('stages','template_stages','dependencies')`).all()).toEqual([])
     expect(db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE status IN ('blocked','cancelled')`).get().n).toBe(0)
     db.close()
   })

@@ -103,12 +103,12 @@ export const api = {
   projectTypes: () => req<{ types: import('./types').ProjectType[] }>('GET', '/api/v1/project-types'),
   createProjectType: (p: Record<string, unknown>) => req<{ type: import('./types').ProjectType }>('POST', '/api/v1/admin/project-types', p),
   patchProjectType: (id: number, p: Record<string, unknown>) => req<{ type: import('./types').ProjectType }>('PATCH', `/api/v1/admin/project-types/${id}`, p),
-  adminTemplates: () => req<{ templates: import('./types').TemplateRow[] }>('GET', '/api/v1/admin/templates'),
-  createTemplate: (p: Record<string, unknown>) => req<{ template: import('./types').TemplateRow }>('POST', '/api/v1/admin/templates', p),
-  patchTemplate: (id: number, p: Record<string, unknown>) => req<{ template: import('./types').TemplateRow }>('PATCH', `/api/v1/admin/templates/${id}`, p),
-  deleteTemplate: (id: number) => req('DELETE', `/api/v1/admin/templates/${id}`),
-  draftTemplateTasks: (body: { name: string; description?: string }) =>
-    req<{ tasks: string[] }>('POST', '/api/v1/admin/templates/draft', body),
+  // S17-9（v0.18）：任务清单 AI 起草——类型编辑器/立项弹窗共用（全员；草稿不落库）
+  draftProjectTasks: (body: { name: string; description?: string }) =>
+    req<{ tasks: string[] }>('POST', '/api/v1/projects/draft-tasks', body),
+  // S1-7：倒排预览（engine 同一公式，不落库）
+  previewSchedule: (body: { planStartDate?: string; planEndDate: string; count: number }) =>
+    req<{ schedule: { planStartDate: string; planEndDate: string }[] }>('POST', '/api/v1/projects/preview-schedule', body),
   adminTokens: () => req<{ tokensByMember: Record<string, { id: number; name: string; tokenPrefix: string; scope: string; expiresAt: number; revokedAt?: number | null }[]> }>('GET', '/api/v1/admin/tokens'),
   revokeAdminToken: (id: number) => req('DELETE', `/api/v1/admin/tokens/${id}`),
 

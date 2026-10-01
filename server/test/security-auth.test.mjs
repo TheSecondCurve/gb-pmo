@@ -41,11 +41,8 @@ describe('认证边界', () => {
       ['GET', '/api/v1/admin/todo'],
       ['POST', '/api/v1/admin/test-llm'],
       ['DELETE', '/api/v1/admin/tokens/1'],
-      ['GET', '/api/v1/admin/templates'],
       ['POST', '/api/v1/admin/project-types'],
       ['PATCH', '/api/v1/admin/project-types/1'],
-      ['POST', '/api/v1/admin/templates'],
-      ['DELETE', '/api/v1/admin/templates/99'],
     ]) {
       const res = await authed(ctx.app, memberCookie, method, url, {})
       expect(res.status).toBe(403)
