@@ -107,6 +107,8 @@ export const DEFAULT_SETTINGS = {
     commandQuotaPerDay: 50,                  // 每成员每日自然语言指令限额（北京日）
   },
   'im.wecom': { corpId: '', secret: '', publicKeyVer: '', privateKey: '', sdkUrl: '' },
+  // S26（v0.19）管理员诊断台：诊断 shell 等价容器执行权——开关默认关，仅可信内网排障用，全程审计
+  debug: { shellEnabled: false, timeoutMs: 10000, maxOutputBytes: 131072 },
   // S24 Web AI 助手会话：每成员每日指令限额（北京日，与 bot_commands 审计同口径）
   chat: { quotaPerDay: 50 },
 }

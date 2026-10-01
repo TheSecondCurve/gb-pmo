@@ -1,5 +1,7 @@
 # 需求初稿（PRD）— 企业项目大脑（Project Brain）
 
+> **v0.19**（2026-10-01）：**管理员诊断台（S26，配置台新二级菜单）**——Docker/PaaS 部署下管理员无法 exec 进容器排障，配置台新增「运维诊断」段：①**诊断 shell**（`debug.shellEnabled` 总开关**默认关**，开启后管理员可在容器内执行 `/bin/sh` 命令排障；超时/输出截断可配，逐条入 `audit_logs` 审计含命令与退出码）；②**飞书长连接自检**（一键跑三段诊断：tenant_access_token → WSClient 握手 → 事件接收提示，复用已存凭证，断点定位到段；不开启 shell 开关也可用）。两者仅系统管理员可用（普通成员 403）。**安全边界**：诊断 shell 等于把容器执行权交给管理员账号，仅在可信内网使用；不用时保持开关关闭。详见 S26 与 §7.9。
+
 > **v0.18**（2026-10-01）：**类型内嵌任务清单 + 立项自定义任务 + 倒排期建议（S1/S17/S25 收敛）**——**「任务模板」独立对象裁撤**（v0.5 的类型/模板两对象模型收敛为单对象）：项目类型**内嵌任务清单**（纯标题列表，一行一条），配置台只维护类型一个对象；`projects.template_code` 保留为立项时所选类型编码的快照（历史事实不回改）。**立项时可完全自定义任务清单**（`tasks` 载荷覆盖类型预填；来源=手填；允许空清单）；立项弹窗选类型即预填清单、可增删改，并开放「AI 起草任务清单」（全员，草稿不落库，S17-9 语义随迁）。**倒排期建议**（S1-7）：立项（web 或 AI 提议）带交付日期时可按「计划开始（缺省今天）→ 交付日期」**均分倒排**每条任务的计划起止（末条截止=交付日期）——一次性确定性填充，非依赖感知求解器（§9 边界不变），随表单/提议整体经人确认生效。S25 提议 kind 收敛为四类：`update_project_status` / `close_project` / `create_project`（可带 `tasks` + `autoSchedule`）/ `create_project_type`（内嵌 `tasks`）；Agent action `draft_template_tasks` 更名 `draft_task_list`（成员可用）、`create_template` 移除（类型创建走提议，管理员确认）。
 
 > **v0.17**（2026-10-01）：**Agent 提议式项目与配置操作（S25）**——写面从任务级扩展到**项目级与配置级**，走通用「提议→确认→生效」机制（`proposals` 表）：新增 `propose` 动作覆盖六类操作——**项目状态**（启动/暂停）、**结项**（S8 规则确认时强校验）、**新建项目**（类型/模板实例化）、**新建项目类型**、**新建/修改任务模板**。发起全放开（成员均可让 AI 起草提议），**确认按矩阵收紧**：项目操作=项目牵头人/管理员；立项=管理员或拟任牵头人；类型/模板=仅系统管理员。生效复用既有 engine 同构校验与审计；飞书走确认卡（HMAC）、web 聊天走页面按钮，同一个 `confirmProposal` 口子。LLM 仍不直接改任何配置（信任边界不变，见 §2/§7.8）。
@@ -315,6 +317,18 @@
 >   - S25-5 当提议新建项目类型（含内嵌 `tasks` 任务清单）时，仅管理员可确认生效（复用 engine 校验：编码唯一、任务标题非空）；非管理员 403；`create_task_template`/`update_task_template` 类提议应 refused（v0.18 已裁撤）。
 >   - S25-6 当飞书侧操作确认卡时，签名校验（HMAC）与点按人实时权限判定与既有卡片一致；web 聊天页面按钮走同一 confirmProposal 口子。
 
+> **场景 S26（P0）— 管理员 — 诊断台（v0.19）**
+> - 触发时机：Docker/PaaS 部署下容器不可 exec，管理员在配置台「运维诊断」段排障（进程环境、网络连通、飞书长连接断点定位）。
+> - 操作内容：①诊断 shell——`debug.shellEnabled` 默认关，配置台开启后可执行 `/bin/sh` 命令（`/bin/sh -c <command>`），回显 stdout/stderr/退出码/耗时/是否超时；超时（`debug.timeoutMs`，1s~60s）与输出截断（`debug.maxOutputBytes`，超限标 truncated）可配；②飞书长连接自检——三段诊断（tenant_access_token 凭证与网络 → WSClient 握手 → 事件接收说明），复用配置台已存 appId/appSecret，逐段回显通过/失败与断点提示。
+> - 产生/变更的记录：`audit_logs` 审计行（action=`debug.shell`：命令、退出码、是否超时、耗时；action=`debug.feishuSelfcheck`：结果概要）。
+> - 完成标志：管理员不开shell、不进容器即可完成「凭证→握手→事件」三段定位与常用排障命令。
+> - 审批/协作：仅系统管理员（普通成员 403）；shell 开关关闭时管理员执行被 400 拒绝并提示开启路径。
+> - 验收标准：
+>   - S26-1 当普通成员调用任一诊断接口时应 403；当 shell 开关关闭（默认）时管理员执行命令应 400 并提示配置台开启路径。
+>   - S26-2 当管理员开启开关执行 `echo` 类命令时，应回显 stdout/stderr/退出码，且 `audit_logs` 落 `debug.shell` 审计行（含命令原文与退出码）。
+>   - S26-3 当命令超过 `debug.timeoutMs` 时应终止并回显 timedOut=true（不挂死请求）；当输出超 `debug.maxOutputBytes` 时应截断并标 truncated=true。
+>   - S26-4 当调用飞书自检且凭证未配置时，应第①段即失败并回明确配置指引（不发起真实外网调用也可离线断言）；已配置时逐段回显通过/失败与断点提示，并留 `debug.feishuSelfcheck` 审计。
+
 **P1/P2 场景（编号预分配，细节在晋级时补全）：**
 
 | 编号 | 级别 | 场景 | 一句话说明 |
@@ -463,6 +477,13 @@ Interactive dashboard 是 P0 标配交付（见 analytics-design.md）。**维�
 - **生效同构**：`confirmProposal` 分发到 `updateProject/closeProject/createProject/createProjectType`，审计与事件留痕由 engine 既有逻辑承担；`decided_by` 落提议行。倒排日期在 engine 内按 S1-7 公式确定性计算（LLM 不做日期算术）。
 - **入口**：飞书=HMAC 签名确认卡（`handleCardAction` 新分支）；web 聊天=消息内嵌按钮 → `POST /api/v1/proposals/:id/confirm|reject`。两入口同一口子。
 - **信任边界不变**：LLM 只起草提议、不选生效路径；结项/暂停/立项等高杠杆操作永远是「AI 建议、人拍板」。
+
+### 7.9 管理员诊断台（S26，v0.19）
+
+**背景**：Docker/PaaS 部署下容器不可 exec（平台不提供 shell 入口），排障（看进程环境、测容器内网络、定位飞书长连接断点）没有抓手。配置台新增二级菜单「运维诊断」，两个能力：
+
+- **诊断 shell**：`POST /api/v1/admin/debug/shell`（engine `debug.runShell`）——`debug.shellEnabled` 总开关**默认关**；开启后以 `/bin/sh -c <command>` 执行（slim 镜像无 bash 也可用），`debug.timeoutMs`（1s~60s，默认 10s）超时终止回 `timedOut`，`debug.maxOutputBytes`（默认 128KB）超限截断回 `truncated`。每次执行（含被拒绝的）入 `audit_logs`（action=`debug.shell`，含命令原文/退出码/耗时）。**安全边界**：等价于把容器执行权交给管理员账号——仅管理员角色可调（普通成员 403）、开关默认关、内网部署、全程审计；不用时应保持关闭。该能力**只服务运维排障**，不属于任何业务流。
+- **飞书长连接自检**：`POST /api/v1/admin/debug/feishu-selfcheck`——复用 `im.feishu` 已存凭证跑三段诊断：①`tenant_access_token`（凭证+到 open.feishu.cn 的网络）→ ②官方 SDK `WSClient` 握手（autoReconnect=false 快速失败）→ ③事件接收提示（该段需人工私聊发消息，回显检查清单：订阅「接收消息 v2.0」/`im:message.p2p_msg:readonly` 已发布/可用范围）。逐段回显通过/失败与断点提示；凭证未配置时①即返回配置指引（不发外网）。独立同款 CLI：`scripts/feishu-ws-test.mjs`。
 
 ### 7.3 偏离记录（须写入项目实例文档）
 

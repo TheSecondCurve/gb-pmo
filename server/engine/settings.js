@@ -36,6 +36,18 @@ const VALIDATORS = {
       throw Object.assign(new Error('chat.quotaPerDay 须为非负整数'), { statusCode: 400 })
     }
   },
+  // S26（v0.19）：诊断台——shell 开关布尔；超时 1~60 秒；输出上限 1KB~1MB
+  debug(value) {
+    if (value?.shellEnabled !== undefined && typeof value.shellEnabled !== 'boolean') {
+      throw Object.assign(new Error('debug.shellEnabled 须为布尔值（true/false）'), { statusCode: 400 })
+    }
+    if (value?.timeoutMs !== undefined && (!Number.isInteger(value.timeoutMs) || value.timeoutMs < 1000 || value.timeoutMs > 60000)) {
+      throw Object.assign(new Error('debug.timeoutMs 须为 1000~60000 的整数（毫秒）'), { statusCode: 400 })
+    }
+    if (value?.maxOutputBytes !== undefined && (!Number.isInteger(value.maxOutputBytes) || value.maxOutputBytes < 1024 || value.maxOutputBytes > 1048576)) {
+      throw Object.assign(new Error('debug.maxOutputBytes 须为 1024~1048576 的整数（字节）'), { statusCode: 400 })
+    }
+  },
 }
 
 // 保存前归一化（按 key，整体重写 value）：v0.15 起 llm 按类别分开存储——写入只作用于目标类别的子配置
