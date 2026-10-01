@@ -293,6 +293,7 @@ function ChannelsCard({ channels, onDone }: { channels: ChannelRow[]; onDone: ()
 // —— Tab 3：阈值与推送 ——
 
 interface Thresholds { silentDays: number; keypersonMaxProjects: number; acceptanceAlarm: number; suggestTimeoutHours: number; routingConfidence: number }
+interface ChatCfg { quotaPerDay: number }
 interface SchedulerCfg {
   extractionCron: string; extractionEnabled: boolean
   alertCron: string; alertEnabled: boolean
@@ -304,14 +305,16 @@ function ParamsTab() {
   const { toast } = useStore()
   const [thresholds, setThresholds] = useState<Thresholds | null>(null)
   const [sched, setSched] = useState<SchedulerCfg | null>(null)
+  const [chat, setChat] = useState<ChatCfg | null>(null)
   useEffect(() => {
     void (async () => {
       const s = await api.settings()
       setThresholds(s.thresholds as Thresholds)
       setSched(s.scheduler as SchedulerCfg)
+      setChat(s.chat as ChatCfg)
     })()
   }, [])
-  if (!thresholds || !sched) return <Spinner />
+  if (!thresholds || !sched || !chat) return <Spinner />
   const num = (k: keyof Thresholds) => (
     <input type="number" step="0.05" className={inputCls} value={thresholds[k]} onChange={(e) => setThresholds({ ...thresholds, [k]: Number(e.target.value) })} />
   )
@@ -337,6 +340,15 @@ function ParamsTab() {
           <Field label="通用群分拣置信度">{num('routingConfidence')}</Field>
         </div>
         <Btn kind="primary" onClick={async () => { await api.putSetting('thresholds', thresholds); toast('阈值已保存'); const s = await api.settings(); setThresholds(s.thresholds as Thresholds) }}>保存阈值</Btn>
+      </Card>
+      <Card title="AI 助手（S24，v0.16）：每成员每日指令限额（北京日，与审计同口径）">
+        <div className="flex items-end gap-3">
+          <Field label="每日指令限额">
+            <input type="number" min={0} step={1} className={inputCls + ' !w-32'} value={chat.quotaPerDay}
+              onChange={(e) => setChat({ ...chat, quotaPerDay: Number(e.target.value) })} />
+          </Field>
+          <Btn kind="primary" onClick={async () => { await api.putSetting('chat', chat); toast('AI 助手限额已保存'); const s = await api.settings(); setChat(s.chat as ChatCfg) }}>保存</Btn>
+        </div>
       </Card>
       <Card title="大脑调度（S18，v0.7）：标准 cron「分 时 日 月 周」+ 每任务开关，保存即生效无需重启">
         <div className="flex flex-wrap items-end gap-3">

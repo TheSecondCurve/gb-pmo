@@ -7,6 +7,7 @@ import Dashboard from './pages/Dashboard'
 import Projects from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
 import Admin from './pages/Admin'
+import Chat from './pages/Chat'
 
 // hash 路由（自写，静态托管无需 history fallback）
 function useHashRoute(): [string, (to: string) => void] {
@@ -32,6 +33,7 @@ export default function App() {
   const m = path.match(/^#?\/projects\/(\d+)$/)
   if (path === '/' || path === '/dashboard') page = <Dashboard />
   else if (path === '/projects') page = <Projects />
+  else if (path === '/chat') page = <Chat /> // S24 AI 助手（全员）
   else if (m) page = <ProjectDetail id={Number(m[1])} />
   else if (path === '/admin' || path.startsWith('/admin/')) {
     // 配置台二级路由：#/admin/<section>/<tab>（S17，仅系统管理员；Shell 负责缺省段归一化）
@@ -50,6 +52,7 @@ export default function App() {
           {[
             ['#/dashboard', '全局看板'],
             ['#/projects', '项目列表'],
+            ['#/chat', 'AI 助手'],
             ...(member.role === 'admin' ? [['#/admin', '配置台']] : []),
           ].map(([href, label]) => (
             <a

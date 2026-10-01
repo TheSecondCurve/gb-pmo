@@ -5,6 +5,7 @@ import * as tasks from '../engine/tasks.js'
 import * as events from '../engine/events.js'
 import * as projectTypes from '../engine/projectTypes.js'
 import * as auth from '../engine/auth.js'
+import * as chat from '../brain/chat.js' // S24 Web AI 助手会话（编排层复用 S20 核心 Agent）
 import { getAllSettings, setSetting, getSetting } from '../engine/settings.js'
 import { queryMetric, listMetrics } from '../engine/metrics.js'
 import { assertValue } from '../engine/enums.js'
@@ -209,6 +210,16 @@ export function registerApiRoutes(app) {
 
   app.post('/api/v1/events/:id/confirm', async (req) => events.confirmEvent(db, Number(req.params.id), req.member.id))
   app.post('/api/v1/events/:id/reject', async (req) => events.rejectEvent(db, Number(req.params.id), req.member.id))
+
+  // —— S24 Web AI 助手会话（全员；会话与消息仅本人，软删） ——
+  app.get('/api/v1/chat/sessions', async (req) => chat.listSessions(db, req.member.id))
+  app.post('/api/v1/chat/sessions', async (req, reply) =>
+    reply.status(201).send(chat.createSession(db, req.member.id, { title: req.body?.title })))
+  app.patch('/api/v1/chat/sessions/:id', async (req) => chat.renameSession(db, req.member.id, Number(req.params.id), req.body?.title))
+  app.delete('/api/v1/chat/sessions/:id', async (req) => chat.deleteSession(db, req.member.id, Number(req.params.id)))
+  app.get('/api/v1/chat/sessions/:id/messages', async (req) => chat.listMessages(db, req.member.id, Number(req.params.id)))
+  app.post('/api/v1/chat/sessions/:id/messages', async (req) =>
+    chat.sendChatMessage(db, { memberId: req.member.id, sessionId: Number(req.params.id), text: req.body?.text }, { llm: app.llm ?? undefined }))
 
   // —— 指标（dashboard 取数唯一入口）——
 

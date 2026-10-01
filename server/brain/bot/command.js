@@ -329,11 +329,14 @@ export function schemaDigest(db) {
     .join('\n')
 }
 
-export function buildSystemPrompt(db, { member, channel, chatType }) {
+export function buildSystemPrompt(db, { member, channel, chatType, surface = 'im' }) {
   const now = new Date()
   const weekday = '日一二三四五六'[new Date(now.getTime() + 8 * 3_600_000).getUTCDay()]
+  const web = surface === 'web' // S24：web AI 助手会话（同一核心 Agent 的 web 入口）
   let ctxLine = '当前对话：用户私聊（无默认项目，涉及具体项目先确认项目名/id）。'
-  if (chatType === 'group') {
+  if (web) {
+    ctxLine = '当前对话：项目大脑 web 端 AI 助手（无默认项目，涉及具体项目先确认项目名/id；群登记类操作不可用）。'
+  } else if (chatType === 'group') {
     const p = channel?.project_id ? db.prepare('SELECT id, name FROM projects WHERE id = ?').get(channel.project_id) : null
     ctxLine = channel?.channel_type === 'dedicated' && p
       ? `当前对话：项目专题群，默认项目「${p.name}」（id=${p.id}）——不点名项目的登记/变更/查询默认落到它。`
@@ -341,7 +344,7 @@ export function buildSystemPrompt(db, { member, channel, chatType }) {
         ? '当前对话：通用群（已登记为通用渠道），无默认项目，涉及具体项目先确认。'
         : '当前对话：未登记项目群（无默认项目，涉及具体项目先确认项目名/id）。'
   }
-  return `你是「企业项目大脑」的机器人助手（以应用自身身份应答，不冒充任何成员）。
+  return `你是「企业项目大脑」的${web ? 'AI 助手（web 会话）' : '机器人助手（以应用自身身份应答，不冒充任何成员）'}。
 ${ctxLine}
 当前用户：${member.name}（${label('memberRole', member.role)}，id=${member.id}）。今天是 ${today(now)}（星期${weekday}），日期一律北京时区。
 
@@ -353,16 +356,16 @@ ${schemaDigest(db)}
 {"action":"metric","id":"<指标id>","params":{}} 口径化指标：${metricIdList()}
 {"action":"write","kind":"record_event","payload":{"projectId":1,"eventType":"progress|risk|decision|blocker","summary":"一句中文"}}
 {"action":"write","kind":"suggest_event","payload":{"targetTaskId":1,"targetField":"status|plan_start_date|plan_end_date|responsible_member_id","targetValue":"done|YYYY-MM-DD|成员id","summary":"可选，缺省自动生成"}}
-{"action":"write","kind":"bind_channel","payload":{"projectId":1,"chatName":"群名"}}   仅群聊可用，仅项目牵头人/管理员
+${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅飞书群聊）' : '{"action":"write","kind":"bind_channel","payload":{"projectId":1,"chatName":"群名"}}   仅群聊可用，仅项目牵头人/管理员'}
 {"action":"write","kind":"trigger","payload":{"name":"trigger_extraction|generate_project_digest|generate_person_digest|push_report","params":{}}}
 {"action":"reply","text":"最终答复"}            查够/完成后回答；需要向用户澄清时也用它提问
 
 规则：
 1. 先查后答：结论必须基于 query/metric 取回的数据，取不到就明说，绝不编造项目事实。
 2. 项目/任务/成员一律用你查到的真实 id；相对日期按今天换算成 YYYY-MM-DD。
-3. 纯进展/风险/决策/阻塞 → record_event 直接登记；任务变更（状态/日期/责任人）→ suggest_event 出确认卡，不得谎称已改。
+3. 纯进展/风险/决策/阻塞 → record_event 直接登记；任务变更（状态/日期/责任人）→ suggest_event ${web ? '生成待确认事件（用户会在页面上确认生效），不得谎称已改' : '出确认卡，不得谎称已改'}。
 4. 不支持的事（财务/合同/绩效/自动重排期求解等）直接说明不支持。
-5. 回复用简洁中文，短段/列表即可。`
+5. 回复用简洁中文，短段/列表即可。${web ? '\n6. 这是多轮会话：参考对话历史理解指代（「它/这个项目」等），历史里已有的查询结果可直接引用。' : ''}`
 }
 
 function metricIdList() {
