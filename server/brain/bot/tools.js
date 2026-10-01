@@ -9,6 +9,7 @@ import { queryMetric } from '../../engine/metrics.js'
 import { addEvent } from '../../engine/events.js'
 import { assertValue, label } from '../../engine/enums.js'
 import { pushSuggestion } from '../extract.js'
+import { createProposal, PROPOSAL_KINDS } from '../../engine/proposals.js'
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 // 建议字段 → 事件类型（与 IM 抽取器同口径，confirmEvent.applyTaskPatch 支持的字段子集）
@@ -37,7 +38,8 @@ export async function runWriteTool(db, { kind, payload = {} }, ctx) {
     if (kind === 'suggest_event') return writeSuggestEvent(db, payload, ctx)
     if (kind === 'bind_channel') return writeBindChannel(db, payload, ctx)
     if (kind === 'trigger') return await runTrigger(db, payload, ctx)
-    return refused(`不支持的写类型: ${kind}（可用 record_event/suggest_event/bind_channel/trigger）`)
+    if (kind === 'propose') return writePropose(db, payload, ctx)
+    return refused(`不支持的写类型: ${kind}（可用 record_event/suggest_event/bind_channel/trigger/propose）`)
   } catch (e) {
     if (e.statusCode === 403) return refused(`权限不足：${e.message}`, 'refused_permission')
     return refused(`操作被拒绝：${e.message}`)
@@ -117,6 +119,109 @@ function writeBindChannel(db, payload, ctx) {
     projectId: project.id, projectName: project.name,
     chatId: ctx.evt.chatId, chatName: String(payload.chatName || ctx.evt.chatTitle || ''),
   }
+}
+
+// —— S25（v0.17）项目级/配置级提议：软校验（真实 id + 合法枚举 + 摘要化），生效见 engine/proposals.js ——
+
+const normTasks = (tasks) => (Array.isArray(tasks) ? tasks : []).map((t) => (typeof t === 'string' ? { title: t } : t)).filter((t) => t && t.title)
+const DATE_OK = /^\d{4}-\d{2}-\d{2}$/
+
+function writePropose(db, payload, ctx) {
+  const kind = String(payload?.kind || '')
+  if (!PROPOSAL_KINDS[kind]) return refused(`不支持的提议类型: ${kind}（可用 ${Object.keys(PROPOSAL_KINDS).join(' / ')}）`)
+  const check = softValidateProposal(db, kind, payload)
+  if (check.error) return refused(check.error)
+  const prop = createProposal(db, { kind, payload: check.payload, summary: check.summary, proposedBy: ctx.member.id })
+  return { type: 'card', cardKind: 'propose', proposalId: prop.id, kind, summary: prop.summary }
+}
+
+function getProj(db, id) {
+  return Number(id) ? db.prepare('SELECT id, name, status, lead_member_id, plan_end_date FROM projects WHERE id = ?').get(Number(id)) : null
+}
+
+function softValidateProposal(db, kind, p) {
+  if (kind === 'update_project_status') {
+    const proj = getProj(db, p.projectId)
+    if (!proj) return { error: 'projectId 必填且须为真实项目 id（先 query 查项目）' }
+    const status = String(p.status || '')
+    if (!['planning', 'active', 'paused'].includes(status)) {
+      return { error: 'status 仅支持 planning/active/paused（结项请用 close_project）' }
+    }
+    const payload = { projectId: proj.id, status }
+    let detail = `${label('projectStatus', proj.status)} → ${label('projectStatus', status)}`
+    if (status === 'active') {
+      const endDate = String(p.planEndDate || proj.plan_end_date || '')
+      if (!DATE_OK.test(endDate)) return { error: '项目尚无交付日期：启动提议须同时带 planEndDate（YYYY-MM-DD，S21）' }
+      if (!proj.plan_end_date) { payload.planEndDate = endDate; detail += `，补交付日期 ${endDate}` }
+    }
+    return { payload, summary: `项目「${proj.name}」状态 ${detail}` }
+  }
+  if (kind === 'close_project') {
+    const proj = getProj(db, p.projectId)
+    if (!proj) return { error: 'projectId 必填且须为真实项目 id（先 query 查项目）' }
+    const open = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND status != 'done'`).get(proj.id).n
+    return {
+      payload: { projectId: proj.id, ...(p.summary ? { summary: String(p.summary).slice(0, 200) } : {}) },
+      summary: `项目「${proj.name}」结项${open ? `（还有 ${open} 个未完成任务，确认时按 S8 校验）` : '（任务已全部完成）'}`,
+    }
+  }
+  if (kind === 'create_project') {
+    if (!String(p.name || '').trim()) return { error: 'name 必填（项目名）' }
+    if (!p.leadMemberId) return { error: 'leadMemberId 必填（拟任牵头人 id，先 query 查成员）' }
+    const lead = db.prepare(`SELECT id, name FROM members WHERE id = ? AND status = 'active'`).get(Number(p.leadMemberId))
+    if (!lead) return { error: '牵头人不存在或已离职（先 query 查成员）' }
+    if (!p.typeCode && !p.templateCode) return { error: 'typeCode 必填（项目类型编码，先 query 查 project_types）' }
+    if (p.typeCode && !db.prepare(`SELECT code FROM project_types WHERE code = ? AND status = 'active'`).get(String(p.typeCode))) {
+      return { error: `项目类型 ${p.typeCode} 不存在或已停用（先 query 查 project_types）` }
+    }
+    if (p.planEndDate && !DATE_OK.test(String(p.planEndDate))) return { error: 'planEndDate 须为 YYYY-MM-DD' }
+    return {
+      payload: {
+        name: String(p.name).trim().slice(0, 100), typeCode: p.typeCode ? String(p.typeCode) : undefined,
+        templateCode: p.templateCode ? String(p.templateCode) : undefined, leadMemberId: lead.id,
+        ...(p.priority ? { priority: String(p.priority) } : {}), ...(p.clientName ? { clientName: String(p.clientName) } : {}),
+        ...(p.planStartDate ? { planStartDate: String(p.planStartDate) } : {}), ...(p.planEndDate ? { planEndDate: String(p.planEndDate) } : {}),
+      },
+      summary: `立项「${String(p.name).trim()}」（类型 ${p.typeCode || p.templateCode}，牵头人 ${lead.name}${p.planEndDate ? `，交付 ${p.planEndDate}` : ''}）`,
+    }
+  }
+  if (kind === 'create_task_template') {
+    if (!p.code || !p.name) return { error: 'code/name 必填（模板编码与名称）' }
+    if (db.prepare('SELECT 1 FROM project_templates WHERE code = ?').get(String(p.code))) return { error: `模板编码已存在: ${p.code}` }
+    const tasks = normTasks(p.tasks)
+    if (!tasks.length) return { error: 'tasks 必填（任务标题数组，1~30 条）' }
+    return {
+      payload: { code: String(p.code), name: String(p.name), ...(p.description ? { description: String(p.description) } : {}), tasks },
+      summary: `新建任务模板「${p.name}」（${p.code}，${tasks.length} 项任务）`,
+    }
+  }
+  if (kind === 'update_task_template') {
+    const tpl = p.templateId
+      ? db.prepare('SELECT id, code, name FROM project_templates WHERE id = ?').get(Number(p.templateId))
+      : db.prepare('SELECT id, code, name FROM project_templates WHERE code = ?').get(String(p.templateCode || ''))
+    if (!tpl) return { error: 'templateCode（或 templateId）必填且须为真实任务模板（先 query 查 project_templates）' }
+    if (p.name === undefined && p.description === undefined && p.tasks === undefined) return { error: '至少给出 name / description / tasks 之一（tasks 给出即整体替换，只影响未来立项）' }
+    const parts = []
+    if (p.name !== undefined) parts.push('改名')
+    if (p.description !== undefined) parts.push('改说明')
+    if (p.tasks !== undefined) parts.push(`任务清单整体替换为 ${normTasks(p.tasks).length} 项`)
+    return {
+      payload: { templateId: tpl.id, ...(p.name !== undefined ? { name: String(p.name) } : {}), ...(p.description !== undefined ? { description: String(p.description ?? '') } : {}), ...(p.tasks !== undefined ? { tasks: normTasks(p.tasks) } : {}) },
+      summary: `修改任务模板「${tpl.name}」（${tpl.code}）：${parts.join('、')}`,
+    }
+  }
+  if (kind === 'create_project_type') {
+    if (!p.code || !p.name) return { error: 'code/name 必填（类型编码与名称）' }
+    if (!p.defaultTemplateCode) return { error: 'defaultTemplateCode 必填（绑定的默认任务模板编码，先 query 查 project_templates）' }
+    if (db.prepare('SELECT 1 FROM project_types WHERE code = ?').get(String(p.code))) return { error: `类型编码已存在: ${p.code}` }
+    const tpl = db.prepare('SELECT id, code FROM project_templates WHERE code = ?').get(String(p.defaultTemplateCode))
+    if (!tpl) return { error: `任务模板 ${p.defaultTemplateCode} 不存在（先 query 查 project_templates）` }
+    return {
+      payload: { code: String(p.code), name: String(p.name), ...(p.description ? { description: String(p.description) } : {}), defaultTemplateCode: tpl.code },
+      summary: `新建项目类型「${p.name}」（${p.code}，默认模板 ${tpl.code}）`,
+    }
+  }
+  return { error: `未知提议类型 ${kind}` }
 }
 
 async function runTrigger(db, payload, ctx) {

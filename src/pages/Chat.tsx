@@ -19,7 +19,7 @@ export default function Chat() {
   const [busy, setBusy] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editTitle, setEditTitle] = useState('')
-  const [decided, setDecided] = useState<Record<number, string>>({}) // 本地记住已操作的建议事件（历史里已生效的由后端状态表达不了，简化处理）
+  const [decided, setDecided] = useState<Record<string, string>>({}) // 本地记住已操作的建议事件/操作提议（键 e:事件id / p:提议id）
   const bottomRef = useRef<HTMLDivElement>(null)
 
   const reloadSessions = async (select?: number) => {
@@ -78,12 +78,13 @@ export default function Chat() {
       setBusy(false)
     }
   }
-  const decide = async (eventId: number, action: 'confirm' | 'reject') => {
+  const decide = async (key: string, id: number, action: 'confirm' | 'reject') => {
     try {
-      if (action === 'confirm') await api.confirmEvent(eventId)
-      else await api.rejectEvent(eventId)
-      setDecided((d) => ({ ...d, [eventId]: action === 'confirm' ? '已生效' : '已驳回' }))
-      toast(action === 'confirm' ? `建议事件 #${eventId} 已生效` : `建议事件 #${eventId} 已驳回`)
+      const isProposal = key.startsWith('p:')
+      if (action === 'confirm') isProposal ? await api.confirmProposal(id) : await api.confirmEvent(id)
+      else isProposal ? await api.rejectProposal(id) : await api.rejectEvent(id)
+      setDecided((d) => ({ ...d, [key]: action === 'confirm' ? '已生效' : '已驳回' }))
+      toast(action === 'confirm' ? `#${id} 已生效` : `#${id} 已驳回`)
     } catch (e) {
       toast((e as Error).message, 'bad')
     }
@@ -141,19 +142,24 @@ export default function Chat() {
                     ? 'bg-[var(--color-brand-soft)] text-[var(--color-ink)]'
                     : 'border border-[var(--color-line)] bg-[var(--color-bg)]'}`}>
                     <div className="whitespace-pre-wrap break-words">{m.content}</div>
-                    {m.role === 'assistant' && m.meta?.eventId && (
-                      <div className="mt-2 flex items-center gap-2 border-t border-[var(--color-line)] pt-2">
-                        <span className="text-[11px] text-[var(--color-ink-soft)]">建议事件 #{m.meta.eventId}</span>
-                        {decided[m.meta.eventId] ? (
-                          <span className="text-[11px] text-[var(--color-ink-soft)]">{decided[m.meta.eventId]}</span>
-                        ) : (
-                          <>
-                            <Btn small kind="primary" onClick={() => void decide(m.meta!.eventId!, 'confirm')}>生效</Btn>
-                            <Btn small kind="ghost" onClick={() => void decide(m.meta!.eventId!, 'reject')}>驳回</Btn>
-                          </>
-                        )}
-                      </div>
-                    )}
+                    {m.role === 'assistant' && (m.meta?.eventId || m.meta?.proposalId) && (() => {
+                      const isProposal = !!m.meta?.proposalId
+                      const id = (isProposal ? m.meta!.proposalId : m.meta!.eventId)!
+                      const key = `${isProposal ? 'p' : 'e'}:${id}`
+                      return (
+                        <div className="mt-2 flex items-center gap-2 border-t border-[var(--color-line)] pt-2">
+                          <span className="text-[11px] text-[var(--color-ink-soft)]">{isProposal ? '操作提议' : '建议事件'} #{id}</span>
+                          {decided[key] ? (
+                            <span className="text-[11px] text-[var(--color-ink-soft)]">{decided[key]}</span>
+                          ) : (
+                            <>
+                              <Btn small kind="primary" onClick={() => void decide(key, id, 'confirm')}>生效</Btn>
+                              <Btn small kind="ghost" onClick={() => void decide(key, id, 'reject')}>驳回</Btn>
+                            </>
+                          )}
+                        </div>
+                      )
+                    })()}
                     <div className="mt-1 text-right text-[10px] text-[var(--color-ink-soft)]">
                       {fmtDateTime(m.created_at)}{m.role === 'assistant' && m.meta?.llmCalls ? ` · ${m.meta.llmCalls} 轮${m.meta.queries ? ` · ${m.meta.queries} 查` : ''}` : ''}
                     </div>
