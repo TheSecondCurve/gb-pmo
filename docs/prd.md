@@ -417,7 +417,7 @@ Interactive dashboard 是 P0 标配交付（见 analytics-design.md）。**维�
 
 | 层 | 采用 | 本项目落地 |
 |---|---|---|
-| 前端 | Vite + React SPA + Tailwind（YNAB 式交互：就地编辑、Toast、键盘流、设置页即控制台） | 老板全局 dashboard、项目/任务就地编辑、S17 配置台 |
+| 前端 | Vite + React SPA + Tailwind（YNAB 式交互：就地编辑、Toast、键盘流、设置页即控制台） | 老板全局 dashboard、项目/任务就地编辑、S17 配置台；**响应式适配移动端**（<768px）：顶栏+抽屉导航替代侧栏、配置台分区/Chat 会话横排选择、数据表卡片内横向滚动、表单列数与输入行按断点折叠 |
 | 后端 | Fastify + better-sqlite3，REST `/api/*`，内网单进程 | 同标准；大脑定时任务先跑在同一进程 |
 | 数据库 | SQLite + Drizzle（连接层 PRAGMA；`.backup` 备份） | 事件流 append-only；每日备份滚动保留 |
 | 认证 | session + httpOnly cookie；Agent 走 PAT（hash 存储、read/write scope、90 天） | 同标准；**数据范围=全员透明（D1），权限只分功能角色（管理员/普通），无行级数据权限** |

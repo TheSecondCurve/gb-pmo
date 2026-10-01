@@ -28,40 +28,42 @@ export default function Projects() {
 
       <Card>
         {projects.length === 0 ? <Empty hint="暂无项目" /> : (
-          <table className="w-full text-[13px]">
-            <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
-              <tr className="border-b border-[var(--color-line)]">
-                <th className="py-1.5">优先级</th><th>项目</th><th>牵头人</th><th>状态</th>
-                <th className="num">逾期</th><th>交付周期（S21）</th><th>类型</th>
-              </tr>
-            </thead>
-            <tbody>
-              {projects.map((p) => (
-                <tr key={p.id} className="border-b border-[var(--color-line)] last:border-0 hover:bg-[var(--color-bg)]">
-                  <td className="py-1">
-                    <InlineSelect value={p.priority} options={PRIORITY_LABEL} onSubmit={async (v) => {
-                      await api.patchProject(p.id, { priority: v }); toast('优先级已调整并留痕'); await refresh()
-                    }} />
-                  </td>
-                  <td><a className="text-[var(--color-brand)] hover:underline" href={`#/projects/${p.id}`}>{p.name}</a>{p.clientName ? <span className="text-[var(--color-ink-soft)]">（{p.clientName}）</span> : null}</td>
-                  <td>{p.leadName}</td>
-                  <td>
-                    <InlineSelect value={p.status} options={{ planning: '待启动', active: '进行中', paused: '已暂停', cancelled: '已取消' }} onSubmit={async (v) => {
-                      try { await api.patchProject(p.id, { status: v }); toast('状态已更新'); await refresh() } catch (e) { toast((e as Error).message, 'bad') }
-                    }} />
-                  </td>
-                  <td className={`num ${p.overdueTasks ? 'text-[var(--color-bad)]' : ''}`}>{p.overdueTasks}</td>
-                  <td className="num">
-                    {p.planStartDate || '?'} ~ {p.planEndDate || '?'}{' '}
-                    {p.daysToDelivery != null && (p.daysToDelivery >= 0
-                      ? <Badge tone={p.daysToDelivery <= 3 ? 'warn' : 'muted'}>{p.daysToDelivery === 0 ? '今日交付' : `剩 ${p.daysToDelivery} 天`}</Badge>
-                      : <Badge tone="bad">超期 {-p.daysToDelivery} 天</Badge>)}
-                  </td>
-                  <td className="text-[var(--color-ink-soft)]">{p.typeName || p.templateCode}</td>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[40rem] text-[13px]">
+              <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
+                <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap">
+                  <th className="py-1.5">优先级</th><th>项目</th><th>牵头人</th><th>状态</th>
+                  <th className="num">逾期</th><th>交付周期（S21）</th><th>类型</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {projects.map((p) => (
+                  <tr key={p.id} className="border-b border-[var(--color-line)] last:border-0 hover:bg-[var(--color-bg)]">
+                    <td className="py-1">
+                      <InlineSelect value={p.priority} options={PRIORITY_LABEL} onSubmit={async (v) => {
+                        await api.patchProject(p.id, { priority: v }); toast('优先级已调整并留痕'); await refresh()
+                      }} />
+                    </td>
+                    <td><a className="text-[var(--color-brand)] hover:underline" href={`#/projects/${p.id}`}>{p.name}</a>{p.clientName ? <span className="text-[var(--color-ink-soft)]">（{p.clientName}）</span> : null}</td>
+                    <td>{p.leadName}</td>
+                    <td>
+                      <InlineSelect value={p.status} options={{ planning: '待启动', active: '进行中', paused: '已暂停', cancelled: '已取消' }} onSubmit={async (v) => {
+                        try { await api.patchProject(p.id, { status: v }); toast('状态已更新'); await refresh() } catch (e) { toast((e as Error).message, 'bad') }
+                      }} />
+                    </td>
+                    <td className={`num ${p.overdueTasks ? 'text-[var(--color-bad)]' : ''}`}>{p.overdueTasks}</td>
+                    <td className="num">
+                      {p.planStartDate || '?'} ~ {p.planEndDate || '?'}{' '}
+                      {p.daysToDelivery != null && (p.daysToDelivery >= 0
+                        ? <Badge tone={p.daysToDelivery <= 3 ? 'warn' : 'muted'}>{p.daysToDelivery === 0 ? '今日交付' : `剩 ${p.daysToDelivery} 天`}</Badge>
+                        : <Badge tone="bad">超期 {-p.daysToDelivery} 天</Badge>)}
+                    </td>
+                    <td className="text-[var(--color-ink-soft)]">{p.typeName || p.templateCode}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </Card>
 
@@ -152,7 +154,7 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
           </select>
         </Field>
       </div>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Field label="客户（可选）"><input className={inputCls} value={form.clientName} onChange={(e) => set('clientName', e.target.value)} /></Field>
         <Field label="计划开始"><input type="date" className={inputCls} value={form.planStartDate} onChange={(e) => set('planStartDate', e.target.value)} /></Field>
         <Field label="交付日期（S21：切「进行中」前必填）"><input type="date" className={inputCls} value={form.planEndDate} onChange={(e) => set('planEndDate', e.target.value)} /></Field>

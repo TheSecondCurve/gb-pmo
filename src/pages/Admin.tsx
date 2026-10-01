@@ -26,6 +26,17 @@ export default function Admin({ section, tab }: { section?: string; tab?: string
       <h1 className="mb-3 text-lg font-bold">
         配置台 <span className="text-[12px] font-normal text-[var(--color-ink-soft)]">仅系统管理员 · 变更即审计留痕（S17）</span>
       </h1>
+      {/* 移动端分区菜单（<768px）：横排胶囊替代桌面左侧竖栏 */}
+      <div data-nav="admin-sections" className="mb-3 flex gap-1 overflow-x-auto md:hidden">
+        {ADMIN_SECTIONS.map((s) => (
+          <a
+            key={s.key} href={`#/admin/${s.key}`}
+            className={`whitespace-nowrap rounded-md px-3 py-1.5 text-[13px] ${
+              s.key === sec.key ? 'bg-[var(--color-brand-soft)] font-medium text-[var(--color-brand)]' : 'bg-[var(--color-bg)] text-[var(--color-ink-soft)]'
+            }`}
+          >{s.label}</a>
+        ))}
+      </div>
       <div className="flex gap-5">
         <aside className="hidden w-32 shrink-0 flex-col gap-0.5 md:flex">
           {ADMIN_SECTIONS.map((s) => (

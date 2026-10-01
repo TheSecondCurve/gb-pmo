@@ -27,7 +27,7 @@ export function Modal({ title, children, onClose, wide }: { title: string; child
   }, [onClose])
   return (
     <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 p-4 fade-in" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className={`pop-in max-h-[88vh] w-full overflow-auto rounded-lg bg-[var(--color-card)] shadow-xl ${wide ? 'max-w-3xl' : 'max-w-md'}`}>
+      <div className={`pop-in max-h-[88dvh] w-full overflow-auto rounded-lg bg-[var(--color-card)] shadow-xl ${wide ? 'max-w-3xl' : 'max-w-md'}`}>
         <div className="flex items-center justify-between border-b border-[var(--color-line)] px-4 py-3">
           <div className="font-semibold">{title}</div>
           <button className="text-[var(--color-ink-soft)] hover:text-[var(--color-ink)]" onClick={onClose}>✕</button>

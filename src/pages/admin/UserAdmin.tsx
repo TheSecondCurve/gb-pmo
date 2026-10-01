@@ -74,48 +74,50 @@ function MembersTab() {
           }}>创建</Btn>
         </div>
       )}
-      <table className="w-full text-[13px]">
-        <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
-          <tr className="border-b border-[var(--color-line)]"><th className="py-1.5">姓名</th><th>用户名</th><th>飞书 id</th><th>企微 id</th><th>团队</th><th>关键人</th><th>并行上限</th><th>角色</th><th>状态</th><th></th></tr>
-        </thead>
-        <tbody>
-          {members.map((m) => (
-            <tr key={m.id} className="border-b border-[var(--color-line)] last:border-0 hover:bg-[var(--color-bg)]">
-              <td className="py-1">{m.name}</td>
-              <td className="num">{m.username}</td>
-              <td><InlineText value={m.feishuId} placeholder="未绑" onSubmit={async (v) => { await api.patchMember(m.id, { feishuId: v }); toast('飞书 id 已更新（后续抽取按新 id 归因）'); await refresh() }} /></td>
-              <td><InlineText value={m.wecomId} placeholder="未绑" onSubmit={async (v) => { await api.patchMember(m.id, { wecomId: v }); await refresh() }} /></td>
-              <td><InlineText value={m.team} placeholder="—" onSubmit={async (v) => { await api.patchMember(m.id, { team: v }); await refresh() }} /></td>
-              <td>{m.isKeyPerson ? '★' : ''}</td>
-              <td className="num"><InlineText type="number" value={m.maxParallelProjects} onSubmit={async (v) => { await api.patchMember(m.id, { maxParallelProjects: Number(v) }); await refresh() }} /></td>
-              <td><InlineSelect value={m.role} options={ROLE_LABEL} onSubmit={(v) => changeRole(m, v)} /></td>
-              <td><Badge tone={m.status === 'active' ? 'ok' : 'muted'}>{m.status === 'active' ? '在职' : '离职'}</Badge></td>
-              <td>{m.status === 'active' && (
-                <Btn small kind="danger" onClick={async () => {
-                  if (!confirm(`离职 ${m.name}：需先转交其名下任务与牵头项目，继续？`)) return
-                  try {
-                    await api.offboardMember(m.id, {})
-                    toast('存在未转交项，请在弹窗中处理', 'bad')
-                  } catch (e) {
-                    const data = (e as { data?: { missingTasks?: number[]; missingProjects?: number[] } }).data
-                    if (data?.missingTasks || data?.missingProjects) {
-                      const toId = prompt(`待转交：任务 ${data.missingTasks?.length || 0} 项、项目 ${data.missingProjects?.length || 0} 个。输入转交给谁的成员 id（1=${members[0]?.name}）`)
-                      if (!toId) return
-                      try {
-                        await api.offboardMember(m.id, {
-                          tasks: (data.missingTasks || []).map((id) => ({ taskId: id, toMemberId: Number(toId) })),
-                          projects: (data.missingProjects || []).map((id) => ({ projectId: id, toMemberId: Number(toId) })),
-                        })
-                        toast('已离职并完成转交（会话与令牌联动失效）'); await refresh()
-                      } catch (e2) { toast((e2 as Error).message, 'bad') }
-                    } else toast((e as Error).message, 'bad')
-                  }
-                }}>离职</Btn>
-              )}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[52rem] text-[13px]">
+          <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
+            <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap"><th className="py-1.5">姓名</th><th>用户名</th><th>飞书 id</th><th>企微 id</th><th>团队</th><th>关键人</th><th>并行上限</th><th>角色</th><th>状态</th><th></th></tr>
+          </thead>
+          <tbody>
+            {members.map((m) => (
+              <tr key={m.id} className="border-b border-[var(--color-line)] last:border-0 hover:bg-[var(--color-bg)]">
+                <td className="py-1">{m.name}</td>
+                <td className="num">{m.username}</td>
+                <td><InlineText value={m.feishuId} placeholder="未绑" onSubmit={async (v) => { await api.patchMember(m.id, { feishuId: v }); toast('飞书 id 已更新（后续抽取按新 id 归因）'); await refresh() }} /></td>
+                <td><InlineText value={m.wecomId} placeholder="未绑" onSubmit={async (v) => { await api.patchMember(m.id, { wecomId: v }); await refresh() }} /></td>
+                <td><InlineText value={m.team} placeholder="—" onSubmit={async (v) => { await api.patchMember(m.id, { team: v }); await refresh() }} /></td>
+                <td>{m.isKeyPerson ? '★' : ''}</td>
+                <td className="num"><InlineText type="number" value={m.maxParallelProjects} onSubmit={async (v) => { await api.patchMember(m.id, { maxParallelProjects: Number(v) }); await refresh() }} /></td>
+                <td><InlineSelect value={m.role} options={ROLE_LABEL} onSubmit={(v) => changeRole(m, v)} /></td>
+                <td><Badge tone={m.status === 'active' ? 'ok' : 'muted'}>{m.status === 'active' ? '在职' : '离职'}</Badge></td>
+                <td>{m.status === 'active' && (
+                  <Btn small kind="danger" onClick={async () => {
+                    if (!confirm(`离职 ${m.name}：需先转交其名下任务与牵头项目，继续？`)) return
+                    try {
+                      await api.offboardMember(m.id, {})
+                      toast('存在未转交项，请在弹窗中处理', 'bad')
+                    } catch (e) {
+                      const data = (e as { data?: { missingTasks?: number[]; missingProjects?: number[] } }).data
+                      if (data?.missingTasks || data?.missingProjects) {
+                        const toId = prompt(`待转交：任务 ${data.missingTasks?.length || 0} 项、项目 ${data.missingProjects?.length || 0} 个。输入转交给谁的成员 id（1=${members[0]?.name}）`)
+                        if (!toId) return
+                        try {
+                          await api.offboardMember(m.id, {
+                            tasks: (data.missingTasks || []).map((id) => ({ taskId: id, toMemberId: Number(toId) })),
+                            projects: (data.missingProjects || []).map((id) => ({ projectId: id, toMemberId: Number(toId) })),
+                          })
+                          toast('已离职并完成转交（会话与令牌联动失效）'); await refresh()
+                        } catch (e2) { toast((e2 as Error).message, 'bad') }
+                      } else toast((e as Error).message, 'bad')
+                    }
+                  }}>离职</Btn>
+                )}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
       <div className="mt-2 text-[11px] text-[var(--color-ink-soft)]">
         角色两档：系统管理员（进配置台、管成员角色）/ 成员；最后一名在职系统管理员不可被降级或离职（S17-7）。
       </div>
@@ -145,25 +147,27 @@ function TokensTab() {
       {entries.length === 0 ? <Empty hint="暂无任何成员签发过令牌" /> : entries.map(([mid, list]) => (
         <div key={mid} className="mb-3">
           <div className="mb-1 text-[12px] font-semibold">{memberNames[mid] || `成员 #${mid}`}</div>
-          <table className="w-full text-[13px]">
-            <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
-              <tr className="border-b border-[var(--color-line)]"><th className="py-1">名称</th><th>前缀</th><th>scope</th><th>过期</th><th>状态</th><th></th></tr>
-            </thead>
-            <tbody>
-              {list.map((t) => (
-                <tr key={t.id} className="border-b border-[var(--color-line)] last:border-0">
-                  <td className="py-1">{t.name}</td><td className="num font-mono">{t.tokenPrefix}…</td>
-                  <td><Badge tone={t.scope === 'write' ? 'warn' : 'muted'}>{t.scope}</Badge></td>
-                  <td className="num">{fmtDate(t.expiresAt)}</td>
-                  <td>{t.revokedAt ? <Badge tone="muted">已吊销</Badge> : <Badge tone="ok">有效</Badge>}</td>
-                  <td>{!t.revokedAt && <Btn small kind="ghost" onClick={async () => {
-                    if (!confirm('吊销该令牌？对应 Agent 立即失去访问权')) return
-                    await api.revokeAdminToken(t.id); toast('已吊销'); await refresh()
-                  }}>吊销</Btn>}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[32rem] text-[13px]">
+              <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
+                <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap"><th className="py-1">名称</th><th>前缀</th><th>scope</th><th>过期</th><th>状态</th><th></th></tr>
+              </thead>
+              <tbody>
+                {list.map((t) => (
+                  <tr key={t.id} className="border-b border-[var(--color-line)] last:border-0">
+                    <td className="py-1">{t.name}</td><td className="num font-mono">{t.tokenPrefix}…</td>
+                    <td><Badge tone={t.scope === 'write' ? 'warn' : 'muted'}>{t.scope}</Badge></td>
+                    <td className="num">{fmtDate(t.expiresAt)}</td>
+                    <td>{t.revokedAt ? <Badge tone="muted">已吊销</Badge> : <Badge tone="ok">有效</Badge>}</td>
+                    <td>{!t.revokedAt && <Btn small kind="ghost" onClick={async () => {
+                      if (!confirm('吊销该令牌？对应 Agent 立即失去访问权')) return
+                      await api.revokeAdminToken(t.id); toast('已吊销'); await refresh()
+                    }}>吊销</Btn>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </div>
       ))}
     </Card>

@@ -71,7 +71,7 @@ function ShellCard() {
               onChange={(e) => setCfg({ ...cfg, maxOutputBytes: Number(e.target.value) })} onBlur={() => void save({})} />
           </Field>
         </div>
-        <div className="mt-3 flex items-start gap-2">
+        <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-start">
           <input
             className={`${inputCls} font-mono`} placeholder="如：ps aux | head -20；env | grep -i feishu；wget -qO- https://open.feishu.cn -S 2>&1 | head -5"
             value={command} disabled={!cfg.shellEnabled || busy}

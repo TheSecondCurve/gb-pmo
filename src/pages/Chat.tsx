@@ -93,7 +93,7 @@ export default function Chat() {
   if (sessions == null) return <Spinner />
 
   return (
-    <div className="flex h-[calc(100vh-7rem)] min-h-[26rem] gap-4">
+    <div className="flex h-[calc(100dvh-6rem)] min-h-[26rem] gap-4 md:h-[calc(100dvh-7rem)]">
       <aside className="hidden w-60 shrink-0 flex-col rounded-lg border border-[var(--color-line)] bg-[var(--color-card)] md:flex">
         <div className="flex items-center justify-between border-b border-[var(--color-line)] px-3 py-2.5">
           <span className="text-[13px] font-medium">会话</span>
@@ -128,9 +128,21 @@ export default function Chat() {
       </aside>
 
       <section className="flex min-w-0 flex-1 flex-col rounded-lg border border-[var(--color-line)] bg-[var(--color-card)]">
+        {/* 移动端会话切换条（<768px，桌面用左栏）：下拉选会话 + 新建 */}
+        <div className="flex items-center gap-2 border-b border-[var(--color-line)] px-3 py-2 md:hidden">
+          <select
+            data-nav="chat-sessions" aria-label="切换会话"
+            className="min-w-0 flex-1 rounded-md border border-[var(--color-line)] bg-white px-2 py-1 text-[13px] outline-none"
+            value={activeId ?? ''} onChange={(e) => setActiveId(Number(e.target.value))}
+          >
+            {sessions.length === 0 && <option value="">（暂无会话）</option>}
+            {sessions.map((s) => <option key={s.id} value={s.id}>{s.title}</option>)}
+          </select>
+          <Btn small onClick={() => void create()}>＋ 新会话</Btn>
+        </div>
         {activeId == null ? (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 text-[var(--color-ink-soft)]">
-            <div className="text-[13px]">选择左侧会话，或新建一个开始对话。</div>
+            <div className="text-[13px]">选择一个会话，或新建开始对话。</div>
             <Btn kind="primary" onClick={create}>＋ 新会话</Btn>
           </div>
         ) : (
