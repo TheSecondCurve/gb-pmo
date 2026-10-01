@@ -178,20 +178,30 @@ async function callApi(cfg, path, method, body) {
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
-  if (!res.ok) throw Object.assign(new Error(`飞书日历 HTTP ${res.status}`), { statusCode: 502 })
+  if (!res.ok) {
+    // 非 2xx 时飞书也在响应体里给 code/msg（如 400 field validation failed）——读出来别丢（S22-6）
+    let detail = ''
+    try {
+      const j = await res.json()
+      if (j && (j.code !== undefined || j.msg)) detail = `(${j.code ?? ''}): ${j.msg || ''}`
+    } catch { /* 非 JSON 响应体，仅回状态码 */ }
+    throw Object.assign(new Error(`飞书日历 HTTP ${res.status}${detail}`), { statusCode: 502 })
+  }
   const data = await res.json()
   if (data.code !== 0) throw Object.assign(new Error(`飞书日历失败(${data.code}): ${data.msg}`), { statusCode: 502 })
   return data.data || {}
 }
 
 /**
- * 创建组织级日历（组织内可搜索订阅；share_tenant_permission 为飞书字符串布尔）。
+ * 创建组织级日历（组织内可搜索订阅）。v0.21：飞书 v4 的 permissions 已改枚举字符串
+ * （private / show_only_free_busy / public），旧对象格式（share_tenant_permission 等）被 400 拒绝；
+ * public = 组织内可搜索订阅、他人可查看日程详情（PRD §7.6 语义）。
  * 返回 { calendarId }。
  */
 export async function createCalendar(cfg, { summary, description }) {
   const data = await callApi(cfg, '/calendar/v4/calendars', 'POST', {
     summary, description,
-    permissions: { share_tenant_permission: 'true', public_permission: 'false' },
+    permissions: 'public',
   })
   return { calendarId: data.calendar?.calendar_id || null }
 }
