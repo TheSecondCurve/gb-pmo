@@ -62,7 +62,7 @@ describe('S1 立项', () => {
     expect(add.body.status).toBe('todo')
   })
 
-  it('S1-5: 按项目类型立项 → 自动套用该类型绑定的默认模板，记录类型与模板快照', async () => {
+  it('S1-5: 按项目类型立项 → 记录类型编码快照与类型外键（v0.18：清单内嵌于类型）；templateCode 兼容别名同码解析', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
       name: '类型立项E', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
@@ -73,13 +73,86 @@ describe('S1 立项', () => {
     expect(res.body.typeName).toBe('软件交付')
     expect(res.body.stages).toBeUndefined()
     expect(res.body.tasks.every((t) => t.responsibleMemberId === ctx.members.lead.id)).toBe(true)
-    // 兼容：仍可直接给 templateCode（Agent/旧调用），类型留空
+    // 兼容：templateCode 直给按同码类型解析（Agent/旧调用）
     const legacy = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
       name: '旧入参立项F', templateCode: 'consulting', leadMemberId: ctx.members.dev.id,
     })
     expect(legacy.status).toBe(201)
     expect(legacy.body.templateCode).toBe('consulting')
-    expect(legacy.body.projectTypeId).toBeNull()
+    expect(legacy.body.projectTypeId).toBeGreaterThan(0)
+  })
+
+  it('S1-6: 立项载荷显式给 tasks → 覆盖类型预填实例化（来源=手填）；空清单=空项目；空白标题 400', async () => {
+    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    // 字符串数组与 {title} 对象均可
+    const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
+      name: '自定义任务G', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      tasks: ['现场调研', { title: '部署方案评审' }, '割接上线'],
+    })
+    expect(res.status).toBe(201)
+    expect(res.body.tasks.map((t) => t.title)).toEqual(['现场调研', '部署方案评审', '割接上线'])
+    expect(res.body.tasks.every((t) => t.source === 'manual')).toBe(true)
+    expect(res.body.tasks.every((t) => t.responsibleMemberId === ctx.members.lead.id)).toBe(true)
+    // 空清单 → 空项目（即使类型有预填清单）
+    const empty = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
+      name: '空清单H', typeCode: 'software_delivery', leadMemberId: ctx.members.dev.id, tasks: [],
+    })
+    expect(empty.status).toBe(201)
+    expect(empty.body.tasks).toHaveLength(0)
+    // 空白标题 → 400
+    const bad = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
+      name: '坏清单I', typeCode: 'software_delivery', leadMemberId: ctx.members.dev.id, tasks: ['有效标题', '   '],
+    })
+    expect(bad.status).toBe(400)
+  })
+
+  it('S1-7: 倒排——autoSchedule + 交付日期 → 均分填任务计划起止（末条=交付日期）；缺交付日期 400；预览端点同公式', async () => {
+    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    // 缺交付日期 → 400
+    const noEnd = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
+      name: '无期倒排J', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id, autoSchedule: true,
+    })
+    expect(noEnd.status).toBe(400)
+
+    // 4 条任务、10-01 → 10-05（总 4 天）：due=02/03/04/05，start=01/03/04/05
+    const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
+      name: '倒排项目K', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      tasks: ['任务一', '任务二', '任务三', '任务四'],
+      planStartDate: '2026-10-01', planEndDate: '2026-10-05', autoSchedule: true,
+    })
+    expect(res.status).toBe(201)
+    const pick = (t) => ({ s: t.planStartDate, e: t.planEndDate })
+    expect(res.body.tasks.map(pick)).toEqual([
+      { s: '2026-10-01', e: '2026-10-02' }, { s: '2026-10-03', e: '2026-10-03' },
+      { s: '2026-10-04', e: '2026-10-04' }, { s: '2026-10-05', e: '2026-10-05' },
+    ])
+
+    // 未给 planStartDate → 锚定今天（北京日）；末条截止仍=交付日期
+    const anchorToday = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
+      name: '今天锚定L', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      tasks: ['甲', '乙'], planEndDate: '2030-12-31', autoSchedule: true,
+    })
+    expect(anchorToday.status).toBe(201)
+    expect(anchorToday.body.tasks.at(-1).planEndDate).toBe('2030-12-31')
+    expect(anchorToday.body.tasks.every((t) => t.planStartDate && t.planEndDate)).toBe(true)
+
+    // 窗口短于任务数：日期钳制（start 不晚于 due），不报错
+    const tight = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
+      name: '紧凑倒排M', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      tasks: ['a', 'b', 'c', 'd', 'e'], planStartDate: '2026-10-01', planEndDate: '2026-10-02', autoSchedule: true,
+    })
+    expect(tight.status).toBe(201)
+    for (const t of tight.body.tasks) expect(t.planStartDate <= t.planEndDate).toBe(true)
+
+    // 预览端点：同一公式、不落库
+    const prev = await authed(ctx.app, cookie, 'POST', '/api/v1/projects/preview-schedule', {
+      planStartDate: '2026-10-01', planEndDate: '2026-10-05', count: 4,
+    })
+    expect(prev.status).toBe(200)
+    expect(prev.body.schedule).toEqual([
+      { planStartDate: '2026-10-01', planEndDate: '2026-10-02' }, { planStartDate: '2026-10-03', planEndDate: '2026-10-03' },
+      { planStartDate: '2026-10-04', planEndDate: '2026-10-04' }, { planStartDate: '2026-10-05', planEndDate: '2026-10-05' },
+    ])
   })
 })
 

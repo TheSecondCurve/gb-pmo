@@ -175,50 +175,32 @@ function softValidateProposal(db, kind, p) {
       return { error: `项目类型 ${p.typeCode} 不存在或已停用（先 query 查 project_types）` }
     }
     if (p.planEndDate && !DATE_OK.test(String(p.planEndDate))) return { error: 'planEndDate 须为 YYYY-MM-DD' }
+    if (p.planStartDate && !DATE_OK.test(String(p.planStartDate))) return { error: 'planStartDate 须为 YYYY-MM-DD' }
+    const tasks = normTasks(p.tasks)
+    if (tasks.some((t) => !String(t.title).trim())) return { error: 'tasks 内不可有空白标题' }
+    if (tasks.length > 30) return { error: 'tasks 至多 30 条' }
+    const autoSchedule = p.autoSchedule === true
+    if (autoSchedule && !p.planEndDate) return { error: 'autoSchedule 倒排须同时给 planEndDate（交付日期，YYYY-MM-DD）' }
     return {
       payload: {
         name: String(p.name).trim().slice(0, 100), typeCode: p.typeCode ? String(p.typeCode) : undefined,
         templateCode: p.templateCode ? String(p.templateCode) : undefined, leadMemberId: lead.id,
         ...(p.priority ? { priority: String(p.priority) } : {}), ...(p.clientName ? { clientName: String(p.clientName) } : {}),
         ...(p.planStartDate ? { planStartDate: String(p.planStartDate) } : {}), ...(p.planEndDate ? { planEndDate: String(p.planEndDate) } : {}),
+        ...(p.tasks !== undefined ? { tasks } : {}), ...(autoSchedule ? { autoSchedule: true } : {}),
       },
-      summary: `立项「${String(p.name).trim()}」（类型 ${p.typeCode || p.templateCode}，牵头人 ${lead.name}${p.planEndDate ? `，交付 ${p.planEndDate}` : ''}）`,
-    }
-  }
-  if (kind === 'create_task_template') {
-    if (!p.code || !p.name) return { error: 'code/name 必填（模板编码与名称）' }
-    if (db.prepare('SELECT 1 FROM project_templates WHERE code = ?').get(String(p.code))) return { error: `模板编码已存在: ${p.code}` }
-    const tasks = normTasks(p.tasks)
-    if (!tasks.length) return { error: 'tasks 必填（任务标题数组，1~30 条）' }
-    return {
-      payload: { code: String(p.code), name: String(p.name), ...(p.description ? { description: String(p.description) } : {}), tasks },
-      summary: `新建任务模板「${p.name}」（${p.code}，${tasks.length} 项任务）`,
-    }
-  }
-  if (kind === 'update_task_template') {
-    const tpl = p.templateId
-      ? db.prepare('SELECT id, code, name FROM project_templates WHERE id = ?').get(Number(p.templateId))
-      : db.prepare('SELECT id, code, name FROM project_templates WHERE code = ?').get(String(p.templateCode || ''))
-    if (!tpl) return { error: 'templateCode（或 templateId）必填且须为真实任务模板（先 query 查 project_templates）' }
-    if (p.name === undefined && p.description === undefined && p.tasks === undefined) return { error: '至少给出 name / description / tasks 之一（tasks 给出即整体替换，只影响未来立项）' }
-    const parts = []
-    if (p.name !== undefined) parts.push('改名')
-    if (p.description !== undefined) parts.push('改说明')
-    if (p.tasks !== undefined) parts.push(`任务清单整体替换为 ${normTasks(p.tasks).length} 项`)
-    return {
-      payload: { templateId: tpl.id, ...(p.name !== undefined ? { name: String(p.name) } : {}), ...(p.description !== undefined ? { description: String(p.description ?? '') } : {}), ...(p.tasks !== undefined ? { tasks: normTasks(p.tasks) } : {}) },
-      summary: `修改任务模板「${tpl.name}」（${tpl.code}）：${parts.join('、')}`,
+      summary: `立项「${String(p.name).trim()}」（类型 ${p.typeCode || p.templateCode}，牵头人 ${lead.name}${tasks.length ? `，任务 ${tasks.length} 项` : ''}${p.planEndDate ? `，交付 ${p.planEndDate}` : ''}${autoSchedule ? '，按交付日期倒排任务' : ''}）`,
     }
   }
   if (kind === 'create_project_type') {
     if (!p.code || !p.name) return { error: 'code/name 必填（类型编码与名称）' }
-    if (!p.defaultTemplateCode) return { error: 'defaultTemplateCode 必填（绑定的默认任务模板编码，先 query 查 project_templates）' }
     if (db.prepare('SELECT 1 FROM project_types WHERE code = ?').get(String(p.code))) return { error: `类型编码已存在: ${p.code}` }
-    const tpl = db.prepare('SELECT id, code FROM project_templates WHERE code = ?').get(String(p.defaultTemplateCode))
-    if (!tpl) return { error: `任务模板 ${p.defaultTemplateCode} 不存在（先 query 查 project_templates）` }
+    const tasks = normTasks(p.tasks)
+    if (tasks.some((t) => !String(t.title).trim())) return { error: 'tasks 内不可有空白标题' }
+    if (tasks.length > 30) return { error: 'tasks 至多 30 条' }
     return {
-      payload: { code: String(p.code), name: String(p.name), ...(p.description ? { description: String(p.description) } : {}), defaultTemplateCode: tpl.code },
-      summary: `新建项目类型「${p.name}」（${p.code}，默认模板 ${tpl.code}）`,
+      payload: { code: String(p.code), name: String(p.name), ...(p.description ? { description: String(p.description) } : {}), tasks },
+      summary: `新建项目类型「${p.name}」（${p.code}，内嵌任务 ${tasks.length} 项）`,
     }
   }
   return { error: `未知提议类型 ${kind}` }

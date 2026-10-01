@@ -4,7 +4,7 @@ export const ADMIN_SECTIONS: { key: string; label: string; tabs: { key: string; 
   {
     key: 'project', label: '项目管理',
     tabs: [
-      { key: 'types', label: '类型与模板' },
+      { key: 'types', label: '项目类型' },
       { key: 'channels', label: '渠道' },
       { key: 'params', label: '阈值与推送' },
     ],

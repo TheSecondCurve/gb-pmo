@@ -68,7 +68,7 @@ function render() {
 
 const HEADER = `---
 name: gb-pmo
-version: 0.1.1
+version: 0.1.2
 description: 企业项目大脑——项目/任务/事件/成员的查询、维护与大脑功能触发
 ---
 
@@ -98,15 +98,15 @@ client.sh action generate_person_digest '{}'
 | 指标 | \`GET /api/v1/agent/metrics\` | 指标目录（定义卡） |
 | 指标取数 | \`POST /api/v1/agent/metrics/query\` \`{"metric":"<id>","params":{}}\` | **指标类问题优先走这里**；自算 SQL 与端点不一致时以端点为准 |
 | 触发 | \`POST /api/v1/agent/actions\` | 白名单（触发类）：trigger_extraction / generate_project_digest / generate_person_digest / push_report |
-| 配置（S17-10） | \`POST /api/v1/agent/actions\` | 白名单（配置类，**仅系统管理员 PAT**，成员 403）：upsert_channel / delete_channel / put_setting / create_template / draft_template_tasks / reset_channel_cursor |
+| 配置（S17-10） | \`POST /api/v1/agent/actions\` | 白名单（配置类，**仅系统管理员 PAT**，成员 403）：upsert_channel / delete_channel / put_setting / reset_channel_cursor |
+| 任务清单起草（S17-9，v0.18） | \`POST /api/v1/agent/actions\` | \`draft_task_list\`（write scope 即可，成员可用）：LLM 产任务清单草稿，**不落库**，供立项/类型编辑参考 |
 
 ### 配置类 action 参数（S17-10）
 
 - \`upsert_channel\` \`{platform: 'feishu'|'wecom', groupKey, name?, channelType: 'dedicated'|'general', projectId?}\`（专题渠道必填 projectId）
 - \`delete_channel\` \`{id}\`
 - \`put_setting\` \`{key, value}\`（key ∈ thresholds / push / scheduler / llm / chat / im.feishu / im.wecom；scheduler 含 cron 与每任务 enabled 开关，非法值 400 并指明字段；llm 按类别分开存储：value 传 \`{provider, apiKey?, baseUrl?, model?}\`，只作用于该类别子配置、其他类别不覆盖，provider=当前生效类别，S17-11 v0.15）
-- \`create_template\` \`{code, name, description?, tasks: [{title}, ...]}\`
-- \`draft_template_tasks\` \`{name, description?}\` → \`{tasks: [...]}\`（LLM 产任务清单草稿，**不落库**，确认后再 create_template）
+- \`draft_task_list\` \`{name, description?}\` → \`{tasks: [...]}\`（LLM 按名称+说明产任务清单草稿，**不落库**；v0.18 起成员 write scope 可用。原 create_template / draft_template_tasks 已随任务模板对象裁撤移除——项目类型内嵌任务清单（project_type_tasks），类型创建走提议确认、配置台维护）
 - \`reset_channel_cursor\` \`{channelId, days?}\`（默认 7，1~90；重置后下次抽取回看 N 天，重放会追加新事件流）
 
 ## 工作守则（必须遵守）

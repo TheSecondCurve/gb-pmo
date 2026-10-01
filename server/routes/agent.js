@@ -12,7 +12,7 @@ import {
 import { ACTIONS } from '../agent/actions.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const SKILL_VERSION = '0.1.1'
+const SKILL_VERSION = '0.1.2'
 
 export function registerAgentRoutes(app) {
   const db = app.db

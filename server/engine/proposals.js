@@ -1,6 +1,7 @@
 // S25（v0.17）通用提议：项目级/配置级操作的「提议→确认→生效」唯一口子。
 // 发起放开（成员均可让 AI 起草），确认按矩阵收紧；生效分发到既有 engine（校验/审计/事件同构）。
 // LLM 信任边界不变：只产提议，不选生效路径（AGENTS.md §4 / PRD §2）。
+// v0.18：模板对象裁撤——kind 收敛为四类；create_project 可带 tasks + autoSchedule（倒排算术在 engine）。
 
 import * as projects from './projects.js'
 import * as projectTypes from './projectTypes.js'
@@ -12,12 +13,6 @@ const forbidden = (msg) => Object.assign(new Error(msg), { statusCode: 403 })
 const normTasks = (tasks) => (Array.isArray(tasks) ? tasks : [])
   .map((t) => (typeof t === 'string' ? { title: t } : t))
   .filter((t) => t && t.title)
-
-const resolveTemplateByCode = (db, code, field = 'templateCode') => {
-  const row = code ? db.prepare('SELECT id, code, name FROM project_templates WHERE code = ?').get(String(code)) : null
-  if (!row) throw Object.assign(new Error(`${field} 对应的任务模板不存在（先 query 查模板 code）`), { statusCode: 400 })
-  return row
-}
 
 // —— 提议目录：确认权限矩阵 + 生效分发（apply 强校验全部交给既有 engine） ——
 
@@ -57,35 +52,8 @@ export const PROPOSAL_KINDS = {
         name: payload.name, typeCode: payload.typeCode, templateCode: payload.templateCode,
         leadMemberId: Number(payload.leadMemberId), priority: payload.priority, clientName: payload.clientName,
         planStartDate: payload.planStartDate, planEndDate: payload.planEndDate,
-      }, by)
-    },
-  },
-  create_task_template: {
-    label: '新建任务模板',
-    async canConfirm(db, member) {
-      if (member.role !== 'admin') return forbidden('任务模板为配置对象，仅系统管理员可确认')
-      return true
-    },
-    apply(db, payload, by) {
-      return projectTypes.createTemplate(db, {
-        code: payload.code, name: payload.name, description: payload.description, tasks: normTasks(payload.tasks),
-      }, by)
-    },
-  },
-  update_task_template: {
-    label: '修改任务模板',
-    async canConfirm(db, member) {
-      if (member.role !== 'admin') return forbidden('任务模板为配置对象，仅系统管理员可确认')
-      return true
-    },
-    apply(db, payload, by) {
-      const tpl = payload.templateId
-        ? db.prepare('SELECT id FROM project_templates WHERE id = ?').get(Number(payload.templateId))
-        : resolveTemplateByCode(db, payload.templateCode)
-      return projectTypes.updateTemplate(db, tpl.id, {
-        ...(payload.name !== undefined ? { name: payload.name } : {}),
-        ...(payload.description !== undefined ? { description: payload.description } : {}),
         ...(payload.tasks !== undefined ? { tasks: normTasks(payload.tasks) } : {}),
+        ...(payload.autoSchedule !== undefined ? { autoSchedule: payload.autoSchedule } : {}),
       }, by)
     },
   },
@@ -98,7 +66,7 @@ export const PROPOSAL_KINDS = {
     apply(db, payload, by) {
       return projectTypes.createProjectType(db, {
         code: payload.code, name: payload.name, description: payload.description,
-        defaultTemplateId: resolveTemplateByCode(db, payload.defaultTemplateCode, 'defaultTemplateCode').id,
+        tasks: normTasks(payload.tasks),
       }, by)
     },
   },

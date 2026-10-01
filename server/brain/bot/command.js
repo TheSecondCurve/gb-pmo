@@ -54,7 +54,7 @@ export function buildProposalCard({ proposalId, summary }, secret) {
     config: { wide_screen: true },
     header: { template: 'orange', title: { tag: 'plain_text', content: `操作提议 #${proposalId}` } },
     elements: [
-      { tag: 'div', text: { tag: 'lark_md', content: `**${summary}**\n由有权人确认后生效（项目操作：牵头人/管理员；立项：管理员/拟任牵头人；类型与模板：管理员）` } },
+      { tag: 'div', text: { tag: 'lark_md', content: `**${summary}**\n由有权人确认后生效（项目操作：牵头人/管理员；立项：管理员/拟任牵头人；项目类型：管理员）` } },
       {
         tag: 'action',
         actions: [
@@ -400,10 +400,8 @@ ${schemaDigest(db)}
 ${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅飞书群聊）' : '{"action":"write","kind":"bind_channel","payload":{"projectId":1,"chatName":"群名"}}   仅群聊可用，仅项目牵头人/管理员'}
 {"action":"write","kind":"propose","payload":{"kind":"update_project_status","projectId":1,"status":"active|paused","planEndDate":"YYYY-MM-DD?"}}  项目状态提议（启动须有交付日期，可同请求补）
 {"action":"write","kind":"propose","payload":{"kind":"close_project","projectId":1,"summary?"}}   结项提议（确认时按 S8 校验：任务须全部完成）
-{"action":"write","kind":"propose","payload":{"kind":"create_project","name":"...","typeCode":"...","leadMemberId":1,"planEndDate?"}}  立项提议（按类型模板实例化任务）
-{"action":"write","kind":"propose","payload":{"kind":"create_project_type","code":"...","name":"...","defaultTemplateCode":"..."}}  新建项目类型提议
-{"action":"write","kind":"propose","payload":{"kind":"create_task_template","code":"...","name":"...","tasks":["标题",...]}}  新建任务模板提议
-{"action":"write","kind":"propose","payload":{"kind":"update_task_template","templateCode":"...","name?","description?","tasks?"}}  修改任务模板提议（tasks 给出即整体替换）
+{"action":"write","kind":"propose","payload":{"kind":"create_project","name":"...","typeCode":"...","leadMemberId":1,"planStartDate?","planEndDate?","tasks":["标题",...]?,"autoSchedule":true?}}  立项提议（tasks 缺省按类型内嵌清单实例化；autoSchedule=true 按「计划开始（缺省今天）→交付日期」倒排每条任务计划起止，须有 planEndDate）
+{"action":"write","kind":"propose","payload":{"kind":"create_project_type","code":"...","name":"...","tasks":["标题",...]}}  新建项目类型提议（任务清单内嵌于类型）
 {"action":"write","kind":"trigger","payload":{"name":"trigger_extraction|generate_project_digest|generate_person_digest|push_report","params":{}}}
 {"action":"reply","text":"最终答复"}            查够/完成后回答；需要向用户澄清时也用它提问
 
@@ -411,7 +409,7 @@ ${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅
 1. 先查后答：结论必须基于 query/metric 取回的数据，取不到就明说，绝不编造项目事实。
 2. 项目/任务/成员一律用你查到的真实 id；相对日期按今天换算成 YYYY-MM-DD。
 3. 纯进展/风险/决策/阻塞 → record_event 直接登记；任务变更（状态/日期/责任人）→ suggest_event ${web ? '生成待确认事件（用户会在页面上确认生效），不得谎称已改' : '出确认卡，不得谎称已改'}。
-4. 项目级/配置级操作（项目状态/结项/立项/项目类型/任务模板）→ propose 起草提议，待有权人确认后才生效，不得谎称已执行。
+4. 项目级/配置级操作（项目状态/结项/立项/项目类型）→ propose 起草提议，待有权人确认后才生效，不得谎称已执行。
 5. 不支持的事（财务/合同/绩效/自动重排期求解等）直接说明不支持。
 6. 回复用简洁中文，短段/列表即可。${web ? '\n6. 这是多轮会话：参考对话历史理解指代（「它/这个项目」等），历史里已有的查询结果可直接引用。' : ''}`
 }
