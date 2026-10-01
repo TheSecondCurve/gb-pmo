@@ -6,6 +6,7 @@ import * as events from '../engine/events.js'
 import * as projectTypes from '../engine/projectTypes.js'
 import * as auth from '../engine/auth.js'
 import * as chat from '../brain/chat.js' // S24 Web AI 助手会话（编排层复用 S20 核心 Agent）
+import * as proposalsEngine from '../engine/proposals.js' // S25 通用提议确认口子
 import { getAllSettings, setSetting, getSetting } from '../engine/settings.js'
 import { queryMetric, listMetrics } from '../engine/metrics.js'
 import { assertValue } from '../engine/enums.js'
@@ -210,6 +211,10 @@ export function registerApiRoutes(app) {
 
   app.post('/api/v1/events/:id/confirm', async (req) => events.confirmEvent(db, Number(req.params.id), req.member.id))
   app.post('/api/v1/events/:id/reject', async (req) => events.rejectEvent(db, Number(req.params.id), req.member.id))
+
+  // —— S25 通用提议：确认/驳回（权限矩阵在 engine/proposals.js；与飞书卡片同一口子） ——
+  app.post('/api/v1/proposals/:id/confirm', async (req) => proposalsEngine.confirmProposal(db, Number(req.params.id), req.member.id))
+  app.post('/api/v1/proposals/:id/reject', async (req) => proposalsEngine.rejectProposal(db, Number(req.params.id), req.member.id))
 
   // —— S24 Web AI 助手会话（全员；会话与消息仅本人，软删） ——
   app.get('/api/v1/chat/sessions', async (req) => chat.listSessions(db, req.member.id))
