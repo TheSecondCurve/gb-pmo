@@ -40,6 +40,19 @@ export function stopBot() {
   return Boolean(old)
 }
 
+/**
+ * SDK 1.74 EventDispatcher 直接传入解包后的事件体 {sender, message}（见官方 README）；
+ * 兼容带 event 包络的形态。此前只取 data.event.message 恒为空，导致所有入站消息
+ * 在审计落库前被静默丢弃（线上实测发现，S20-12 排障根因）。
+ */
+export function parseSdkMessage(data) {
+  const body = data?.event && (data.event.message || data.event.sender) ? data.event : data
+  return {
+    msg: body?.message || {},
+    senderOpenId: body?.sender?.sender_id?.open_id || body?.sender?.open_id || '',
+  }
+}
+
 async function connectReal(db, cfg, secret) {
   let sdk
   try {
@@ -70,7 +83,7 @@ async function connectReal(db, cfg, secret) {
   const dispatcher = new sdk.EventDispatcher({}).register({
     'im.message.receive_v1': async (data) => {
       try {
-        const msg = data?.event?.message || {}
+        const { msg, senderOpenId } = parseSdkMessage(data)
         if (msg.message_type !== 'text') return
         const chatType = msg.chat_type === 'p2p' ? 'p2p' : 'group'
         // 群@消息文本带 @_user_N 前缀，剥掉再交给指令层
@@ -81,7 +94,7 @@ async function connectReal(db, cfg, secret) {
           messageId: msg.message_id,
           chatId: msg.chat_id,
           chatType,
-          senderOpenId: data?.event?.sender?.sender_id?.open_id || '',
+          senderOpenId,
           text,
           ts: Date.now(),
           external: await isExternal(msg.chat_id, chatType),
