@@ -88,7 +88,10 @@ function LlmCard() {
 
 function FeishuCard() {
   const { toast } = useStore()
-  const [cfg, setCfg] = useState<{ appId: string; appSecret: string } | null>(null)
+  const [cfg, setCfg] = useState<{
+    appId: string; appSecret: string
+    botEnabled?: boolean; answerUnregisteredGroups?: boolean; commandQuotaPerDay?: number
+  } | null>(null)
   const [calendarId, setCalendarId] = useState<string | null>(null)
   const [calMsg, setCalMsg] = useState('')
   const [calBusy, setCalBusy] = useState(false)
@@ -96,7 +99,7 @@ function FeishuCard() {
   useEffect(() => {
     void (async () => {
       const s = await api.settings()
-      setCfg((s['im.feishu'] as { appId: string; appSecret: string }) || { appId: '', appSecret: '' })
+      setCfg((s['im.feishu'] as typeof cfg) || { appId: '', appSecret: '' })
       setCalendarId((s['calendar'] as { feishuCalendarId?: string })?.feishuCalendarId || '')
     })()
   }, [])
@@ -137,8 +140,32 @@ function FeishuCard() {
           <Field label="App ID"><input className={inputCls} value={cfg.appId} onChange={(e) => setCfg({ ...cfg, appId: e.target.value })} /></Field>
           <Field label="App Secret"><input className={inputCls} type="password" value={cfg.appSecret} onChange={(e) => setCfg({ ...cfg, appSecret: e.target.value })} /></Field>
         </div>
+        <div className="mb-2 flex flex-wrap items-center gap-x-5 gap-y-2 text-[13px]">
+          <label className="flex items-center gap-1.5">
+            <input type="checkbox" checked={!!cfg.botEnabled} onChange={(e) => setCfg({ ...cfg, botEnabled: e.target.checked })} />
+            机器人指令通道（私聊/群@）
+          </label>
+          <label className="flex items-center gap-1.5">
+            <input type="checkbox" checked={cfg.answerUnregisteredGroups !== false} onChange={(e) => setCfg({ ...cfg, answerUnregisteredGroups: e.target.checked })} />
+            未登记群也响应问答
+          </label>
+          <label className="flex items-center gap-1.5">
+            每成员每日指令限额
+            <input
+              type="number" min={0} className="w-20 rounded-md border border-[var(--color-line)] px-2 py-1 text-[13px] outline-none focus:border-[var(--color-brand)]"
+              value={cfg.commandQuotaPerDay ?? 50} onChange={(e) => setCfg({ ...cfg, commandQuotaPerDay: Math.max(0, Number(e.target.value) || 0) })}
+            />
+          </label>
+        </div>
+        <p className="mb-3 text-[12px] leading-5 text-[var(--color-ink-soft)]">
+          机器人开关与限额「保存即热生效」：长连接立即建立或断开，无需重启进程（S20-12）；开启前需完成应用侧配置（机器人能力 + 长连接事件订阅，附录 A.1 第 7 步），可先点「测试连接」验证。
+        </p>
         <div className="flex items-center gap-2">
-          <Btn kind="primary" onClick={async () => { await api.putSetting('im.feishu', cfg); toast('飞书配置已保存') }}>保存</Btn>
+          <Btn kind="primary" onClick={async () => {
+            const r = await api.putSetting('im.feishu', cfg) as { bot?: { started: boolean; reason?: string } }
+            toast('飞书配置已保存')
+            setResult(r.bot ? (r.bot.started ? '✅ 已保存，机器人长连接已建立' : `已保存；机器人未连接——${r.bot.reason}`) : '')
+          }}>保存</Btn>
           <Btn onClick={async () => { const r = await api.testIm('feishu'); setResult(r.ok ? '✅ 连接成功' : `❌ ${r.reason}`); if (!r.ok) toast(r.reason || '连接失败', 'bad') }}>测试连接</Btn>
           {result && <span className="text-[12px]">{result}</span>}
         </div>

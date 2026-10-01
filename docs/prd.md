@@ -1,5 +1,7 @@
 # 需求初稿（PRD）— 企业项目大脑（Project Brain）
 
+> **v0.22**（2026-10-01）：**机器人配置台可视化 + 保存热生效（S20-12）**——`im.feishu` 的机器人开关（`botEnabled`）、未登记群响应（`answerUnregisteredGroups`）、每日指令限额（`commandQuotaPerDay`）此前没有后台页面入口（配置台只暴露 appId/appSecret），且网关只在进程启动时读一次配置，改完必须重启进程。现配置台「外部依赖→飞书」可视化维护全部机器人参数，**保存即热生效**：网关长连接按新配置立即重建或断开（热同步串行化，防并发交错），无需重启进程；启动结果（已连接 / 未启动原因）在保存响应中回显。与 v0.15「配置生效无需重启」原则对齐（当时修的是调度器 LLM 动态解析，本次补齐 bot 网关）。进程重启后仍按配置自动拉起（启动语义不变）。
+
 > **v0.21**（2026-10-01）：**初始化项目日历线上失败根因修复（S22-6 修订，Zeabur/CF 部署实测）**——线上「初始化项目日历」502 的三层根因与修复：①飞书创建日历 API 的 `permissions` 已由旧版对象（`share_tenant_permission`/`public_permission`）改为**枚举字符串**（`private`/`show_only_free_busy`/`public`），旧格式被 400 拒绝（`99992402 field validation failed`）——按 PRD「组织内可搜索订阅」语义改发 `permissions: "public"`；②连接器非 2xx 时丢弃响应体，飞书给出的违规字段说明全部丢失——改为读取并回显 `HTTP 状态(业务码): msg`；③PaaS 网关（Zeabur/Cloudflare）会把应用的 **5xx 响应体替换为网关自己的纯文本错误页**（4xx/2xx 正常穿透），导致错误文案永远到不了界面——初始化的上游失败改走既有 testConnection 模式：**200 + `{ok:false, reason}`**，路由捕获后落 error 日志并返回原因。测试 stub 此前不校验请求 schema，属真实集成才发现的问题。
 
 > **v0.20**（2026-10-01）：**上游失败可观测（S22-6，修复）**——「初始化项目日历」502 后台无日志的根因：统一错误处理器对 5xx 的记录条件写反（生产 logger 开启时反而不记），且飞书业务错误信息丢弃业务码。修复：①5xx 恒记 error 级日志（含错误详情），Docker 日志可直接排障；②飞书 API 业务错误信息统一携带飞书业务码（如权限类 99991679）——「测试连接」仅验证 tenant_access_token，不代表日历权限已生效（新开权限需发布应用版本，附录 A.1 第 4/8 步），业务码是定位依据。
@@ -258,6 +260,7 @@
 >   - S20-9 当在未登记群 @机器人聊项目时，应可正常问答（无默认项目上下文，写需显式指项目）；配置关闭 `answerUnregisteredGroups` 后未登记群不响应。
 >   - S20-10 定时抽取应跳过机器人已处理/已回复的消息（message_id 去重），同一条消息不产生双份事件。
 >   - S20-11 `/bind` 仅私聊有效，群里发 `/bind` 应引导去私聊（绑定码是个人凭证，不在群里晒）。
+>   - S20-12 管理员在配置台「外部依赖→飞书」可修改机器人参数（botEnabled / answerUnregisteredGroups / commandQuotaPerDay）并保存，保存后应**即时热生效**：开启且凭证齐全时长连接立即建立，关闭时立即断开，无需重启进程；启动结果（已连接/未启动原因）在保存响应回显（v0.22）。
 
 > **场景 S21（P0）— 牵头人 — 项目交付日期与交付周期（v0.12）**
 > - 触发时机：立项排期填写交付日期；项目状态切「进行中」时校验；全局列表/详情展示。
@@ -437,7 +440,7 @@ Interactive dashboard 是 P0 标配交付（见 analytics-design.md）。**维�
 
 ### 7.5 机器人指令通道（S20，v0.11）
 
-**形态**：同一个飞书自建应用（§附录 A.1）开通机器人能力，事件订阅走**长连接**（纯出站 wss，内网 NAT 后可用，无需公网回调入口）；订阅 `im.message.receive_v1`（私聊 + 群@）与卡片交互回调，网关随单进程内嵌（SDK 懒加载，未安装不阻塞主进程）。配置在 settings `im.feishu` 块：`botEnabled`（默认关）、`botModes { p2p, groupAt }`、`answerUnregisteredGroups`、`commandQuotaPerDay`。
+**形态**：同一个飞书自建应用（§附录 A.1）开通机器人能力，事件订阅走**长连接**（纯出站 wss，内网 NAT 后可用，无需公网回调入口）；订阅 `im.message.receive_v1`（私聊 + 群@）与卡片交互回调，网关随单进程内嵌（SDK 懒加载，未安装不阻塞主进程）。配置在 settings `im.feishu` 块：`botEnabled`（默认关）、`botModes { p2p, groupAt }`、`answerUnregisteredGroups`、`commandQuotaPerDay`。**配置台「外部依赖→飞书」可视化维护机器人参数，保存即热生效**（v0.22，S20-12）：网关按新配置立即重建或断开长连接（热同步串行化），无需重启进程，启动结果回显；进程重启后按配置自动拉起。
 
 **身份门禁（权限跟人不跟群）**：只认 `members.feishu_id` 映射到的在职成员——私聊未绑定只回绑定引导；群@未绑定（含离职）静默忽略留审计；**外部群（chat.external）一律拒答**（安全不变量，非配置项）。绑定走一次性绑定码：成员 web 登录生成（10 分钟、单次），仅私聊 `/bind <码>`，**凭据不进 LLM 上下文与日志**。管理员也可在用户管理直接维护 feishu id（S17 既有通道）。
 
@@ -575,10 +578,10 @@ Interactive dashboard 是 P0 标配交付（见 analytics-design.md）。**维�
    - 权限：`im:message:send_as_bot`（以机器人身份发消息）、`im:message.p2p_msg`（收用户发给机器人的私聊消息）、`im:message.group_at_msg`（收群里@机器人的消息）；`im:chat:readonly` 已在基础权限内（读群信息判定外部群）。
    - 事件与回调 → 订阅方式选**「使用长连接接收事件」**（免公网回调，内网 NAT 可用）→ 订阅 `im.message.receive_v1`（接收消息）与 `card.action.trigger`（消息卡片按钮回调，同一条长连接下发）。
    - 依赖：服务端 `npm i @larksuiteoapi/node-sdk`（网关懒加载，未安装时 bot 不启动、主进程不受影响）。
-   - 开通顺序：配置台 `im.feishu` 填 `botEnabled: true` 后随进程启动长连接。
+   - 开通顺序：配置台 `im.feishu` 打开 `botEnabled` 保存即建立长连接（热生效，无需重启进程；进程重启后同样按配置自动拉起）。
 8. **项目日历（S22，v0.12）**：同应用在「权限管理」补开日历权限——`calendar:calendar`（读写日历，创建组织级日历）、`calendar:event`（读写日程）→ 配置台「外部依赖→飞书」点「初始化项目日历」（应用身份创建日历并保存 calendar_id；v0.21：飞书 v4 已改用枚举权限，按组织内可搜索订阅语义发 `permissions: "public"`）→ 团队成员在飞书日历侧搜索「项目日历（gb-pmo）」订阅。同步为纯出站调用（tenant_access_token），内网可用；全天日程起止日期为闭区间（首日/末日）。
 
-**后台参数（S17）**：`app_id`、`app_secret`、`botEnabled`、`botModes { p2p, groupAt }`、`answerUnregisteredGroups`、`commandQuotaPerDay`（原「拉取周期」由 `scheduler.extractionCron` 承载、verification token/encrypt key 不需要——长连接模式下无回调 URL 可伪造）。
+**后台参数（S17）**：`app_id`、`app_secret`、`botEnabled`、`botModes { p2p, groupAt }`、`answerUnregisteredGroups`、`commandQuotaPerDay`（原「拉取周期」由 `scheduler.extractionCron` 承载、verification token/encrypt key 不需要——长连接模式下无回调 URL 可伪造）。v0.22 起配置台「外部依赖→飞书」可视化维护机器人参数（appId/appSecret、botEnabled、answerUnregisteredGroups、commandQuotaPerDay），**保存即热生效**（S20-12）。
 
 **合规提示**：自建应用读群消息由企业管理员授权即可开通，无强制员工个人同意流程；机器人进群对群成员可见。建议在群公告/员工手册告知「项目群消息会被项目大脑读取归档」——与 D1/D2 透明文化一致。
 

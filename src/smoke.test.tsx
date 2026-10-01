@@ -79,6 +79,22 @@ describe('移动端响应式冒烟', () => {
     }
   })
 
+  // S20-12（v0.22）：机器人参数配置台可视化——开关/限额入口齐全，删掉即红
+  it('Admin：飞书配置含机器人开关/未登记群开关/每日限额（S20-12）', async () => {
+    location.hash = '#/admin/integrations/feishu'
+    const sFetch = vi.fn(async () => new Response(JSON.stringify({
+      member: { id: 1, name: '甲', role: 'admin' },
+      'im.feishu': { appId: 'cli_x', appSecret: '', botEnabled: false, answerUnregisteredGroups: true, commandQuotaPerDay: 50 },
+      calendar: {},
+    }), { status: 200 }))
+    globalThis.fetch = sFetch as unknown as typeof fetch
+    render(<StoreProvider><Admin section="integrations" tab="feishu" /></StoreProvider>)
+    expect((await screen.findByLabelText(/机器人指令通道（私聊\/群@）/) as HTMLInputElement).checked).toBe(false)
+    expect((screen.getByLabelText(/未登记群也响应问答/) as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByLabelText(/每成员每日指令限额/) as HTMLInputElement).value).toBe('50')
+    expect(screen.getByText(/保存即热生效/)).toBeTruthy()
+  })
+
   it('Chat：移动端会话选择条列出全部会话并可新建', async () => {
     location.hash = '#/chat'
     const chatFetch = vi.fn(async (input: RequestInfo | URL) => {

@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { upsertChannel } from '../engine/tasks.js'
 import { ingestMessages } from '../brain/extract.js'
 import { handleBotEvent, handleCardAction, issueBindCode, buildBindCard } from '../brain/bot/command.js'
+import { syncBot } from '../brain/bot/gateway.js'
 import { runReadOnlyQuery } from '../agent/sqlGuard.js'
 import { runWriteTool } from '../brain/bot/tools.js'
 import { runAgentLoop } from '../brain/bot/agent.js'
@@ -408,5 +409,69 @@ describe('S20 机器人指令通道 — 审计、限额与去重', () => {
     expect(stats.botProcessed).toBe(1)
     expect(stats.events).toBe(0)
     expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM project_events WHERE project_id = ?').get(p.id).n).toBe(before)
+  })
+})
+
+// S20-12（v0.22）— 配置台热生效：im.feishu 保存即重连/断开长连接，无需重启进程。
+// connect 注入 fake 记录连接/断开；路由测试经 buildApp 的 botSync 注入点验证保存链路（K7：真库 + inject）。
+describe('S20-12 配置台热生效', () => {
+  it('S20-12: syncBot 按配置热重启——关→不连接；开→连接；再同步→断旧建新；关→断开且不重连', async () => {
+    const closed = []
+    const connected = []
+    let seq = 0
+    const connect = async (cfg) => {
+      const ws = { id: ++seq, close: () => closed.push(ws.id) }
+      connected.push(cfg.appId)
+      return { ws, result: { started: true } }
+    }
+    // 默认 botEnabled=false：不发起连接
+    expect((await syncBot(ctx.db, { secret: SECRET, connect })).started).toBe(false)
+    expect(connected).toHaveLength(0)
+    // 开启 + 凭证齐全：连接一次（setSetting 为整值替换语义，每次写完整对象）
+    await setSetting(ctx.db, 'im.feishu', { botEnabled: true, appId: 'cli_hot', appSecret: 'sec' }, ctx.members.admin.id)
+    let r = await syncBot(ctx.db, { secret: SECRET, connect })
+    expect(r.started).toBe(true)
+    expect(connected).toEqual(['cli_hot'])
+    // 再次保存（配置重放）：旧连接关闭、新连接建立（换凭证即重连到新应用）
+    await setSetting(ctx.db, 'im.feishu', { botEnabled: true, appId: 'cli_hot2', appSecret: 'sec' }, ctx.members.admin.id)
+    r = await syncBot(ctx.db, { secret: SECRET, connect })
+    expect(r.started).toBe(true)
+    expect(connected).toEqual(['cli_hot', 'cli_hot2'])
+    expect(closed).toEqual([1])
+    // 关闭：断开当前连接且不再发起
+    await setSetting(ctx.db, 'im.feishu', { botEnabled: false }, ctx.members.admin.id)
+    r = await syncBot(ctx.db, { secret: SECRET, connect })
+    expect(r.started).toBe(false)
+    expect(r.reason).toContain('botEnabled')
+    expect(connected).toHaveLength(2)
+    expect(closed).toEqual([1, 2])
+  })
+
+  it('S20-12: 开启但凭证缺失→返回明确原因，不连接不抛错（connect 不应被调用）', async () => {
+    await setSetting(ctx.db, 'im.feishu', { botEnabled: true, appId: '', appSecret: '' }, ctx.members.admin.id)
+    const r = await syncBot(ctx.db, { connect: async () => { throw new Error('不应发起连接') } })
+    expect(r.started).toBe(false)
+    expect(r.reason).toContain('appId')
+    await setSetting(ctx.db, 'im.feishu', { botEnabled: false }, ctx.members.admin.id)
+  })
+
+  it('S20-12: PUT /admin/settings/im.feishu 保存后热同步并在响应回显机器人状态；其他 key 不触发热同步', async () => {
+    const botSync = vi.fn(async () => ({ started: true }))
+    const hot = await setupApp({ botSync })
+    try {
+      const cookie = await loginCookie(hot.app, 'admin', 'admin-pass-123')
+      const res = await authed(hot.app, cookie, 'PUT', '/api/v1/admin/settings/im.feishu', { botEnabled: true, appId: 'cli_x', appSecret: 's' })
+      expect(res.status).toBe(200)
+      expect(res.body.bot).toEqual({ started: true }) // 启动结果回显（S20-12）
+      expect(getSetting(hot.db, 'im.feishu').botEnabled).toBe(true)
+      expect(botSync).toHaveBeenCalledTimes(1)
+      // 非 im.feishu key：不触发热同步、无 bot 字段
+      const res2 = await authed(hot.app, cookie, 'PUT', '/api/v1/admin/settings/chat', { quotaPerDay: 60 })
+      expect(res2.status).toBe(200)
+      expect(res2.body.bot).toBeUndefined()
+      expect(botSync).toHaveBeenCalledTimes(1)
+    } finally {
+      await hot.db.close()
+    }
   })
 })
