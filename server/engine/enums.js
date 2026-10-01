@@ -105,6 +105,8 @@ export const DEFAULT_SETTINGS = {
     botModes: { p2p: true, groupAt: true },  // 私聊 / 群@ 两个入口
     answerUnregisteredGroups: true,          // 未登记群是否响应项目问答（写需显式指项目）
     commandQuotaPerDay: 50,                  // 每成员每日自然语言指令限额（北京日）
+    contextTurns: 8,                         // S20-13 多轮上下文注入条数上限（0=整体关闭记忆）
+    contextIdleMinutes: 120,                 // S20-14 空闲超时（分钟）静默开新会话
   },
   'im.wecom': { corpId: '', secret: '', publicKeyVer: '', privateKey: '', sdkUrl: '' },
   // S26（v0.19）管理员诊断台：诊断 shell 等价容器执行权——开关默认关，仅可信内网排障用，全程审计

@@ -349,6 +349,17 @@ client.sh action generate_person_digest '{}'
 | title | TEXT |  |
 | sort_order | INTEGER |  |
 
+### bot_context_resets
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| platform | TEXT |  |
+| chat_id | TEXT |  |
+| member_id | INTEGER |  |
+| message_id | TEXT | 触发清空的那条消息（审计溯源） |
+| cleared_at | INTEGER |  |
+
 ## 枚举（值 ↔ 中文 label，双向对齐）
 
 - **memberRole**: admin=系统管理员、member=成员
