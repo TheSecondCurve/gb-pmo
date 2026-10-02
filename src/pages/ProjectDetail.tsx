@@ -9,7 +9,7 @@ import {
 } from '../types'
 
 export default function ProjectDetail({ id }: { id: number }) {
-  const { toast } = useStore()
+  const { toast, member } = useStore()
   const [p, setP] = useState<ProjectDetail | null>(null)
   const [events, setEvents] = useState<EventRow[]>([])
   const [members, setMembers] = useState<Member[]>([])
@@ -30,6 +30,8 @@ export default function ProjectDetail({ id }: { id: number }) {
 
   if (!p) return <Spinner />
   const readonly = p.status === 'closed' || p.status === 'cancelled'
+  // S17-12：渠道写权限与后端同构——管理员或该项目牵头人（通用群在配置台维护）
+  const canManageChannels = !readonly && (member?.role === 'admin' || member?.id === p.leadMemberId)
   const activeMembers = members.filter((m) => m.status === 'active')
   const nameOf = (mid: number | null | undefined) => activeMembers.find((m) => m.id === mid)?.name || '（未指派）'
 
@@ -132,13 +134,13 @@ export default function ProjectDetail({ id }: { id: number }) {
           {!readonly && <AddMilestone projectId={id} onDone={refresh} />}
         </Card>
 
-        <Card title={`核心渠道（${channels.length}）`} actions={!readonly ? <Btn small onClick={() => setBinding(true)}>绑定渠道</Btn> : undefined}>
+        <Card title={`核心渠道（${channels.length}）`} actions={canManageChannels ? <Btn small onClick={() => setBinding(true)}>绑定渠道</Btn> : undefined}>
           {channels.length === 0 ? <Empty hint="未绑定专题渠道（计入管理员待办）" /> : (
             <ul className="space-y-1 text-[13px]">
               {channels.map((c) => (
                 <li key={c.id} className="flex items-center justify-between border-b border-[var(--color-line)] py-1 last:border-0">
                   <span><Badge tone="info">{c.platform === 'feishu' ? '飞书' : '企微'}</Badge> <span className="num">{c.groupKey}</span> {c.name}</span>
-                  {!readonly && <Btn small kind="ghost" onClick={async () => { await api.deleteChannel(c.id); toast('已解绑'); await refresh() }}>解绑</Btn>}
+                  {canManageChannels && <Btn small kind="ghost" onClick={async () => { await api.deleteChannel(c.id); toast('已解绑'); await refresh() }}>解绑</Btn>}
                 </li>
               ))}
             </ul>

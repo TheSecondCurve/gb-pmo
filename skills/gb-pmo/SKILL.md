@@ -35,7 +35,7 @@ client.sh action generate_person_digest '{}'
 
 ### 配置类 action 参数（S17-10）
 
-- `upsert_channel` `{platform: 'feishu'|'wecom', groupKey, name?, channelType: 'dedicated'|'general', projectId?}`（专题渠道必填 projectId）
+- `upsert_channel` `{platform: 'feishu'|'wecom', groupKey, name?, channelType: 'dedicated'|'general', projectId?}`（专题渠道必填 projectId；新建绑定 cursor=绑定时刻，首拉不回灌历史，改绑不重置游标——S3-6/v0.24）
 - `delete_channel` `{id}`
 - `put_setting` `{key, value}`（key ∈ thresholds / push / scheduler / llm / chat / im.feishu / im.wecom；scheduler 含 cron 与每任务 enabled 开关，非法值 400 并指明字段；llm 按类别分开存储：value 传 `{provider, apiKey?, baseUrl?, model?}`，只作用于该类别子配置、其他类别不覆盖，provider=当前生效类别，S17-11 v0.15）
 - `draft_task_list` `{name, description?}` → `{tasks: [...]}`（LLM 按名称+说明产任务清单草稿，**不落库**；v0.18 起成员 write scope 可用。原 create_template / draft_template_tasks 已随任务模板对象裁撤移除——项目类型内嵌任务清单（project_type_tasks），类型创建走提议确认、配置台维护）

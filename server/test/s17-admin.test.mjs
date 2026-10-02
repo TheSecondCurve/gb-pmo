@@ -298,4 +298,49 @@ describe('S17 配置台改版：角色治理与类型/模板管理', () => {
     const noName = await authed(ctx.app, cookie, 'POST', '/api/v1/projects/draft-tasks', {})
     expect(noName.status).toBe(400)
   })
+
+  it('S17-12: 渠道写接口权限——普通成员仅可绑自己牵头的专题渠道；通用群仅管理员；删除同规则', async () => {
+    const adminCookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    const leadCookie = await loginCookie(ctx.app, 'zhangsan', 'pass-123456')   // lead：普通成员
+    const devCookie = await loginCookie(ctx.app, 'lisi', 'pass-123456')        // dev：普通成员
+    const pLead = await authed(ctx.app, adminCookie, 'POST', '/api/v1/projects', {
+      name: '渠道权限-牵头项目', templateCode: 'custom', leadMemberId: ctx.members.lead.id,
+    })
+    const pDev = await authed(ctx.app, adminCookie, 'POST', '/api/v1/projects', {
+      name: '渠道权限-他人项目', templateCode: 'custom', leadMemberId: ctx.members.dev.id,
+    })
+
+    // 牵头人可绑自己项目的专题渠道
+    const own = await authed(ctx.app, leadCookie, 'POST', '/api/v1/channels', {
+      platform: 'feishu', groupKey: 'oc_perm_own', channelType: 'dedicated', projectId: pLead.body.id,
+    })
+    expect(own.status).toBe(201)
+    // 非牵头人绑他人项目 → 403
+    const other = await authed(ctx.app, leadCookie, 'POST', '/api/v1/channels', {
+      platform: 'feishu', groupKey: 'oc_perm_other', channelType: 'dedicated', projectId: pDev.body.id,
+    })
+    expect(other.status).toBe(403)
+    // dev 是 pDev 牵头人 → 可绑
+    const devOwn = await authed(ctx.app, devCookie, 'POST', '/api/v1/channels', {
+      platform: 'feishu', groupKey: 'oc_perm_dev_own', channelType: 'dedicated', projectId: pDev.body.id,
+    })
+    expect(devOwn.status).toBe(201)
+    // 通用群仅管理员：普通成员（哪怕是牵头人）→ 403
+    const general = await authed(ctx.app, leadCookie, 'POST', '/api/v1/channels', {
+      platform: 'feishu', groupKey: 'oc_perm_general', channelType: 'general',
+    })
+    expect(general.status).toBe(403)
+    const generalAdmin = await authed(ctx.app, adminCookie, 'POST', '/api/v1/channels', {
+      platform: 'feishu', groupKey: 'oc_perm_general', channelType: 'general',
+    })
+    expect(generalAdmin.status).toBe(201)
+
+    // 删除：非绑定项目牵头人/非管理员 → 403；绑定项目牵头人 → 200；管理员删通用群 → 200
+    const delNo = await authed(ctx.app, devCookie, 'DELETE', `/api/v1/channels/${own.body.id}`)
+    expect(delNo.status).toBe(403)
+    const delLead = await authed(ctx.app, leadCookie, 'DELETE', `/api/v1/channels/${own.body.id}`)
+    expect(delLead.status).toBe(200)
+    const delAdmin = await authed(ctx.app, adminCookie, 'DELETE', `/api/v1/channels/${generalAdmin.body.id}`)
+    expect(delAdmin.status).toBe(200)
+  })
 })
