@@ -1,30 +1,21 @@
-// S20 机器人指令编排（门禁 → 斜杠命令 → LLM 有界循环 → 回复/确认卡 → 全审计）。
-// 门禁不变量：去重（message_id 唯一）→ 外部群拒答（安全不变量，静默）→ 身份只认 members.feishu_id
-// → 未绑定私聊引导/群里静默 → 每日限额（北京日）→ 未登记群开关 → LLM 未配置降级斜杠命令。
-// 凭据纪律：/bind 绑定码走确定性文法，不进 LLM 上下文与日志。
+// S20 飞书适配器（K12 统一会话管线的 IM 面）：幂等去重 → 外部群拒答 → feishu_id 身份映射 → 斜杠命令
+// （统一注册表）→ 未绑定门禁 → 渠道上下文 → 统一管线（限额/LLM/有界循环）→ 卡片渲染投递 → 全审计。
+// 编排逻辑（斜杠/限额/降级/循环）在 pipeline.js，与 web（chat.js）共用；本文件只保留 IM 特有面。
 
 import crypto from 'node:crypto'
 import { getSetting } from '../../engine/settings.js'
-import { getLlm } from '../llm.js'
 import { mapSpeaker } from '../extract.js'
-import { updateMember } from '../../engine/members.js'
 import { label } from '../../engine/enums.js'
-import { bjDayStartMs, today } from '../../db/time.js'
+import { today } from '../../db/time.js'
 import { confirmEvent, rejectEvent } from '../../engine/events.js'
 import { confirmProposal, rejectProposal } from '../../engine/proposals.js'
 import { upsertChannel } from '../../engine/tasks.js'
 import { listMetrics } from '../../engine/metrics.js'
-import { runWriteTool, runQueryTool, runMetricTool } from './tools.js'
-import { runAgentLoop } from './agent.js'
 import { listBotHistory } from './history.js'
+import { runSlash, runConversation } from './pipeline.js'
 
-const HELP_TEXT = `我是项目大脑机器人，可以直接用自然语言使唤我：
-· 查询/汇总：「我的任务」「A 项目现在怎么样」「逾期有哪些」「总结一下 A 项目」
-· 登记：「登记进展：接口联调完成」「登记风险：等客户环境」（记录型，直接生效）
-· 变更提议：「把任务 #12 标为完成」「任务 #12 推迟到 2026-10-05」（出确认卡，责任人/牵头人确认后生效）
-· 群登记：管理员或牵头人在群里 @我 说「这是 XX 项目的群」
-· 记忆：我记得本会话最近的对话（约 2 小时内、群聊含他人发言），发 /new 立刻清空重新开始
-· 命令：/bind <绑定码>（绑定飞书账号，仅私聊）、/new（开新话题，清空上下文）、/help`
+// 绑定码签发/消费随斜杠命令移入统一管线；re-export 维持既有导入方（routes 与测试）不变
+export { issueBindCode, consumeBindCode } from './pipeline.js'
 
 // —— 签名与卡片 ——
 
@@ -93,34 +84,6 @@ export function buildBindCard({ projectId, projectName, chatId, chatName }, secr
   }
 }
 
-// —— 绑定码（web 生成 / 私聊 /bind 消费；只存 hash，不进 LLM） ——
-
-function sha256(s) {
-  return crypto.createHash('sha256').update(String(s)).digest('hex')
-}
-
-export function issueBindCode(db, memberId, { ttlMs = 10 * 60_000, now = Date.now() } = {}) {
-  const code = String(100000 + crypto.randomInt(0, 900000))
-  db.prepare('INSERT INTO bot_bind_codes (member_id, code_hash, expires_at, created_at) VALUES (?, ?, ?, ?)')
-    .run(memberId, sha256(code), now + ttlMs, now)
-  return { code, expiresAt: now + ttlMs }
-}
-
-export function consumeBindCode(db, code, openId, { now = Date.now() } = {}) {
-  const row = typeof code === 'string' && /^\d{6}$/.test(code.trim())
-    ? db.prepare('SELECT * FROM bot_bind_codes WHERE code_hash = ? AND used_at IS NULL AND expires_at > ? ORDER BY id DESC').get(sha256(code.trim()), now)
-    : null
-  if (!row) return { ok: false, reason: 'invalid' }
-  try {
-    const member = updateMember(db, row.member_id, { feishuId: openId }, row.member_id)
-    db.prepare('UPDATE bot_bind_codes SET used_at = ? WHERE id = ?').run(now, row.id)
-    return { ok: true, member }
-  } catch {
-    // open_id 已绑定其他成员（feishu_id UNIQUE）
-    return { ok: false, reason: 'conflict' }
-  }
-}
-
 // —— 主入口：处理一条入站消息事件 ——
 
 /**
@@ -163,8 +126,13 @@ export async function handleBotEvent(db, evt, opts = {}) {
   // 命中即回填审计行 member_id（限额统计需要把当前这条计入）
   if (member) db.prepare('UPDATE bot_commands SET member_id = ? WHERE id = ?').run(member.id, rowId)
 
-  // ④ 斜杠命令：确定性文法，绑定码等凭据不进 LLM
-  if (text.startsWith('/')) return handleSlash(db, evt, member, text, reply)
+  const env = {
+    surface: 'im', platform, chatId: evt.chatId, chatType: evt.chatType, member,
+    text, ts: evt.ts ?? Date.now(), messageId: evt.messageId, senderOpenId: evt.senderOpenId, evt,
+  }
+
+  // ④ 斜杠命令：统一注册表（确定性文法，绑定码不进 LLM）——先于未登记群开关，未登记群也能 /help（既有语义）
+  if (text.startsWith('/')) return await runSlash(db, env, reply)
 
   if (!member) {
     if (evt.chatType === 'p2p') {
@@ -173,51 +141,15 @@ export async function handleBotEvent(db, evt, opts = {}) {
     return finish({ result: 'ignored_unbound' }) // 群里静默忽略（S20-6，含离职成员）
   }
 
-  // ⑤ 每日限额（北京日）
-  const cfg = getSetting(db, 'im.feishu')
-  const used = db.prepare('SELECT COUNT(*) AS n FROM bot_commands WHERE member_id = ? AND kind = ? AND created_at >= ?')
-    .get(member.id, 'command', bjDayStartMs()).n
-  if (used > cfg.commandQuotaPerDay) {
-    return reply(`今天的指令额度（${cfg.commandQuotaPerDay} 条）已用完，明天再来找我吧。`, { memberId: member.id, intent: 'gate', result: 'refused_quota' })
-  }
-
-  // ⑥ 渠道上下文：已登记群带默认项目；未登记群按开关决定是否响应（S20-9）
+  // ⑤ 渠道上下文：已登记群带默认项目；未登记群按开关决定是否响应（S20-9）
   let channel = null
   if (evt.chatType === 'group') {
     channel = db.prepare('SELECT * FROM channels WHERE platform = ? AND group_key = ?').get(platform, evt.chatId) || null
-    if (!channel && !cfg.answerUnregisteredGroups) return finish({ memberId: member.id, intent: 'gate', result: 'refused_unregistered' })
+    if (!channel && !getSetting(db, 'im.feishu').answerUnregisteredGroups) return finish({ memberId: member.id, intent: 'gate', result: 'refused_unregistered' })
   }
 
-  // ⑦ LLM 未配置：确定性降级，只剩斜杠命令
-  const llm = getLlm(db, opts.llm)
-  if (!llm) {
-    return reply('系统未配置 LLM，自然语言指令暂不可用（管理员可在配置台填写 DeepSeek 参数）。可用命令：/help', { memberId: member.id, intent: 'gate', result: 'no_llm' })
-  }
-
-  // ⑧ 有界循环（读自由写收敛）；S20-13：同会话多轮上下文（装配失败降级为无历史，不阻塞主链路）
-  const sqlLog = []
-  const execTool = async (parsed) => {
-    if (parsed.action === 'query') {
-      try {
-        const r = runQueryTool(db, parsed.sql)
-        sqlLog.push(String(parsed.sql).slice(0, 500))
-        return `${JSON.stringify(r.rows).slice(0, 4000)}（${r.count} 行${r.truncated ? '，已截断' : ''}）`
-      } catch (e) {
-        return `查询失败：${e.message}（修正 SQL 重试，或基于已有信息 reply）`
-      }
-    }
-    if (parsed.action === 'metric') {
-      try {
-        return JSON.stringify(runMetricTool(db, parsed.id, parsed.params)).slice(0, 4000)
-      } catch (e) {
-        return `指标失败：${e.message}`
-      }
-    }
-    if (parsed.action === 'write') {
-      return runWriteTool(db, { kind: parsed.kind, payload: parsed.payload }, { member, evt, llm })
-    }
-    return '未知动作'
-  }
+  // ⑥ 统一管线：限额/LLM 解析/有界循环（K12）；S20-13 同会话多轮上下文（装配失败降级为无历史，不阻塞主链路）
+  const cfg = getSetting(db, 'im.feishu')
   let history = []
   let historyDegraded = false
   try {
@@ -227,58 +159,27 @@ export async function handleBotEvent(db, evt, opts = {}) {
   } catch {
     historyDegraded = true
   }
-  const out = await runAgentLoop({
-    llm,
+  const out = await runConversation(db, env, {
+    llm: opts.llm, history, reply,
     systemPrompt: buildSystemPrompt(db, { member, channel, chatType: evt.chatType, hasHistory: history.length > 0 }),
-    userText: text, history, execTool,
+    detailExtra: historyDegraded ? { historyDegraded: true } : undefined,
   })
-  const detail = { turns: out.turns, queries: out.queries, sql: sqlLog, history: history.length, ...(historyDegraded ? { historyDegraded: true } : {}) }
 
-  if (out.kind === 'reply') {
-    return reply(out.text || '（空回复）', { memberId: member.id, intent: 'reply', result: out.result, llmCalls: out.turns, detail })
-  }
-  const w = out.writeResult
-  if (w?.type === 'card') {
+  // ⑦ 卡片出口：渲染为 HMAC 签名确认卡（建议/提议/群登记），回执合成文本落 bot_reply（S20-15，LLM 可指代）
+  if (out?.type === 'card') {
+    const w = out.writeResult
     const secret = opts.secret ?? (process.env.GB_PMO_SESSION_SECRET || '')
     const card = w.cardKind === 'bind' ? buildBindCard(w, secret) : w.cardKind === 'propose' ? buildProposalCard(w, secret) : buildSuggestCard(w, secret)
     const sent = await send({ chatId: evt.chatId, card })
-    // 卡片回执合成文本（S20-15）：人可读、LLM 可指代——「确认一下」的指代对象
     const cardDesc = w.cardKind === 'bind'
       ? `[群登记确认卡] 将本群绑定为项目「${w.projectName}」的专题渠道，待确认`
       : w.cardKind === 'propose'
         ? `[已生成提议 #${w.proposalId}] ${w.summary}，待有权人确认`
         : `[已生成待确认事件 #${w.eventId}] ${w.summary}，待确认`
     recordReplyRow(db, sent?.messageId, evt, cardDesc, `write:${w.cardKind}`)
-    return finish({ memberId: member.id, intent: `write:${w.cardKind}`, result: 'card_sent', llmCalls: out.turns, detail: { ...detail, eventId: w.eventId ?? null } })
+    return finish({ memberId: member.id, intent: `write:${w.cardKind}`, result: 'card_sent', llmCalls: out.llmCalls, detail: { ...out.detail, eventId: w.eventId ?? null } })
   }
-  return reply(w?.text || '操作完成。', { memberId: member.id, intent: `write:${w?.type ?? '?'}`, result: w?.result || 'replied', llmCalls: out.turns, detail })
-}
-
-async function handleSlash(db, evt, member, text, reply) {
-  const cmd = text.split(/\s+/)[0].toLowerCase()
-  if (cmd === '/bind') {
-    if (evt.chatType !== 'p2p') {
-      return reply('绑定码是个人凭证，请私聊我发送 /bind <绑定码>（不要在群里晒）。', { intent: 'bind', result: 'replied' }) // S20-11
-    }
-    if (member) return reply(`你已绑定为成员「${member.name}」，无需重复绑定。`, { memberId: member.id, intent: 'bind', result: 'bound' })
-    const consumed = consumeBindCode(db, text.split(/\s+/)[1], evt.senderOpenId)
-    if (consumed.ok) {
-      return reply(`绑定成功，你是「${consumed.member.name}」。现在直接对我说话就行，发 /help 看能力清单。`, { memberId: consumed.member.id, intent: 'bind', result: 'bound' })
-    }
-    const hint = consumed.reason === 'conflict' ? '（该飞书账号似乎已绑定其他成员，请联系管理员处理）' : ''
-    return reply(`绑定码无效或已过期${hint}。请在系统 web 端登录后重新生成（10 分钟内有效），再私聊我发送 /bind <绑定码>。`, { intent: 'bind', result: 'guidance' })
-  }
-  if (cmd === '/new' || cmd === '/clear') {
-    // S20-14：开新话题——落水位线立即清空当前会话上下文（append-only，审计行不删；群聊全群生效）
-    if (!member) {
-      return reply('还未识别你的飞书账号，暂时没有对话记忆可清空。请先在系统 web 端登录生成飞书绑定码，再私聊我发送 /bind <绑定码> 完成绑定。', { intent: 'context', result: 'guidance' })
-    }
-    db.prepare('INSERT INTO bot_context_resets (platform, chat_id, member_id, message_id, cleared_at) VALUES (?, ?, ?, ?, ?)')
-      .run(evt.platform || 'feishu', evt.chatId || '', member.id, evt.messageId, Date.now())
-    return reply('已开启新话题：我不再引用此前的对话（之前的登记与提议不受影响）。', { memberId: member.id, intent: 'context', result: 'reset' })
-  }
-  if (cmd === '/help') return reply(HELP_TEXT, { memberId: member?.id, intent: 'help', result: 'replied' })
-  return reply(`不认识的命令 ${cmd}。${HELP_TEXT}`, { memberId: member?.id, intent: 'help', result: 'replied' })
+  return out
 }
 
 // —— 卡片回调（确认/驳回/群登记） ——

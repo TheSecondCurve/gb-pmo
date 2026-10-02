@@ -1,13 +1,10 @@
-// S24（v0.16）Web AI 助手会话编排：与 S20 飞书机器人同一核心 Agent（runAgentLoop + bot/tools），
-// 差异只在编排层——web 身份=登录会话成员（无需绑定码）、无渠道上下文、建议型在页面确认。
+// S24（v0.16）Web AI 助手会话编排：与 S20 飞书机器人同一核心 Agent（统一会话管线 pipeline.js，K12），
+// 差异只在适配层——web 身份=登录会话成员（无需绑定码）、无渠道上下文、建议型在页面确认（无卡片）。
 // 会话/消息持久化（chat_sessions/chat_messages，软删）；限额与审计复用 bot_commands（platform='web'）。
 
-import { getSetting } from '../engine/settings.js'
-import { getLlm } from './llm.js'
-import { runAgentLoop, MAX_HISTORY } from './bot/agent.js'
-import { runQueryTool, runMetricTool, runWriteTool } from './bot/tools.js'
+import { MAX_HISTORY } from './bot/agent.js'
+import { runConversation } from './bot/pipeline.js'
 import { buildSystemPrompt } from './bot/command.js'
-import { bjDayStartMs } from '../db/time.js'
 
 const notFound = (msg = '会话不存在') => Object.assign(new Error(msg), { statusCode: 404 })
 
@@ -73,7 +70,21 @@ function insertMessage(db, sessionId, role, content, meta) {
   return { ...row, meta: row.meta ? JSON.parse(row.meta) : null }
 }
 
-// —— 发消息：限额 → 审计 → 核心循环 → 落库 ——
+// —— 发消息：审计 → 统一管线（斜杠/限额/降级/循环）→ 落库 ——
+
+/** web 会话历史（S24-2 + v0.25 /new 水位线）：水位线之后、排除斜杠命令与其回执（与 S20-13 负面清单同构）。 */
+function assembleWebHistory(db, memberId, sessionId, excludeMessageId) {
+  const watermark = db.prepare('SELECT MAX(cleared_at) AS t FROM bot_context_resets WHERE platform = ? AND chat_id = ?')
+    .get('web', String(sessionId))?.t ?? 0
+  const slashIntent = new Set(['help', 'context', 'bind'])
+  return listMessages(db, memberId, sessionId).messages
+    .filter((m) => m.id !== excludeMessageId)
+    .filter((m) => m.created_at > watermark)
+    .filter((m) => !(m.role === 'user' && String(m.content).startsWith('/')))
+    .filter((m) => !(m.role === 'assistant' && slashIntent.has(m.meta?.intent)))
+    .slice(-MAX_HISTORY)
+    .map((m) => ({ role: m.role, content: m.content }))
+}
 
 /**
  * @param {object} opts { llm(测试注入 fake) }
@@ -104,87 +115,46 @@ export async function sendChatMessage(db, { memberId, sessionId, text }, opts = 
     db.prepare('UPDATE chat_sessions SET title = ? WHERE id = ? AND title = ?').run(content.slice(0, 20), session.id, '新会话')
   }
 
-  // 每日限额（北京日；含本条）
-  const quota = getSetting(db, 'chat').quotaPerDay
-  const used = db
-    .prepare(`SELECT COUNT(*) AS n FROM bot_commands WHERE member_id = ? AND kind = 'command' AND platform = 'web' AND created_at >= ?`)
-    .get(memberId, bjDayStartMs()).n
-  if (used > quota) {
-    const assistant = insertMessage(db, session.id, 'assistant', `今天的指令额度（${quota} 条）已用完，明天再来找我吧。`, { result: 'refused_quota' })
-    finish({ intent: 'gate', result: 'refused_quota' })
-    return { user: userMsg, assistant, session: getSession(db, memberId, session.id) }
-  }
-
-  // LLM 未配置：明确指引，不抛错
-  const llm = getLlm(db, opts.llm)
-  if (!llm) {
-    const assistant = insertMessage(
-      db, session.id, 'assistant',
-      '系统未配置 LLM，AI 助手暂不可用。管理员可在配置台「外部依赖 → LLM」配置任一类别（DeepSeek / GLM 国内 Coding Plan）后再来。',
-      { result: 'no_llm' }
-    )
-    finish({ intent: 'gate', result: 'no_llm' })
-    return { user: userMsg, assistant, session: getSession(db, memberId, session.id) }
-  }
-
-  // 核心循环（读自由写收敛，与 S20 同源）
   const member = db.prepare('SELECT id, name, role, status FROM members WHERE id = ?').get(memberId)
-  const sqlLog = []
-  const execTool = async (parsed) => {
-    if (parsed.action === 'query') {
-      try {
-        const r = runQueryTool(db, parsed.sql)
-        sqlLog.push(String(parsed.sql).slice(0, 500))
-        return `${JSON.stringify(r.rows).slice(0, 4000)}（${r.count} 行${r.truncated ? '，已截断' : ''}）`
-      } catch (e) {
-        return `查询失败：${e.message}（修正 SQL 重试，或基于已有信息 reply）`
-      }
+
+  // 文本出口统一经 reply：落 assistant 消息（meta 带结果/意图/用量）+ 审计收尾（斜杠/限额/降级/答复共用）
+  let lastAssistant = null
+  const reply = async (replyText, patch = {}) => {
+    const meta = { result: patch.result, ...(patch.intent ? { intent: patch.intent } : {}) }
+    if (patch.detail) {
+      meta.llmCalls = patch.llmCalls
+      meta.queries = patch.detail.queries
+      meta.sql = patch.detail.sql
     }
-    if (parsed.action === 'metric') {
-      try {
-        return JSON.stringify(runMetricTool(db, parsed.id, parsed.params)).slice(0, 4000)
-      } catch (e) {
-        return `指标失败：${e.message}`
-      }
-    }
-    if (parsed.action === 'write') {
-      return runWriteTool(db, { kind: parsed.kind, payload: parsed.payload }, { member, llm, sourcePlatform: 'web' })
-    }
-    return '未知动作'
+    if (patch.writeKind) meta.writeKind = patch.writeKind
+    lastAssistant = insertMessage(db, session.id, 'assistant', replyText, meta)
+    finish({ intent: patch.intent, result: patch.result, llmCalls: patch.llmCalls, queries: patch.detail?.queries, sql: patch.detail?.sql })
+    return { result: patch.result }
   }
-  const history = listMessages(db, memberId, session.id)
-    .messages.filter((m) => m.id !== userMsg.id)
-    .slice(-MAX_HISTORY)
-    .map((m) => ({ role: m.role, content: m.content }))
-  const out = await runAgentLoop({
-    llm,
+
+  const out = await runConversation(db, {
+    surface: 'web', platform: 'web', chatId: String(session.id), chatType: 'p2p', member,
+    text: content, ts: Date.now(), messageId: auditId,
+  }, {
+    llm: opts.llm,
+    history: assembleWebHistory(db, memberId, session.id, userMsg.id),
+    reply,
     systemPrompt: buildSystemPrompt(db, { member, channel: null, chatType: 'p2p', surface: 'web' }),
-    userText: content,
-    history,
-    execTool,
   })
 
-  const detail = { llmCalls: out.turns, queries: out.queries, sql: sqlLog }
-  let assistant
-  if (out.kind === 'reply') {
-    assistant = insertMessage(db, session.id, 'assistant', out.text || '（空回复）', { result: out.result, ...detail })
-    finish({ intent: 'reply', result: out.result, ...detail })
-  } else {
-    const w = out.writeResult ?? {}
-    if (w.type === 'card' && w.cardKind === 'propose') {
-      // S25 项目/配置级提议：web 无卡片，给提议号 + 生效/驳回按钮（走 /proposals 确认口子）
-      const text = `已生成提议 #${w.proposalId}（${w.summary}），待有权人确认后才会生效——在下方点「生效」或「驳回」。`
-      assistant = insertMessage(db, session.id, 'assistant', text, { result: 'card_sent', proposalId: w.proposalId, writeKind: 'propose', ...detail })
-      finish({ intent: `write:propose:${w.kind}`, result: 'card_sent', ...detail })
-    } else if (w.type === 'card' && w.cardKind === 'suggest') {
-      // web 无卡片：直接给事件号 + 生效/驳回指引（页面按钮走既有 confirm/reject 口子）
-      const text = `已生成建议事件 #${w.eventId}（${w.summary}），待确认后才会变更任务——在下方点「生效」或「驳回」，确认人留痕。`
-      assistant = insertMessage(db, session.id, 'assistant', text, { result: 'card_sent', eventId: w.eventId, writeKind: w.cardKind, ...detail })
-      finish({ intent: `write:${w.cardKind}`, result: 'card_sent', ...detail })
-    } else {
-      assistant = insertMessage(db, session.id, 'assistant', w.text || '操作完成。', { result: w.result || 'replied', writeKind: w.type, ...detail })
-      finish({ intent: `write:${w.type ?? '?'}`, result: w.result || 'replied', ...detail })
-    }
+  // 卡片出口：web 无卡片——提议/建议给编号 + 页面「生效/驳回」按钮（S24-3/S25，走既有确认口子）
+  if (out?.type === 'card') {
+    const w = out.writeResult
+    const isPropose = w.cardKind === 'propose'
+    const cardText = isPropose
+      ? `已生成提议 #${w.proposalId}（${w.summary}），待有权人确认后才会生效——在下方点「生效」或「驳回」。`
+      : `已生成建议事件 #${w.eventId}（${w.summary}），待确认后才会变更任务——在下方点「生效」或「驳回」，确认人留痕。`
+    lastAssistant = insertMessage(db, session.id, 'assistant', cardText, {
+      result: 'card_sent', intent: `write:${w.cardKind}`, writeKind: w.cardKind,
+      ...(isPropose ? { proposalId: w.proposalId } : { eventId: w.eventId }),
+      llmCalls: out.llmCalls, queries: out.detail.queries, sql: out.detail.sql,
+    })
+    finish({ intent: `write:${w.cardKind}${isPropose ? `:${w.kind}` : ''}`, result: 'card_sent', llmCalls: out.llmCalls, queries: out.detail.queries, sql: out.detail.sql })
   }
-  return { user: userMsg, assistant, session: getSession(db, memberId, session.id) }
+  return { user: userMsg, assistant: lastAssistant, session: getSession(db, memberId, session.id) }
 }

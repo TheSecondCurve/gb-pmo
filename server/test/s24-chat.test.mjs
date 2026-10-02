@@ -154,6 +154,58 @@ describe('S24 Web AI 助手会话', () => {
     expect(rows.map((r) => r.result)).toEqual(['replied', 'refused_quota'])
   })
 
+  it('S24-4: 限额只计 web 面——飞书指令不烧 web 额度（v0.25 对称）', async () => {
+    ctx = await setupApp()
+    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    await authed(ctx.app, cookie, 'PUT', '/api/v1/admin/settings/chat', { quotaPerDay: 1 })
+    // 同成员当日 3 条飞书指令审计行（真实计数来源）
+    for (let i = 0; i < 3; i++) {
+      ctx.db.prepare(
+        `INSERT INTO bot_commands (message_id, platform, chat_id, chat_type, sender_open_id, member_id, kind, raw_text, intent, result, created_at)
+         VALUES (?, 'feishu', 'oc_sym', 'p2p', 'ou_sym', ?, 'command', ?, 'reply', 'replied', ?)`
+      ).run(`om_sym_${i}`, ctx.members.admin.id, `飞书第 ${i + 1} 条`, Date.now())
+    }
+    const sid = (await authed(ctx.app, cookie, 'POST', '/api/v1/chat/sessions', {})).body.id
+    ctx.app.llm = fakeLlm([{ action: 'reply', text: '第一条没问题。' }])
+    const ok = await authed(ctx.app, cookie, 'POST', `/api/v1/chat/sessions/${sid}/messages`, { text: '在吗' })
+    expect(ok.body.assistant.content).toBe('第一条没问题。')
+  })
+
+  it('S24-6: web 斜杠命令——/help 零 LLM、/new 水位线清空上下文、未知命令回提示（v0.25）', async () => {
+    ctx = await setupApp()
+    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    const sid = (await authed(ctx.app, cookie, 'POST', '/api/v1/chat/sessions', {})).body.id
+
+    // LLM 未配置：/help 仍可用（确定性路径不进 LLM），文案是 web 能力清单（不含 /bind）
+    const help = await authed(ctx.app, cookie, 'POST', `/api/v1/chat/sessions/${sid}/messages`, { text: '/help' })
+    expect(help.status).toBe(200)
+    expect(help.body.assistant.meta.result).toBe('replied')
+    expect(help.body.assistant.content).toContain('/new')
+    expect(help.body.assistant.content).not.toContain('/bind')
+
+    // 未知命令：确定性提示，不进 LLM
+    const unknown = await authed(ctx.app, cookie, 'POST', `/api/v1/chat/sessions/${sid}/messages`, { text: '/foo' })
+    expect(unknown.body.assistant.content).toContain('不认识')
+
+    // /new：落 bot_context_resets 水位线（platform=web、chat_id=会话 id），不进 LLM
+    const capture = []
+    ctx.app.llm = fakeLlm([
+      { action: 'reply', text: '客户H系统一切正常。' },
+      { action: 'reply', text: '好的。' },
+    ], capture)
+    const q1 = await authed(ctx.app, cookie, 'POST', `/api/v1/chat/sessions/${sid}/messages`, { text: '客户H系统怎么样' })
+    expect(q1.body.assistant.content).toBe('客户H系统一切正常。')
+    const reset = await authed(ctx.app, cookie, 'POST', `/api/v1/chat/sessions/${sid}/messages`, { text: '/new' })
+    expect(reset.body.assistant.content).toMatch(/新话题/)
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM bot_context_resets WHERE platform = 'web' AND chat_id = ?`).get(String(sid)).n).toBe(1)
+    expect(capture).toHaveLength(1) // /new 未消耗 LLM 调用
+
+    // 水位线后追问：历史不含第一轮问答，也不含 /new 回执（仅 system + 当前 user）
+    const q2 = await authed(ctx.app, cookie, 'POST', `/api/v1/chat/sessions/${sid}/messages`, { text: '它的逾期任务呢' })
+    expect(q2.body.assistant.content).toBe('好的。')
+    expect(capture.at(-1).messages).toEqual(['system', 'user'])
+  })
+
   it('S24-5: LLM 未配置回明确指引；只读 SQL 护栏与 S20 同源（拒写）', async () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
