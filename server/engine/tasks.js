@@ -250,6 +250,27 @@ export function overdueTasksOf(db, memberId) {
 
 // —— 渠道（S1 绑定 / S3 抽取源；D5 通用群）——
 
+/**
+ * 渠道写权限（S17-12）：管理员全可；非管理员仅目标项目的牵头人可维护专题渠道；
+ * 通用群（D5 属系统级配置）仅管理员。删除时目标=渠道当前绑定项目（canDeleteChannel）。
+ */
+export function canManageChannel(db, member, { channelType, projectId } = {}) {
+  if (member?.role === 'admin') return true
+  const pid = Number(projectId)
+  if (channelType === 'dedicated' && Number.isInteger(pid)) {
+    const p = db.prepare('SELECT lead_member_id FROM projects WHERE id = ?').get(pid)
+    return p?.lead_member_id === member?.id
+  }
+  return false
+}
+
+export function canDeleteChannel(db, member, id) {
+  if (member?.role === 'admin') return true
+  const ch = db.prepare('SELECT channel_type, project_id FROM channels WHERE id = ?').get(id)
+  if (!ch) return true // 渠道不存在，交给 deleteChannel 报 404
+  return canManageChannel(db, member, { channelType: ch.channel_type, projectId: ch.project_id })
+}
+
 export function upsertChannel(db, { platform, groupKey, name, channelType = 'dedicated', projectId }, by) {
   assertValue('channelPlatform', platform)
   assertValue('channelType', channelType)
@@ -261,12 +282,14 @@ export function upsertChannel(db, { platform, groupKey, name, channelType = 'ded
     throw Object.assign(new Error('通用群不绑定单一项目（由 LLM 分拣）'), { statusCode: 400 })
   }
   const now = Date.now()
+  // 新建绑定 cursor=绑定时刻：任一入口首拉只处理绑定之后的聊天，不回灌历史（S3-6/v0.24）；
+  // 已绑定渠道更新（改名/改绑/改类型）不在此重置游标——回看历史只能走 resetChannelCursor。
   db.prepare(
-    `INSERT INTO channels (platform, group_key, name, channel_type, project_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO channels (platform, group_key, name, channel_type, project_id, cursor, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(platform, group_key) DO UPDATE SET name = excluded.name, channel_type = excluded.channel_type,
        project_id = excluded.project_id, updated_at = excluded.updated_at`
-  ).run(platform, groupKey, name || null, channelType, channelType === 'dedicated' ? projectId : null, now, now)
+  ).run(platform, groupKey, name || null, channelType, channelType === 'dedicated' ? projectId : null, String(Math.floor(now / 1000)), now, now)
   audit(db, { memberId: by, action: 'channel.upsert', objectType: 'channel', objectId: `${platform}:${groupKey}` })
   return camelizeRow(db.prepare('SELECT * FROM channels WHERE platform = ? AND group_key = ?').get(platform, groupKey))
 }

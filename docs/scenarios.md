@@ -32,6 +32,7 @@
 | S3-3 | 当消息发送者的飞书/企微 id 无法映射到成员表时，应归因为「未识别发言人」，且不生成针对具体人的任务建议 | 同上 |
 | S3-4 | 当消息含明确完成信号时，应生成任务状态变更**建议**并推给任务责任人 | 同上 |
 | S3-5 | 当抽取建议的人工采纳率连续一周低于阈值时，应向管理员告警 | `server/test/s3-extraction.test.mjs` |
+| S3-6 | 当通过任一入口（立项向导/项目详情页/配置台/Agent action/机器人登记）新建渠道绑定时，抽取游标应=绑定时刻，首次抽取只处理绑定之后的聊天、不回灌历史消息；已绑定渠道更新（改名/改绑/改类型）不应重置游标；回看历史仅经 `reset_channel_cursor`（1~90 天）显式进行；存量空游标渠道升级后按升级时刻起算（migration 回填，不回灌）（v0.24） | `server/test/s3-extraction.test.mjs`、`server/test/db-migrations.test.mjs` |
 
 ## S4（P0）— 成员/老板 — Agent 接入（形态 B）
 
@@ -104,6 +105,7 @@
 | S17-9 | 当在类型编辑器或立项弹窗点「AI 起草」时，LLM 按名称+说明生成任务清单草稿（3~15 条、无阶段无依赖）回填编辑器；草稿不落库，确认后走既有保存/立项通道；LLM 未配置返回明确指引（v0.8/v0.18：立项弹窗起草全员可用） | `server/test/s17-admin.test.mjs` |
 | S17-10 | 当系统管理员 PAT 经 action 端点发起配置类操作（upsert_channel / delete_channel / put_setting / reset_channel_cursor）时，与 web 配置台同构生效并留审计；成员 PAT 403；游标重置回看 1~90 天（v0.9）；`draft_task_list` 任务清单起草成员 write scope 可用、草稿不落库（v0.18）；`create_template`/`draft_template_tasks` 已裁撤（未知 action 拒绝） | `server/test/s4-agent.test.mjs` |
 | S17-11 | 当系统管理员配置 LLM 时，各类别（DeepSeek / GLM 国内 Coding Plan）分别保存 apiKey/baseUrl/model 互不覆盖；切换 provider 即生效（含定时任务、无需重启），切回后原配置可用；生效类别未配 key 走降级；baseUrl/model 按类别默认补齐；测试连接按所选类别端点；未知 provider 400；存量扁平配置自动迁移不丢 key；未配置指引不绑定类别（v0.14/v0.15） | `server/test/s17-admin.test.mjs`、`server/test/misc-units.test.mjs`、`server/test/s18-scheduler.test.mjs` |
+| S17-12 | 当普通成员调用渠道写接口（新增/改绑/删除）时，仅当其为目标（删除时=当前绑定）项目的牵头人且渠道为专题渠道时放行，否则 403；通用群维护仅系统管理员；Agent action 通道维持仅系统管理员 PAT（S17-10）；项目详情页「绑定渠道」入口按同权限显隐（v0.24） | `server/test/s17-admin.test.mjs` |
 
 ## S18（P0）— 管理员 — 大脑调度与手动对齐（v0.7）
 

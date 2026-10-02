@@ -54,4 +54,22 @@ describe('迁移', () => {
     db.close()
     restored.close()
   })
+
+  it('0015 渠道游标回填：存量空游标渠道按升级时刻起算，不回灌历史（S3-6）', () => {
+    const { db } = setupDb()
+    // 造一行「旧版 web/Agent 建的空游标渠道」（首拉本会回看 7 天），再模拟升级前状态重跑迁移
+    db.prepare(
+      `INSERT INTO channels (platform, group_key, channel_type, project_id, cursor, created_at, updated_at)
+       VALUES ('feishu', 'oc_legacy', 'general', NULL, NULL, ?, ?)`
+    ).run(Date.now(), Date.now())
+    db.prepare(`DELETE FROM migrations_meta WHERE name = '0015_channel_cursor_backfill.sql'`).run()
+    const applied = migrate(db)
+    expect(applied).toBeGreaterThanOrEqual(1)
+    const cursor = Number(db.prepare(`SELECT cursor FROM channels WHERE group_key = 'oc_legacy'`).get().cursor)
+    expect(cursor).toBeGreaterThan(0)
+    // 幂等：已回填的行不重复动
+    migrate(db)
+    expect(Number(db.prepare(`SELECT cursor FROM channels WHERE group_key = 'oc_legacy'`).get().cursor)).toBe(cursor)
+    db.close()
+  })
 })

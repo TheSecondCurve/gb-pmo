@@ -269,11 +269,11 @@ describe('S18 管理端点（手动对齐 + 调度配置）', () => {
       expect(okRow.pulled).toBe(1)
       expect(okRow.events).toBe(1) // 无 LLM 配置 → 确定性降级产记录型事件
       expect(badRow.error).toMatch(/机器人不在群内/)
-      // 游标：成功渠道推进、失败渠道不动
+      // 游标：成功渠道推进、失败渠道不动（S3-6/v0.24 后创建即落绑定时刻游标，失败渠道应保持该值不推进）
       const c1 = ctx.db.prepare('SELECT cursor FROM channels WHERE id = ?').get(ok.id)
       const c2 = ctx.db.prepare('SELECT cursor FROM channels WHERE id = ?').get(bad.id)
       expect(c1.cursor).toBe('1000')
-      expect(c2.cursor).toBe(null)
+      expect(c2.cursor).toBe(bad.cursor)
       // 审计
       const audit = ctx.db.prepare(`SELECT * FROM audit_logs WHERE action = 'extraction.run'`).get()
       expect(audit).toBeTruthy()

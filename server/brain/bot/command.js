@@ -343,10 +343,9 @@ export async function handleCardAction(db, cardEvt, opts = {}) {
           result = 'refused_permission'
           replyText = `「${member.name}」无权登记（仅项目牵头人或管理员）`
         } else {
+          // 新建绑定 cursor=登记时刻（upsertChannel 落值，S3-6/v0.24 统一）：只抽取登记之后的聊天，不回灌历史；
+          // 该群此前已绑定过时为更新，保留游标不重置
           upsertChannel(db, { platform: 'feishu', groupKey: v.g, name: v.n || null, channelType: 'dedicated', projectId: project.id }, member.id)
-          // cursor=登记时刻：只抽取登记之后的聊天，不回灌历史（S20-8）
-          db.prepare(`UPDATE channels SET cursor = ?, updated_at = ? WHERE platform = 'feishu' AND group_key = ?`)
-            .run(String(Math.floor(Date.now() / 1000)), Date.now(), v.g)
           result = 'confirmed'
           replyText = `本群已绑定为项目「${project.name}」的专题渠道，从现在开始定时抽取归档。`
         }
