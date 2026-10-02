@@ -379,7 +379,7 @@ client.sh action generate_person_digest '{}'
 - **pushType**: daily_report=日报、digest=梳理、alert=预警、test=测试
 - **tokenScope**: read=只读、write=读写
 - **botCommandKind**: command=指令、card=卡片回调、bot_reply=机器人回复
-- **botCommandResult**: replied=已回复、clarified=已追问、guidance=绑定引导、bound=已绑定、card_sent=已发确认卡、confirmed=已确认生效、rejected=已驳回、refused_permission=权限不足、refused_quota=超出限额、refused_external=外部群拒答、refused_unregistered=未登记群拒答、ignored_unbound=未绑定忽略、ignored_dedup=重复忽略、no_llm=LLM 未配置、error=错误
+- **botCommandResult**: replied=已回复、clarified=已追问、guidance=绑定引导、bound=已绑定、card_sent=已发确认卡、confirmed=已确认生效、rejected=已驳回、refused_permission=权限不足、refused_quota=超出限额、refused_external=外部群拒答、refused_unregistered=未登记群拒答、ignored_unbound=未绑定忽略、ignored_dedup=重复忽略、refused_not_mentioned=未@机器人忽略、no_llm=LLM 未配置、error=错误
 
 <!--SCHEMA:END-->
 
