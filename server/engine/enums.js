@@ -5,7 +5,7 @@
 export const ENUMS = {
   memberRole: { admin: '系统管理员', member: '成员' },
   memberStatus: { active: '在职', offboarded: '离职' },
-  projectStatus: { planning: '待启动', active: '进行中', paused: '已暂停', closed: '已结项', cancelled: '已取消' },
+  projectStatus: { active: '进行中', closed: '已结项', cancelled: '已取消' }, // S29（v0.28）三态：planning/paused 裁撤，立项即进行中；终态不可逆
   projectTypeStatus: { active: '启用', disabled: '停用' },
   priority: { high: '高', medium: '中', low: '低' },
   // v0.6：任务状态固定三档（无 blocked/cancelled；任务相互独立，无前置依赖）

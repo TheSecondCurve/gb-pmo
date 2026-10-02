@@ -16,7 +16,7 @@ curl -fsSL http://<服务器地址>/agent/skill/gb-pmo/install.sh | sh
 # 2. 终端授权（密码只走终端，不经 Agent 对话；凭证存 ~/.gb-pmo/credentials.json）
 curl -fsSL http://<服务器地址>/agent/login.sh | sh
 # 3. 使用（安装目录下的 client.sh）
-client.sh sql "SELECT id, name, status, priority FROM projects WHERE status IN ('planning','active','paused')"
+client.sh sql "SELECT id, name, status, priority FROM projects WHERE status = 'active'"
 client.sh metrics
 client.sh metric overdue_tasks '{"groupBy":"project"}'
 client.sh action generate_person_digest '{}'
@@ -105,7 +105,7 @@ client.sh action generate_person_digest '{}'
 | id | INTEGER |  |
 | name | TEXT |  |
 | template_code | TEXT |  |
-| status | TEXT | planning|active|paused|closed|cancelled |
+| status | TEXT | active|closed|cancelled（S29 三态；planning/paused 已由 0016 归一，DEFAULT 为历史遗留，engine 始终显式赋值） |
 | priority | TEXT | high|medium|low |
 | lead_member_id | INTEGER |  |
 | client_name | TEXT |  |
@@ -364,7 +364,7 @@ client.sh action generate_person_digest '{}'
 
 - **memberRole**: admin=系统管理员、member=成员
 - **memberStatus**: active=在职、offboarded=离职
-- **projectStatus**: planning=待启动、active=进行中、paused=已暂停、closed=已结项、cancelled=已取消
+- **projectStatus**: active=进行中、closed=已结项、cancelled=已取消
 - **projectTypeStatus**: active=启用、disabled=停用
 - **priority**: high=高、medium=中、low=低
 - **taskStatus**: todo=未开始、doing=进行中、done=完成

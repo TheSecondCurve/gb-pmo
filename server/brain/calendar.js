@@ -13,19 +13,20 @@ const TERMINAL_PREFIX = { closed: '【已结项】', cancelled: '【已取消】
 
 /**
  * 期望事件内容（纯函数）：全日、闭区间。
- * 起 = 实际启动日 ‖ 计划开始日（缺失时锚到止日）；止 = 交付日期（终态=实际结束日 ‖ 交付日期）。
- * 无任何日期 → null（调用方跳过计数）。
+ * 起 = 实际启动日 ‖ 计划开始日；止 = 交付日期（终态=实际结束日 ‖ 交付日期）。
+ * S29：进行中项目以**交付日期**为上日历门槛（立项必落启动日，无交付日期=周期未定 → null 跳过计数）；
+ * 终态项目以实际结束日定格（S29 前遗留的取消项目可能无实际结束日，兜底交付日期；皆无 → null）。
  */
 export function eventContent(p) {
   const terminal = p.status === 'closed' || p.status === 'cancelled'
-  const startDay = p.actual_start_date || p.plan_start_date
   const endDay = terminal ? (p.actual_end_date || p.plan_end_date) : p.plan_end_date
-  if (!startDay && !endDay) return null
+  if (!endDay) return null
+  const startDay = p.actual_start_date || p.plan_start_date || endDay
   const summary = `${TERMINAL_PREFIX[p.status] || ''}${p.name}`
   const description = `状态：${label('projectStatus', p.status)} · 牵头人：${p.lead_name || `#${p.lead_member_id}`}` +
     ` · 优先级：${label('priority', p.priority)}${p.client_name ? ` · 客户：${p.client_name}` : ''}` +
     `${terminal ? ` · 周期已定格（${p.actual_start_date || p.plan_start_date || '?'} ~ ${endDay}）` : ''}`
-  return { summary, description, startDay: startDay || endDay, endDay: endDay || startDay }
+  return { summary, description, startDay, endDay }
 }
 
 const contentHash = (content) =>

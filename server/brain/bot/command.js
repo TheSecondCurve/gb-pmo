@@ -338,8 +338,8 @@ ${schemaDigest(db)}
 {"action":"write","kind":"record_event","payload":{"projectId":1,"eventType":"progress|risk|decision|blocker","summary":"一句中文"}}
 {"action":"write","kind":"suggest_event","payload":{"targetTaskId":1,"targetField":"status|plan_start_date|plan_end_date|responsible_member_id","targetValue":"done|YYYY-MM-DD|成员id","summary":"可选，缺省自动生成"}}
 ${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅飞书群聊）' : '{"action":"write","kind":"bind_channel","payload":{"projectId":1,"chatName":"群名"}}   仅群聊可用，仅项目牵头人/管理员'}
-{"action":"write","kind":"propose","payload":{"kind":"update_project_status","projectId":1,"status":"active|paused","planEndDate":"YYYY-MM-DD?"}}  项目状态提议（启动须有交付日期，可同请求补）
-{"action":"write","kind":"propose","payload":{"kind":"close_project","projectId":1,"summary?"}}   结项提议（确认时按 S8 校验：任务须全部完成）
+{"action":"write","kind":"propose","payload":{"kind":"cancel_project","projectId":1,"reason":"取消原因（必填）"}}  取消项目提议（原因必填，S29）
+{"action":"write","kind":"propose","payload":{"kind":"close_project","projectId":1,"summary":"结项总结（必填）"}}   结项提议（总结必填，S29；确认时按 S8 校验：任务须全部完成）
 {"action":"write","kind":"propose","payload":{"kind":"create_project","name":"...","typeCode":"...","leadMemberId":1,"planStartDate?","planEndDate?","tasks":["标题",...]?,"autoSchedule":true?}}  立项提议（tasks 缺省按类型内嵌清单实例化；autoSchedule=true 按「计划开始（缺省今天）→交付日期」倒排每条任务计划起止，须有 planEndDate）
 {"action":"write","kind":"propose","payload":{"kind":"create_project_type","code":"...","name":"...","tasks":["标题",...]}}  新建项目类型提议（任务清单内嵌于类型）
 {"action":"write","kind":"trigger","payload":{"name":"trigger_extraction|generate_project_digest|generate_person_digest|push_report","params":{}}}
@@ -349,7 +349,7 @@ ${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅
 1. 先查后答：结论必须基于 query/metric/brief 取回的数据，取不到就明说，绝不编造项目事实；项目整体状况优先 brief（数据已含中文标签，剩余天数负数=超期）。
 2. 项目/任务/成员一律用你查到的真实 id；相对日期按今天换算成 YYYY-MM-DD。
 3. 纯进展/风险/决策/阻塞 → record_event 直接登记；任务变更（状态/日期/责任人）→ suggest_event ${web ? '生成待确认事件（用户会在页面上确认生效），不得谎称已改' : '出确认卡，不得谎称已改'}。
-4. 项目级/配置级操作（项目状态/结项/立项/项目类型）→ propose 起草提议，待有权人确认后才生效，不得谎称已执行。
+4. 项目级/配置级操作（结项/取消/立项/项目类型）→ propose 起草提议，待有权人确认后才生效，不得谎称已执行；项目没有「暂停/启动」操作（S29：状态仅 进行中→已结项/已取消）。
 5. 不支持的事（财务/合同/绩效/自动重排期求解等）直接说明不支持。
 6. 回复用简洁中文，短段/列表即可。${web ? '\n6. 这是多轮会话：参考对话历史理解指代（「它/这个项目」等），历史里已有的查询结果可直接引用。' : ''}${hasHistory ? '\n7. 本次附带「对话历史」：仅供理解指代（如「它/这个项目/刚才那条」，群聊历史带说话人名）；事实与最新数据一律以本轮 query/metric 取回为准，历史结论可能已过时，不得直接引用历史数字回答现状。' : ''}`
 }

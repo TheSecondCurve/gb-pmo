@@ -5,7 +5,7 @@ import { camelizeRows } from '../db/index.mjs'
 import { today, bjWeekStartMs } from '../db/time.js'
 import { getSetting } from './settings.js'
 
-const OPEN_PROJECT = `p.status IN ('planning','active','paused')`
+const OPEN_PROJECT = `p.status = 'active'` // S29 三态：在跑=进行中
 const OPEN_TASK = `t.status IN ('todo','doing')`
 const DAY = 86400000
 
@@ -18,7 +18,7 @@ export const METRICS = [
     id: 'running_projects',
     name: '在跑项目数与状态分布',
     domain: '业务',
-    definition: '状态∈{待启动,进行中,已暂停}的项目数；不含已结项/已取消',
+    definition: '状态=进行中的项目数；不含已结项/已取消（S29 三态口径）',
     dims: ['status', 'priority', 'lead'],
     timeBasis: '按日快照（实时计算）',
     freq: '每周',

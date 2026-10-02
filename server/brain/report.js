@@ -24,7 +24,7 @@ export async function dailyReport(db, { force = false } = {}) {
   const projects = camelizeRows(
     db.prepare(
       `SELECT p.*, m.name AS lead_name FROM projects p LEFT JOIN members m ON m.id = p.lead_member_id
-       WHERE p.status IN ('planning','active','paused') ORDER BY CASE p.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END`
+       WHERE p.status = 'active' ORDER BY CASE p.priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END`
     ).all()
   )
   const todayEvents = camelizeRows(

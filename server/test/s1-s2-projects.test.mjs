@@ -1,5 +1,6 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
+import { today } from '../db/time.js'
 
 // PRD S1 / S2 / S5-2 — 立项（模板+自由创建+牵头人）、排期与依赖、优先级变更留痕
 
@@ -23,7 +24,8 @@ describe('S1 立项', () => {
     })
     expect(res.status).toBe(201)
     const detail = res.body
-    expect(detail.status).toBe('planning')
+    expect(detail.status).toBe('active') // S29：立项即进行中
+    expect(detail.actualStartDate).toBe(today()) // S29：启动日=立项日自动落
     expect(detail.stages).toBeUndefined()
     expect(detail.tasks.length).toBe(6)
     expect(detail.tasks.map((t) => t.title)).toContain('需求确认与范围冻结')
@@ -153,6 +155,22 @@ describe('S1 立项', () => {
       { planStartDate: '2026-10-01', planEndDate: '2026-10-02' }, { planStartDate: '2026-10-03', planEndDate: '2026-10-03' },
       { planStartDate: '2026-10-04', planEndDate: '2026-10-04' }, { planStartDate: '2026-10-05', planEndDate: '2026-10-05' },
     ])
+  })
+
+  it('S1-8/S29-1: 立项即进行中并落启动日；项目 PATCH 不再受理 status（状态仅经结项/取消变更）', async () => {
+    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
+      name: '三态项目N', typeCode: 'custom', leadMemberId: ctx.members.lead.id,
+    })
+    expect(res.status).toBe(201)
+    expect(res.body.status).toBe('active')
+    expect(res.body.actualStartDate).toBe(today())
+    // 任何 status 变更一律 400（含已裁撤的 planning/paused 与终态 closed/cancelled）
+    for (const status of ['planning', 'paused', 'closed', 'cancelled', 'active']) {
+      const denied = await authed(ctx.app, cookie, 'PATCH', `/api/v1/projects/${res.body.id}`, { status })
+      expect(denied.status).toBe(400)
+      expect(denied.body.message).toMatch(/结项|取消/)
+    }
   })
 })
 

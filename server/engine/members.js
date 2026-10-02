@@ -84,7 +84,7 @@ export function offboardMember(db, id, handover = {}, by) {
     .prepare(`SELECT id FROM tasks WHERE responsible_member_id = ? AND status IN ('todo','doing','blocked')`)
     .all(id).map((r) => r.id)
   const leadingProjects = db
-    .prepare(`SELECT id FROM projects WHERE lead_member_id = ? AND status IN ('planning','active','paused')`)
+    .prepare(`SELECT id FROM projects WHERE lead_member_id = ? AND status = 'active'`)
     .all(id).map((r) => r.id)
 
   const taskMap = new Map((handover.tasks || []).map((h) => [h.taskId, h.toMemberId]))

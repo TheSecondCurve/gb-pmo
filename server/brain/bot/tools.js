@@ -146,29 +146,24 @@ function getProj(db, id) {
 }
 
 function softValidateProposal(db, kind, p) {
-  if (kind === 'update_project_status') {
+  if (kind === 'cancel_project') {
     const proj = getProj(db, p.projectId)
     if (!proj) return { error: 'projectId 必填且须为真实项目 id（先 query 查项目）' }
-    const status = String(p.status || '')
-    if (!['planning', 'active', 'paused'].includes(status)) {
-      return { error: 'status 仅支持 planning/active/paused（结项请用 close_project）' }
-    }
-    const payload = { projectId: proj.id, status }
-    let detail = `${label('projectStatus', proj.status)} → ${label('projectStatus', status)}`
-    if (status === 'active') {
-      const endDate = String(p.planEndDate || proj.plan_end_date || '')
-      if (!DATE_OK.test(endDate)) return { error: '项目尚无交付日期：启动提议须同时带 planEndDate（YYYY-MM-DD，S21）' }
-      if (!proj.plan_end_date) { payload.planEndDate = endDate; detail += `，补交付日期 ${endDate}` }
-    }
-    return { payload, summary: `项目「${proj.name}」状态 ${detail}` }
+    const reason = String(p.reason || '').trim()
+    if (!reason) return { error: 'reason 必填（S29：取消项目必须留原因文本）' }
+    if (proj.status !== 'active') return { error: `项目已是终态（${label('projectStatus', proj.status)}），不可再取消` }
+    return { payload: { projectId: proj.id, reason: reason.slice(0, 200) }, summary: `取消项目「${proj.name}」：${reason}` }
   }
   if (kind === 'close_project') {
     const proj = getProj(db, p.projectId)
     if (!proj) return { error: 'projectId 必填且须为真实项目 id（先 query 查项目）' }
+    const summaryText = String(p.summary || '').trim()
+    if (!summaryText) return { error: 'summary 必填（S29：结项必须留结项总结；可先基于事件流起草）' }
+    if (proj.status !== 'active') return { error: `项目已是终态（${label('projectStatus', proj.status)}），不可再结项` }
     const open = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND status != 'done'`).get(proj.id).n
     return {
-      payload: { projectId: proj.id, ...(p.summary ? { summary: String(p.summary).slice(0, 200) } : {}) },
-      summary: `项目「${proj.name}」结项${open ? `（还有 ${open} 个未完成任务，确认时按 S8 校验）` : '（任务已全部完成）'}`,
+      payload: { projectId: proj.id, summary: summaryText.slice(0, 200) },
+      summary: `项目「${proj.name}」结项：${summaryText}${open ? `（还有 ${open} 个未完成任务，确认时按 S8 校验）` : '（任务已全部完成）'}`,
     }
   }
   if (kind === 'create_project') {

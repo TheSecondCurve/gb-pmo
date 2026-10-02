@@ -237,13 +237,14 @@ export function deleteTaskRef(db, id, by) {
   audit(db, { memberId: by, action: 'task_ref.delete', objectType: 'task_ref', objectId: id })
 }
 
-/** S7-1（v0.6 口径）：某人名下逾期未完任务清单。 */
+/** S7-1（v0.6 口径；S29 修订）：某人名下逾期未完任务清单——只计进行中项目（终态项目任务已冻结退出预警口径）。 */
 export function overdueTasksOf(db, memberId) {
   return camelizeRows(
     db.prepare(
       `SELECT t.id, t.title, t.plan_end_date, p.id AS project_id, p.name AS project_name
        FROM tasks t JOIN projects p ON p.id = t.project_id
-       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY()`
+       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND p.status = 'active'
+         AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY()`
     ).all(memberId)
   )
 }
