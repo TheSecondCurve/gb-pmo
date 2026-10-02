@@ -210,6 +210,16 @@ Docker/PaaS 容器不可 exec，配置台「运维诊断」段排障：诊断 sh
 | S26-3 | 当命令超过 `debug.timeoutMs` 时终止并回显 timedOut=true（不挂死）；输出超 `debug.maxOutputBytes` 时截断并标 truncated=true | 同上 |
 | S26-4 | 当飞书凭证未配置时自检第①段即失败并回配置指引（不发外网）；已配置时逐段回显通过/失败与断点提示，留 `debug.feishuSelfcheck` 审计 | 同上 |
 
+## S27（P0）— 成员 — 项目 Brief（v0.26）
+
+会话面对单个项目的整体问询：Agent 调 brief 动作一次取回结构化摘要（engine 确定性组装，北京时区），LLM 只叙述。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S27-1 | 当成员整体问询某项目时，Agent 优先 brief 动作一次取回摘要（概况/盘子/进行中/近期进展/下一步/风险）并基于数据叙述；项目不存在时明说 | `server/test/s27-brief.test.mjs` |
+| S27-2 | 数据组装在 engine 确定性完成（北京日窗口、剩余/超期天数 S21 口径），列表截断 10/8/5/5 附总数；LLM 不拼口径 | 同上 |
+| S27-3 | 飞书与 web 两入口行为一致（统一管线一次注册）；brief 与 query/metric 同受查询次数上限约束 | 同上 |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

@@ -9,7 +9,7 @@ import { getLlm } from '../llm.js'
 import { updateMember } from '../../engine/members.js'
 import { bjDayStartMs } from '../../db/time.js'
 import { runAgentLoop } from './agent.js'
-import { runQueryTool, runMetricTool, runWriteTool } from './tools.js'
+import { runQueryTool, runMetricTool, runWriteTool, runBriefTool } from './tools.js'
 
 // —— 帮助文案（按 surface；/bind 仅飞书私聊，web 清单不出现） ——
 
@@ -145,6 +145,13 @@ export function makeExecTool(db, env, { llm, sqlLog = [] } = {}) {
         return JSON.stringify(runMetricTool(db, parsed.id, parsed.params)).slice(0, 4000)
       } catch (e) {
         return `指标失败：${e.message}`
+      }
+    }
+    if (parsed.action === 'brief') {
+      try {
+        return JSON.stringify(runBriefTool(db, parsed.projectId)).slice(0, 6000)
+      } catch (e) {
+        return `Brief 失败：${e.message}（先 query 确认项目 id）`
       }
     }
     if (parsed.action === 'write') {
