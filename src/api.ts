@@ -41,7 +41,9 @@ export const api = {
   logout: () => req<{ ok: boolean }>('POST', '/api/v1/auth/logout'),
   me: () => req<{ member: { id: number; name: string; role: string } | null }>('GET', '/api/v1/auth/me'),
 
-  projects: () => req<{ projects: import('./types').ProjectRow[] }>('GET', '/api/v1/projects'),
+  // S30：可传状态集合（组合页取全部三态）；不传=服务端缺省仅进行中（Dashboard 依赖该缺省，勿改默认行为）
+  projects: (statuses?: string[]) => req<{ projects: import('./types').ProjectRow[] }>(
+    'GET', `/api/v1/projects${statuses?.length ? `?status=${statuses.join(',')}` : ''}`),
   project: (id: number) => req<import('./types').ProjectDetail>('GET', `/api/v1/projects/${id}`),
   createProject: (p: Record<string, unknown>) => req<import('./types').ProjectDetail>('POST', '/api/v1/projects', p),
   patchProject: (id: number, p: Record<string, unknown>) => req<import('./types').ProjectDetail>('PATCH', `/api/v1/projects/${id}`, p),

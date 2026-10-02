@@ -4,7 +4,7 @@ import { useStore } from './store'
 import { Btn } from './components/ui'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
-import Projects from './pages/Projects'
+import Projects, { type PortfolioView } from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
 import Admin from './pages/Admin'
 import Chat from './pages/Chat'
@@ -38,8 +38,11 @@ export default function App() {
   const path = route.replace(/^#/, '') || '/'
   let page: JSX.Element
   const m = path.match(/^#?\/projects\/(\d+)$/)
+  // S30 组合页视图深链：#/projects/board|table|people|timeline（#/projects 缺省表格）
+  const pvm = path.match(/^\/projects\/(board|table|people|timeline)$/)
   if (path === '/' || path === '/dashboard') page = <Dashboard />
-  else if (path === '/projects') page = <Projects />
+  else if (path === '/projects') page = <Projects view="table" />
+  else if (pvm) page = <Projects view={pvm[1] as PortfolioView} />
   else if (path === '/chat') page = <Chat /> // S24 AI 助手（全员）
   else if (m) page = <ProjectDetail id={Number(m[1])} />
   else if (path === '/admin' || path.startsWith('/admin/')) {
@@ -57,11 +60,12 @@ export default function App() {
     ['#/chat', 'AI 助手'],
     ...(member.role === 'admin' ? [['#/admin', '配置台'] as [string, string]] : []),
   ]
-  // 选中态：#/admin 深链（#/admin/<sec>/<tab>）也高亮配置台；#/ 与 #/dashboard 同页
+  // 选中态：#/admin 深链（#/admin/<sec>/<tab>）与 #/projects 深链（#/projects/<view>，S30）也高亮；#/ 与 #/dashboard 同页
   const isActive = (href: string) =>
     href === '#/dashboard' ? route === '#/' || route === '#/dashboard'
       : href === '#/admin' ? route.startsWith('#/admin')
-        : route === href
+        : href === '#/projects' ? route.startsWith('#/projects')
+          : route === href
   const linkCls = (href: string) => `block rounded-md px-3 py-2 ${isActive(href) ? 'bg-[var(--color-brand-soft)] font-medium text-[var(--color-brand)]' : 'hover:bg-[var(--color-bg)]'}`
 
   return (
