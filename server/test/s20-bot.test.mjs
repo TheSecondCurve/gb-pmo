@@ -394,6 +394,25 @@ describe('S20 机器人指令通道 — 审计、限额与去重', () => {
     expect(getSetting(ctx.db, 'im.feishu').commandQuotaPerDay).toBe(50)
   })
 
+  it('S20-5: 限额口径只计 IM 面——web 会话消息不烧飞书额度（v0.25 对称）', async () => {
+    // 同文件共享库：清李四当日指令行，从 0 起算
+    ctx.db.prepare('DELETE FROM bot_commands WHERE member_id = ?').run(ctx.members.dev.id)
+    setSetting(ctx.db, 'im.feishu', { commandQuotaPerDay: 2 }, 1)
+    // 真实路径造 3 条 web 指令审计行（LLM 未配置 → no_llm，审计行照落）
+    const cookie = await loginCookie(ctx.app, 'lisi', 'pass-123456')
+    const sid = (await authed(ctx.app, cookie, 'POST', '/api/v1/chat/sessions', {})).body.id
+    for (let i = 0; i < 3; i++) {
+      await authed(ctx.app, cookie, 'POST', `/api/v1/chat/sessions/${sid}/messages`, { text: `web 第 ${i + 1} 条` })
+    }
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM bot_commands WHERE member_id = ? AND platform = 'web' AND kind = 'command'`).get(ctx.members.dev.id).n).toBe(3)
+    // 飞书第 1 条：若口径未修（web 也计入），3 + 1 > 2 会被拒
+    const { llm } = scriptedLlm(JSON.stringify({ action: 'reply', text: '好的' }))
+    const rec = recorder()
+    const out = await handleBotEvent(ctx.db, p2p('fs_li', '在吗'), { llm, send: rec.send, secret: SECRET })
+    expect(out.result).toBe('replied')
+    setSetting(ctx.db, 'im.feishu', { commandQuotaPerDay: 50 }, 1)
+  })
+
   it('S20-10: 定时抽取跳过机器人已处理的消息（不双入库）', async () => {
     const p = await mkProject('客户G系统', ctx.members.lead.id)
     const ch = upsertChannel(ctx.db, { platform: 'feishu', groupKey: 'oc_g_sys', channelType: 'dedicated', projectId: p.id })
