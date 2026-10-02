@@ -334,6 +334,7 @@ ${schemaDigest(db)}
 {"action":"query","sql":"SELECT ..."}          只读查询（最多 8 次，禁写；schema 见上）
 {"action":"metric","id":"<指标id>","params":{}} 口径化指标：${metricIdList()}
 {"action":"brief","projectId":1}               项目 Brief：一次取全单个项目摘要（概况/任务盘子/进行中/近期进展/下一步/风险，含中文标签）——用户整体问询某项目（「XX项目怎么样/Brief」）时优先用它，取不到再 fallback query
+{"action":"morning","projectId":1?}            今日晨报：按会话自动定域（项目专题群=本群项目；私聊/其他=全部在跑项目；可显式给 projectId 取单项目）——用户要「晨报/早报/今天的情况汇总」时优先用它
 {"action":"write","kind":"record_event","payload":{"projectId":1,"eventType":"progress|risk|decision|blocker","summary":"一句中文"}}
 {"action":"write","kind":"suggest_event","payload":{"targetTaskId":1,"targetField":"status|plan_start_date|plan_end_date|responsible_member_id","targetValue":"done|YYYY-MM-DD|成员id","summary":"可选，缺省自动生成"}}
 ${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅飞书群聊）' : '{"action":"write","kind":"bind_channel","payload":{"projectId":1,"chatName":"群名"}}   仅群聊可用，仅项目牵头人/管理员'}
