@@ -141,4 +141,32 @@ describe('S3 IM 抽取与分拣', () => {
     const alert = ctx.db.prepare(`SELECT * FROM pushes WHERE push_type = 'alert' AND title LIKE '%采纳率%' AND recipient_member_id = ?`).get(ctx.members.admin.id)
     expect(alert).toBeTruthy()
   })
+
+  it('S3-6: 新建渠道绑定 cursor=绑定时刻（首拉不回灌）；改名/改绑不重置游标', async () => {
+    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    const a = await mkProject('客户G系统', ctx.members.lead.id)
+    const before = Math.floor(Date.now() / 1000)
+    const created = await authed(ctx.app, cookie, 'POST', '/api/v1/channels', {
+      platform: 'feishu', groupKey: 'oc_cursor_g', channelType: 'dedicated', projectId: a.id,
+    })
+    expect(created.status).toBe(201)
+    // 游标=绑定时刻：连接器 start = cursor+1，首次抽取只处理绑定之后的聊天
+    expect(Number(created.body.cursor)).toBeGreaterThanOrEqual(before)
+    expect(Number(created.body.cursor)).toBeLessThanOrEqual(Math.floor(Date.now() / 1000))
+    // 通用群同语义
+    const general = await authed(ctx.app, cookie, 'POST', '/api/v1/channels', {
+      platform: 'feishu', groupKey: 'oc_cursor_general', channelType: 'general',
+    })
+    expect(general.status).toBe(201)
+    expect(Number(general.body.cursor)).toBeGreaterThanOrEqual(before)
+
+    // 已绑定渠道更新（改名+改绑到另一项目）：游标保留，不重置、不回灌
+    const b = await mkProject('客户H系统', ctx.members.dev.id)
+    const updated = await authed(ctx.app, cookie, 'POST', '/api/v1/channels', {
+      platform: 'feishu', groupKey: 'oc_cursor_g', name: '改名并改绑', channelType: 'dedicated', projectId: b.id,
+    })
+    expect(updated.status).toBe(201)
+    expect(updated.body.projectId).toBe(b.id)
+    expect(Number(updated.body.cursor)).toBe(Number(created.body.cursor))
+  })
 })

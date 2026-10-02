@@ -198,11 +198,18 @@ export function registerApiRoutes(app) {
 
   app.get('/api/v1/channels', async () => ({ channels: tasks.listChannels(db) }))
 
+  // S17-12：渠道写权限——管理员全可；非管理员仅目标（删除时=当前绑定）项目的牵头人可维护专题渠道；通用群仅管理员
   app.post('/api/v1/channels', async (req, reply) => {
+    if (!tasks.canManageChannel(db, req.member, req.body)) {
+      return reply.status(403).send({ message: '仅系统管理员或项目牵头人可维护渠道（通用群仅系统管理员）' })
+    }
     return reply.status(201).send(tasks.upsertChannel(db, req.body, req.member.id))
   })
 
-  app.delete('/api/v1/channels/:id', async (req) => {
+  app.delete('/api/v1/channels/:id', async (req, reply) => {
+    if (!tasks.canDeleteChannel(db, req.member, Number(req.params.id))) {
+      return reply.status(403).send({ message: '仅系统管理员或绑定项目牵头人可删除渠道' })
+    }
     tasks.deleteChannel(db, Number(req.params.id), req.member.id)
     return { ok: true }
   })
