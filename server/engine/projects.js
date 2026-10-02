@@ -5,8 +5,8 @@ import { addEvent } from './events.js'
 import { audit } from './auth.js'
 import { resolveTypeForCreate, typeTaskTitles, normalizeTaskTitles } from './projectTypes.js'
 
-const OPEN_STATUSES = ['planning', 'active', 'paused']
-const IN_CYCLE_STATUSES = ['active', 'paused'] // 已进入交付周期（S21）
+const OPEN_STATUSES = ['active'] // S29（v0.28）三态：进行中→已结项/已取消
+const TERMINAL_STATUSES = ['closed', 'cancelled']
 const PRIORITY_ORDER = `CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END`
 
 /**
@@ -16,6 +16,12 @@ const PRIORITY_ORDER = `CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 EL
 export function daysToDelivery(p) {
   if (p.status === 'closed' || p.status === 'cancelled' || !p.plan_end_date) return null
   return dayDiff(today(), p.plan_end_date)
+}
+
+/** S29：终态项目待确认建议批量过期（结束即冻结建议流转，confirmEvent 另有终态守卫双保险）。 */
+function expirePendingSuggestions(db, projectId) {
+  db.prepare(`UPDATE project_events SET status = 'expired', decided_at = ? WHERE project_id = ? AND status = 'pending' AND nature = 'suggestion'`)
+    .run(Date.now(), projectId)
 }
 
 /**
@@ -38,10 +44,11 @@ export function backScheduleDates({ planStartDate, planEndDate, count }) {
 }
 
 /**
- * S1 立项（v0.18）：选项目类型 → 按其内嵌任务清单实例化（source=template）；
+ * S1 立项（v0.18；S29 修订）：选项目类型 → 按其内嵌任务清单实例化（source=template）；
  * 载荷显式给 tasks（标题数组）→ 覆盖实例化（source=manual，允许空清单，S1-6）；
  * autoSchedule=true → 按 [计划开始（缺省今天）→ 交付日期] 均分倒排任务计划起止（S1-7）。
  * templateCode 为 typeCode 的兼容别名（同码解析）。牵头人必填、任务默认责任人=牵头人（D3）。
+ * S29：立项即「进行中」，启动日=立项日自动落（不再有待启动/已暂停）。
  */
 export function createProject(db, input, by) {
   const { name, typeCode, templateCode, leadMemberId, priority = 'medium', clientName,
@@ -62,9 +69,9 @@ export function createProject(db, input, by) {
     const info = db.prepare(
       `INSERT INTO projects (name, template_code, project_type_id, status, priority, lead_member_id, client_name,
          plan_start_date, plan_end_date, actual_start_date, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, 'planning', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(name, type.code, type.id, priority, leadMemberId, clientName || null,
-      planStartDate || null, planEndDate || null, null, by ?? null, now, now)
+      planStartDate || null, planEndDate || null, today(), by ?? null, now, now)
     const projectId = Number(info.lastInsertRowid)
 
     titles.forEach((title, i) => {
@@ -152,9 +159,15 @@ export function listProjects(db, { statuses = OPEN_STATUSES } = {}) {
   })
 }
 
-/** S5-2 优先级调整：立即生效 + 事件痕迹。 */
+/** S5-2 优先级调整等字段维护：立即生效 + 事件痕迹。S29：不再受理 status（状态仅经结项/取消变更）；终态项目只读。 */
 export function updateProject(db, id, patch, by) {
   const cur = getProject(db, id)
+  if (TERMINAL_STATUSES.includes(cur.status)) {
+    throw Object.assign(new Error(`项目已${cur.status === 'closed' ? '结项' : '取消'}，归档只读（S29 终态不可逆）`), { statusCode: 409 })
+  }
+  if ('status' in patch) {
+    throw Object.assign(new Error('项目状态仅可经结项/取消变更（S29）：请走 POST /projects/:id/close|cancel'), { statusCode: 400 })
+  }
   const fields = {}
   if ('name' in patch) fields.name = patch.name
   if ('clientName' in patch) fields.client_name = patch.clientName || null
@@ -162,23 +175,6 @@ export function updateProject(db, id, patch, by) {
   if ('planEndDate' in patch) fields.plan_end_date = patch.planEndDate || null
   if ('priority' in patch && patch.priority !== cur.priority) {
     fields.priority = assertValue('priority', patch.priority)
-  }
-  if ('status' in patch && patch.status !== cur.status) {
-    const next = assertValue('projectStatus', patch.status)
-    if (next === 'closed') throw Object.assign(new Error('结项走 closeProject（S8）'), { statusCode: 400 })
-    fields.status = next
-    // cur 为 camelCase 行；启动日=首次激活落定，暂停后重启不重置（S21 交付周期起点）
-    if (next === 'active' && !cur.actualStartDate) fields.actual_start_date = today()
-  }
-  // S21：交付日期一等公民——切「进行中」必须有交付日期（同请求补齐亦放行）；
-  // 已进入交付周期（进行中/已暂停）的项目不可清空交付日期。
-  const nextStatus = fields.status || cur.status
-  const nextEndDate = 'plan_end_date' in fields ? fields.plan_end_date : cur.planEndDate
-  if (nextStatus === 'active' && !nextEndDate) {
-    throw Object.assign(new Error('未填交付日期（S21-1）：进行中项目 = 启动日→交付日期的交付周期，请先填交付日期'), { statusCode: 400 })
-  }
-  if (!nextEndDate && IN_CYCLE_STATUSES.includes(nextStatus) && IN_CYCLE_STATUSES.includes(cur.status)) {
-    throw Object.assign(new Error('交付日期不可清空（S21-3）：项目已进入交付周期（进行中/已暂停）'), { statusCode: 400 })
   }
   if (!Object.keys(fields).length) return getProjectDetail(db, id)
   fields.updated_at = Date.now()
@@ -191,12 +187,6 @@ export function updateProject(db, id, patch, by) {
         summary: `优先级 ${cur.priority} → ${fields.priority}（#${by}）`, speakerMemberId: by,
       })
     }
-    if (fields.status) {
-      addEvent(db, {
-        projectId: id, eventType: 'status_change', nature: 'record', sourcePlatform: 'web', generatedBy: 'web',
-        summary: `项目状态 ${cur.status} → ${fields.status}（#${by}）`, speakerMemberId: by,
-      })
-    }
     audit(db, { memberId: by, action: 'project.update', objectType: 'project', objectId: id, detail: { fields: Object.keys(patch) } })
   })
   tx()
@@ -204,11 +194,15 @@ export function updateProject(db, id, patch, by) {
 }
 
 /**
- * S8 结项（v0.6）：所有任务标记「完成」后才允许结项（唯一终态）；生成复盘摘要并归档只读。
+ * S8 结项（v0.6；S29 修订）：所有任务标记「完成」后才允许结项（唯一终态）；
+ * 结项总结必填（可先取 brain/digest.closeoutSummary 的 AI 草稿、人工改后提交）；
+ * 落实际结束日、计划中里程碑转已取消、待确认建议批量过期、归档只读，终态不可逆。
  */
 export function closeProject(db, id, { summary } = {}, by) {
   const cur = getProject(db, id)
-  if (cur.status === 'closed') throw Object.assign(new Error('项目已结项'), { statusCode: 409 })
+  if (TERMINAL_STATUSES.includes(cur.status)) {
+    throw Object.assign(new Error(`项目已${cur.status === 'closed' ? '结项' : '取消'}（S29 终态不可逆）`), { statusCode: 409 })
+  }
   const openTasks = db
     .prepare(`SELECT id, title FROM tasks WHERE project_id = ? AND status != 'done'`)
     .all(id)
@@ -217,16 +211,46 @@ export function closeProject(db, id, { summary } = {}, by) {
       statusCode: 409, openTasks,
     })
   }
+  const text = String(summary || '').trim()
+  if (!text) throw Object.assign(new Error('结项总结必填（S29：结束项目必须留原因文本；可先取 AI 复盘草稿改后提交）'), { statusCode: 400 })
   const tx = db.transaction(() => {
     db.prepare('UPDATE milestones SET status = ? WHERE project_id = ? AND status = ?')
       .run('cancelled', id, 'planned')
     db.prepare('UPDATE projects SET status = ?, actual_end_date = ?, closeout_summary = ?, updated_at = ? WHERE id = ?')
-      .run('closed', today(), summary || '', Date.now(), id)
+      .run('closed', today(), text, Date.now(), id)
+    expirePendingSuggestions(db, id)
     addEvent(db, {
       projectId: id, eventType: 'decision', nature: 'record', sourcePlatform: 'web', generatedBy: 'system',
-      summary: `项目结项${summary ? `：${summary}` : ''}`, speakerMemberId: by,
+      summary: `项目结项：${text}`, speakerMemberId: by,
     })
     audit(db, { memberId: by, action: 'project.close', objectType: 'project', objectId: id })
+  })
+  tx()
+  return getProjectDetail(db, id)
+}
+
+/**
+ * S8-3 / S29 取消项目：原因必填；未完任务原样冻结（v0.6 任务无取消态的裁剪不变，靠口径过滤退出
+ * 预警/梳理/指标）；落实际结束日、计划中里程碑转已取消、待确认建议批量过期、归档只读，终态不可逆。
+ */
+export function cancelProject(db, id, { reason } = {}, by) {
+  const cur = getProject(db, id)
+  if (TERMINAL_STATUSES.includes(cur.status)) {
+    throw Object.assign(new Error(`项目已${cur.status === 'closed' ? '结项' : '取消'}（S29 终态不可逆）`), { statusCode: 409 })
+  }
+  const text = String(reason || '').trim()
+  if (!text) throw Object.assign(new Error('取消原因必填（S29：结束项目必须留原因文本）'), { statusCode: 400 })
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE milestones SET status = ? WHERE project_id = ? AND status = ?')
+      .run('cancelled', id, 'planned')
+    db.prepare('UPDATE projects SET status = ?, actual_end_date = ?, closeout_summary = ?, updated_at = ? WHERE id = ?')
+      .run('cancelled', today(), text, Date.now(), id)
+    expirePendingSuggestions(db, id)
+    addEvent(db, {
+      projectId: id, eventType: 'decision', nature: 'record', sourcePlatform: 'web', generatedBy: 'system',
+      summary: `项目取消：${text}`, speakerMemberId: by,
+    })
+    audit(db, { memberId: by, action: 'project.cancel', objectType: 'project', objectId: id })
   })
   tx()
   return getProjectDetail(db, id)
@@ -238,7 +262,7 @@ export function projectsWithoutChannel(db) {
     db.prepare(
       `SELECT p.id, p.name, p.priority, p.status, m.name AS lead_name FROM projects p
        LEFT JOIN members m ON m.id = p.lead_member_id
-       WHERE p.status IN ('planning','active') AND NOT EXISTS (
+       WHERE p.status = 'active' AND NOT EXISTS (
          SELECT 1 FROM channels c WHERE c.project_id = p.id AND c.channel_type = 'dedicated')
        ORDER BY ${PRIORITY_ORDER}, p.id`
     ).all()

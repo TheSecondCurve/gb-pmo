@@ -15,6 +15,7 @@ export default function ProjectDetail({ id }: { id: number }) {
   const [members, setMembers] = useState<Member[]>([])
   const [channels, setChannels] = useState<ChannelRow[]>([])
   const [closing, setClosing] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
   const [binding, setBinding] = useState(false)
   const [digesting, setDigesting] = useState(false)
   const [recordsTaskId, setRecordsTaskId] = useState<number | null>(null)
@@ -41,12 +42,10 @@ export default function ProjectDetail({ id }: { id: number }) {
         <a className="text-[13px] text-[var(--color-brand)] hover:underline" href="#/projects">← 项目列表</a>
         <h1 className="text-lg font-bold">{p.name}</h1>
         <InlineSelect value={p.priority} options={PRIORITY_LABEL} onSubmit={async (v) => { await api.patchProject(id, { priority: v }); toast('优先级已调整并留痕'); await refresh() }} />
-        <InlineSelect value={p.status} options={PROJECT_STATUS_LABEL} onSubmit={async (v) => {
-          try { await api.patchProject(id, { status: v }); toast('状态已更新'); await refresh() } catch (e) { toast((e as Error).message, 'bad') }
-        }} />
+        <Badge tone={p.status === 'active' ? 'ok' : 'muted'}>{PROJECT_STATUS_LABEL[p.status] || p.status}</Badge>
         <span className="text-[12px] text-[var(--color-ink-soft)]">牵头人 {p.leadName}{p.clientName ? ` · 客户 ${p.clientName}` : ''}{readonly ? ' · 已归档只读' : ''}</span>
         <span className="num flex items-center gap-1.5 text-[12px] text-[var(--color-ink-soft)]">
-          交付日期（S21）
+          交付日期
           {readonly ? (p.planEndDate || '—') : (
             <InlineText type="date" value={p.planEndDate} onSubmit={async (v) => {
               try { await api.patchProject(id, { planEndDate: v }); toast('交付日期已更新'); await refresh() } catch (e) { toast((e as Error).message, 'bad') }
@@ -59,11 +58,12 @@ export default function ProjectDetail({ id }: { id: number }) {
         <div className="ml-auto flex gap-2">
           <Btn onClick={async () => setDigesting(true)} disabled={digesting}>🧠 生成梳理（S15）</Btn>
           {!readonly && <Btn kind="danger" onClick={() => setClosing(true)}>结项（S8）</Btn>}
+          {!readonly && <Btn kind="ghost" onClick={() => setCancelling(true)}>取消项目</Btn>}
         </div>
       </div>
 
-      {p.status === 'closed' && p.closeoutSummary && (
-        <Card title="复盘摘要（结项自动生成，可读）"><div className="whitespace-pre-wrap text-[13px]">{p.closeoutSummary}</div></Card>
+      {readonly && p.closeoutSummary && (
+        <Card title={`结束原因 / 复盘记录（${p.status === 'closed' ? '已结项' : '已取消'} · 只读）`}><div className="whitespace-pre-wrap text-[13px]">{p.closeoutSummary}</div></Card>
       )}
 
       <Card title={`任务面（${p.tasks.length}）${readonly ? ' · 只读' : ''}`} actions={!readonly ? <Btn small onClick={() => void 0} title="底部添加行">在下方添加</Btn> : undefined}>
@@ -182,6 +182,7 @@ export default function ProjectDetail({ id }: { id: number }) {
         <TaskRefsModal taskId={refsTask.id} taskTitle={refsTask.title} readonly={readonly} onClose={() => setRefsTask(null)} />
       )}
       {closing && <CloseModal p={p} onClose={() => setClosing(false)} onDone={async () => { setClosing(false); toast('项目已结项归档'); await refresh() }} />}
+      {cancelling && <CancelModal p={p} onClose={() => setCancelling(false)} onDone={async () => { setCancelling(false); toast('项目已取消归档'); await refresh() }} />}
       {binding && <BindChannelModal projectId={id} onClose={() => setBinding(false)} onDone={async () => { setBinding(false); toast('渠道已绑定'); await refresh() }} />}
       {digesting && (
         <Modal title="🧠 项目梳理（S15）" onClose={() => setDigesting(false)} wide>
@@ -371,6 +372,7 @@ function CloseModal({ p, onClose, onDone }: { p: ProjectDetail; onClose: () => v
   const [unfinished, setUnfinished] = useState(() => p.tasks.filter((t) => t.status !== 'done'))
   const [summary, setSummary] = useState('')
   const [err, setErr] = useState('')
+  const [drafting, setDrafting] = useState(false)
   const markDone = async (taskId: number) => {
     await api.patchTask(taskId, { status: 'done' })
     setUnfinished((list) => list.filter((t) => t.id !== taskId))
@@ -379,14 +381,21 @@ function CloseModal({ p, onClose, onDone }: { p: ProjectDetail; onClose: () => v
     for (const t of unfinished) await api.patchTask(t.id, { status: 'done' })
     setUnfinished([])
   }
+  const aiDraft = async () => {
+    setDrafting(true); setErr('')
+    try {
+      const out = await api.closeoutDraft(p.id)
+      setSummary(out.summary) // AI 草稿仅预填，人工改后提交（S8-2/S29：最终文本人拍板）
+    } catch (e) { setErr((e as Error).message) } finally { setDrafting(false) }
+  }
   const submit = async () => {
     try {
-      await api.closeProject(p.id, { summary: summary || undefined })
+      await api.closeProject(p.id, { summary: summary.trim() })
       await onDone()
     } catch (e) { setErr((e as Error).message) }
   }
   return (
-    <Modal title="结项（S8）：所有任务标记完成后方可结项" onClose={onClose} wide>
+    <Modal title="结项（S8）：所有任务标记完成后方可结项；结项总结必填（S29）" onClose={onClose} wide>
       {unfinished.length === 0 ? <div className="mb-3 text-[13px] text-[var(--color-ink-soft)]">无未完任务，可直接结项。</div> : (
         <div className="mb-3">
           <div className="mb-2 flex items-center justify-between">
@@ -406,15 +415,48 @@ function CloseModal({ p, onClose, onDone }: { p: ProjectDetail; onClose: () => v
           </table>
         </div>
       )}
-      <Field label="复盘摘要（留空则由大脑基于事件流自动生成）">
-        <textarea className={inputCls} rows={3} value={summary} onChange={(e) => setSummary(e.target.value)} />
+      <Field label="结项总结 *（必填：结束项目必须留原因文本，S29）">
+        <textarea className={inputCls} rows={4} value={summary} onChange={(e) => setSummary(e.target.value)} placeholder="可点下方「AI 复盘草稿」基于事件流生成草稿，再人工修订" />
+      </Field>
+      <div className="mb-3">
+        <Btn small disabled={drafting} onClick={() => void aiDraft()}>{drafting ? '生成中…' : '✨ AI 复盘草稿（预填可改）'}</Btn>
+      </div>
+      {err && <div className="mb-3 rounded bg-red-50 px-2 py-1.5 text-[12px] text-[var(--color-bad)]">{err}</div>}
+      <div className="flex justify-end gap-2">
+        <Btn onClick={onClose}>返回</Btn>
+        <Btn kind="danger" disabled={!summary.trim()} onClick={submit}>确认结项</Btn>
+      </div>
+      {err === '' && <div className="mt-2 text-[11px] text-[var(--color-ink-soft)]">结项后项目与任务面转只读、终态不可逆，事件流保留。</div>}
+    </Modal>
+  )
+}
+
+/** S8-3/S29 取消项目：原因必填；未完任务原样冻结（无需处置）；终态不可逆。 */
+function CancelModal({ p, onClose, onDone }: { p: ProjectDetail; onClose: () => void; onDone: () => Promise<void> }) {
+  const [reason, setReason] = useState('')
+  const [err, setErr] = useState('')
+  const open = p.tasks.filter((t) => t.status !== 'done').length
+  const submit = async () => {
+    try {
+      await api.cancelProject(p.id, { reason: reason.trim() })
+      await onDone()
+    } catch (e) { setErr((e as Error).message) }
+  }
+  return (
+    <Modal title="取消项目（S8-3）：原因必填，取消后终态不可逆" onClose={onClose}>
+      {open > 0 && (
+        <div className="mb-3 rounded-md border border-[var(--color-line)] px-2.5 py-2 text-[12px] text-[var(--color-ink-soft)]">
+          还有 {open} 项未完任务——取消不做处置、原样冻结（退出预警/日报/梳理口径），项目转只读归档。
+        </div>
+      )}
+      <Field label="取消原因 *（必填：结束项目必须留原因文本，S29）">
+        <textarea className={inputCls} rows={3} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="如：客户战略调整，项目终止" />
       </Field>
       {err && <div className="mb-3 rounded bg-red-50 px-2 py-1.5 text-[12px] text-[var(--color-bad)]">{err}</div>}
       <div className="flex justify-end gap-2">
-        <Btn onClick={onClose}>取消</Btn>
-        <Btn kind="danger" onClick={submit}>确认结项</Btn>
+        <Btn onClick={onClose}>返回</Btn>
+        <Btn kind="danger" disabled={!reason.trim()} onClick={submit}>确认取消项目</Btn>
       </div>
-      {err === '' && <div className="mt-2 text-[11px] text-[var(--color-ink-soft)]">结项后项目与任务面转只读，事件流保留。</div>}
     </Modal>
   )
 }

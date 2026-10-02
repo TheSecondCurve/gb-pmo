@@ -97,7 +97,7 @@ export async function personDigest(db, memberId, { llm: llmOverride } = {}) {
     db.prepare(
       `SELECT t.id, t.title, t.status, t.plan_start_date, t.plan_end_date, p.name AS project_name, p.id AS project_id
        FROM tasks t JOIN projects p ON p.id = t.project_id
-       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') ORDER BY t.plan_end_date`
+       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND p.status = 'active' ORDER BY t.plan_end_date`
     ).all(memberId)
   )
   const overdue = tasks.filter((t) => t.planEndDate && t.planEndDate < today())

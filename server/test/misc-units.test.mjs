@@ -188,7 +188,7 @@ describe('push / enums / settings 单元', () => {
   it('枚举双向对齐：值↔label；非法值 400', () => {
     expect(label('priority', 'high')).toBe('高')
     expect(values('taskStatus')).toEqual(['todo', 'doing', 'done']) // v0.6 固定三档
-    expect(Object.keys(ENUMS.projectStatus).length).toBe(5)
+    expect(values('projectStatus')).toEqual(['active', 'closed', 'cancelled']) // S29 三态
     expect(() => assertValue('priority', 'urgent')).toThrow()
     expect(assertValue('channelPlatform', 'feishu')).toBe('feishu')
   })

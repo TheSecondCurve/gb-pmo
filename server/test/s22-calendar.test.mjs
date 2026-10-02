@@ -91,7 +91,6 @@ describe('S22 飞书项目日历', () => {
     configureCalendar(ctx.db)
     const start = dayOff(-2)
     const p = await mkProject('日历项目A', { planStartDate: start, planEndDate: dayOff(20), priority: 'high' })
-    await authed(ctx.app, cookie, 'PATCH', `/api/v1/projects/${p.id}`, { status: 'active' })
     await mkProject('无日期项目B') // 无任何起止 → 跳过计数
 
     let seq = 0
@@ -106,7 +105,7 @@ describe('S22 飞书项目日历', () => {
 
       const create = stub.calls.find((c) => c.method === 'POST' && c.u.includes('/events'))
       expect(create.body.summary).toBe('日历项目A')
-      expect(create.body.start_time.date).toBe(today()) // 已激活：起=实际启动日（‖计划开始日取先实后计）
+      expect(create.body.start_time.date).toBe(today()) // 立项即进行中（S29）：起=实际启动日=立项日（‖计划开始日取先实后计）
       expect(create.body.end_time.date).toBe(dayOff(20)) // 闭区间：止=交付日当天
       expect(create.body.description).toMatch(/高/)
 
@@ -141,16 +140,17 @@ describe('S22 飞书项目日历', () => {
     const cookie = await admin()
     configureCalendar(ctx.db)
     const closed = await mkProject('已结项保留', { planStartDate: '2026-01-10', planEndDate: dayOff(10) })
-    await authed(ctx.app, cookie, 'PATCH', `/api/v1/projects/${closed.id}`, { status: 'active' })
     closeProject(ctx.db, closed.id, { summary: '交付完成' }, 1) // custom 模板零任务，可直接结项
-    // 定格为实际周期（绕过激活时刻，直接布置实际起止）
+    // 定格为实际周期（绕过结束时刻，直接布置实际起止）
     ctx.db.prepare('UPDATE projects SET actual_start_date = ?, actual_end_date = ? WHERE id = ?')
       .run('2026-01-10', '2026-03-15', closed.id)
 
     const cancelled = await mkProject('已取消保留', { planStartDate: '2026-02-01', planEndDate: dayOff(30) })
-    await authed(ctx.app, cookie, 'PATCH', `/api/v1/projects/${cancelled.id}`, { status: 'cancelled' })
-    // 取消无实际结束日 → 止=交付日期（plan_end_date）
-    ctx.db.prepare('UPDATE projects SET actual_start_date = ? WHERE id = ?').run('2026-02-01', cancelled.id)
+    const cx = await authed(ctx.app, cookie, 'POST', `/api/v1/projects/${cancelled.id}/cancel`, { reason: '客户砍预算' })
+    expect(cx.status).toBe(200)
+    // 定格为实际周期（布置实际起止；S29 起取消自动落实际结束日）
+    ctx.db.prepare('UPDATE projects SET actual_start_date = ?, actual_end_date = ? WHERE id = ?')
+      .run('2026-02-01', '2026-04-01', cancelled.id)
 
     let seq = 0
     const stub = stubFeishu(() => {
@@ -165,7 +165,7 @@ describe('S22 飞书项目日历', () => {
       expect(evClosed.body.end_time.date).toBe('2026-03-15')
       const evCancelled = stub.calls.find((c) => c.body?.summary === '【已取消】已取消保留')
       expect(evCancelled.body.start_time.date).toBe('2026-02-01')
-      expect(evCancelled.body.end_time.date).toBe(dayOff(30))
+      expect(evCancelled.body.end_time.date).toBe('2026-04-01') // 定格实际周期（S29：取消落实际结束日）
 
       // 再同步两次（模拟后续轮次）：终态项目零 API 调用、绝不 DELETE
       const before = stub.calls.length

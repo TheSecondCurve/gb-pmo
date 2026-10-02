@@ -25,7 +25,7 @@ export function listProjectTypes(db) {
   const rows = db.prepare(
     `SELECT ${TYPE_COLS},
        (SELECT COUNT(*) FROM projects p WHERE p.project_type_id = pt.id) AS project_count,
-       (SELECT COUNT(*) FROM projects p WHERE p.status IN ('planning','active','paused') AND p.project_type_id = pt.id) AS open_project_count
+       (SELECT COUNT(*) FROM projects p WHERE p.status = 'active' AND p.project_type_id = pt.id) AS open_project_count
      FROM project_types pt ORDER BY pt.id`
   ).all()
   return rows.map((r) => typeDetail(db, camelizeRow(r)))

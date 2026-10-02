@@ -6,7 +6,7 @@ import { today, bjDayStartMs, dayDiff, DAY_MS } from '../db/time.js'
 import { label } from './enums.js'
 
 export const MORNING_LIMITS = { projects: 20, tasks: 5, events: 5 }
-const OPEN_PROJECT = `status IN ('planning','active','paused')`
+const OPEN_PROJECT = `status = 'active'` // S29 三态：在跑=进行中
 const WEEKDAY = '日一二三四五六'
 
 /**

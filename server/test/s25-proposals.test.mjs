@@ -29,7 +29,7 @@ async function chatPropose(cookie, sessionId, text, payloadTurn) {
 }
 
 describe('S25 Agent 提议式项目与配置操作', () => {
-  it('S25-1: 提议暂停项目——确认前不变；无权人 403；牵头人确认后变更并留事件', async () => {
+  it('S25-1/S29-4: 提议取消项目——原因必填；确认前不变；无权人 403；牵头人确认后取消并留事件；update_project_status 已裁撤 refused', async () => {
     ctx = await setupApp()
     const admin = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const lead = await loginCookie(ctx.app, 'zhangsan', 'pass-123456')
@@ -37,54 +37,44 @@ describe('S25 Agent 提议式项目与配置操作', () => {
     const p = await mkProject(admin, ctx.members.lead.id, '客户P系统', { planEndDate: '2026-12-31' })
     const sid = (await authed(ctx.app, lead, 'POST', '/api/v1/chat/sessions', {})).body.id
 
-    const res = await chatPropose(lead, sid, '把客户P系统暂停', { kind: 'update_project_status', projectId: p.id, status: 'paused' })
+    // 已裁撤的 update_project_status → refused（S29：项目状态仅经结项/取消变更）
+    const gone = await chatPropose(lead, sid, '把客户P系统暂停', { kind: 'update_project_status', projectId: p.id, status: 'paused' })
+    expect(gone.body.assistant.content).toMatch(/update_project_status|提议类型/)
+
+    // 原因必填
+    const noReason = await chatPropose(lead, sid, '把客户P系统取消', { kind: 'cancel_project', projectId: p.id })
+    expect(noReason.body.assistant.content).toMatch(/原因/)
+
+    const res = await chatPropose(lead, sid, '把客户P系统取消', { kind: 'cancel_project', projectId: p.id, reason: '客户战略调整' })
     expect(res.status).toBe(200)
     expect(res.body.assistant.content).toMatch(/提议.*#\d+|待确认/)
     const proposalId = res.body.assistant.meta.proposalId
     expect(proposalId).toBeTruthy()
-    // 确认前项目不变
-    expect(ctx.db.prepare('SELECT status FROM projects WHERE id = ?').get(p.id).status).toBe('planning')
+    // 确认前项目不变（立项即进行中，S29）
+    expect(ctx.db.prepare('SELECT status FROM projects WHERE id = ?').get(p.id).status).toBe('active')
     // 无权成员（非牵头人非管理员）确认 403
     expect((await authed(ctx.app, member, 'POST', `/api/v1/proposals/${proposalId}/confirm`)).status).toBe(403)
-    // 牵头人确认生效 + 留 status_change 事件
+    // 牵头人确认生效 + 留 decision 事件
     expect((await authed(ctx.app, lead, 'POST', `/api/v1/proposals/${proposalId}/confirm`)).status).toBe(200)
-    expect(ctx.db.prepare('SELECT status FROM projects WHERE id = ?').get(p.id).status).toBe('paused')
-    const evt = ctx.db.prepare(`SELECT * FROM project_events WHERE project_id = ? AND event_type = 'status_change'`).get(p.id)
+    expect(ctx.db.prepare('SELECT status FROM projects WHERE id = ?').get(p.id).status).toBe('cancelled')
+    const evt = ctx.db.prepare(`SELECT * FROM project_events WHERE project_id = ? AND event_type = 'decision' AND summary LIKE '%项目取消%'`).get(p.id)
     expect(evt).toBeTruthy()
     const row = ctx.db.prepare('SELECT * FROM proposals WHERE id = ?').get(proposalId)
     expect(row.status).toBe('effective')
     expect(row.decided_by).toBe(ctx.members.lead.id)
   })
 
-  it('S25-2: 提议启动——无交付日期时载荷须同补（S21）；缺日期 refused', async () => {
-    ctx = await setupApp()
-    const admin = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
-    const lead = await loginCookie(ctx.app, 'zhangsan', 'pass-123456')
-    const p = await mkProject(admin, ctx.members.lead.id, '无期项目') // 无交付日期
-    const sid = (await authed(ctx.app, lead, 'POST', '/api/v1/chat/sessions', {})).body.id
-
-    const bad = await chatPropose(lead, sid, '把它启动', { kind: 'update_project_status', projectId: p.id, status: 'active' })
-    expect(bad.body.assistant.content).toMatch(/交付日期/)
-
-    const ok = await chatPropose(lead, sid, '12 月 31 日交付，启动吧', {
-      kind: 'update_project_status', projectId: p.id, status: 'active', planEndDate: '2026-12-31',
-    })
-    const proposalId = ok.body.assistant.meta.proposalId
-    expect(proposalId).toBeTruthy()
-    expect((await authed(ctx.app, lead, 'POST', `/api/v1/proposals/${proposalId}/confirm`)).status).toBe(200)
-    const row = ctx.db.prepare('SELECT status, actual_start_date, plan_end_date FROM projects WHERE id = ?').get(p.id)
-    expect(row.status).toBe('active')
-    expect(row.plan_end_date).toBe('2026-12-31')
-    expect(row.actual_start_date).toBeTruthy()
-  })
-
-  it('S25-3: 提议结项——确认时按 S8 强校验（未完成 409 且提议保持 pending）；全完成后可结项', async () => {
+  it('S25-2: 提议结项——摘要必填；确认时按 S8 强校验（未完成 409 且提议保持 pending）；全完成后可结项', async () => {
     ctx = await setupApp()
     const admin = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await mkProject(admin, ctx.members.lead.id, '待结项目', { planEndDate: '2026-12-31' })
     const sid = (await authed(ctx.app, admin, 'POST', '/api/v1/chat/sessions', {})).body.id
 
-    const res = await chatPropose(admin, sid, '把待结项目结项', { kind: 'close_project', projectId: p.id })
+    // 摘要必填（v0.28：结束必须留原因文本）
+    const noSummary = await chatPropose(admin, sid, '把待结项目结项', { kind: 'close_project', projectId: p.id })
+    expect(noSummary.body.assistant.content).toMatch(/摘要|总结|原因/)
+
+    const res = await chatPropose(admin, sid, '把待结项目结项', { kind: 'close_project', projectId: p.id, summary: '验收通过' })
     const proposalId = res.body.assistant.meta.proposalId
     expect(proposalId).toBeTruthy()
 
@@ -96,6 +86,7 @@ describe('S25 Agent 提议式项目与配置操作', () => {
     ctx.db.prepare(`UPDATE tasks SET status = 'done' WHERE project_id = ?`).run(p.id)
     expect((await authed(ctx.app, admin, 'POST', `/api/v1/proposals/${proposalId}/confirm`)).status).toBe(200)
     expect(ctx.db.prepare('SELECT status FROM projects WHERE id = ?').get(p.id).status).toBe('closed')
+    expect(ctx.db.prepare('SELECT closeout_summary FROM projects WHERE id = ?').get(p.id).closeout_summary).toBe('验收通过')
   })
 
   it('S25-4: 提议新建项目——类型实例化/自定义任务+倒排同构；拟任牵头人/管理员确认；无权人 403；缺载荷 refused', async () => {
@@ -177,9 +168,9 @@ describe('S25 Agent 提议式项目与配置操作', () => {
     let msgId = 0
     const sent = []
     const send = async ({ card }) => { if (card) sent.push(card); return { messageId: `om_${++msgId}` } }
-    const llm = fakeLlm([{ action: 'write', kind: 'propose', payload: { kind: 'update_project_status', projectId: p.id, status: 'paused' } }])
+    const llm = fakeLlm([{ action: 'write', kind: 'propose', payload: { kind: 'cancel_project', projectId: p.id, reason: '客户战略调整' } }])
     const out = await handleBotEvent(ctx.db, {
-      messageId: 's25-card-1', chatId: 'oc_p2p', chatType: 'p2p', senderOpenId: 'fs_zhang', text: '把客户R系统暂停',
+      messageId: 's25-card-1', chatId: 'oc_p2p', chatType: 'p2p', senderOpenId: 'fs_zhang', text: '把客户R系统取消',
     }, { llm, send, secret: SECRET })
     expect(out.result).toBe('card_sent')
     expect(sent.length).toBe(1)
@@ -204,19 +195,20 @@ describe('S25 Agent 提议式项目与配置操作', () => {
       operatorOpenId: 'fs_zhang', chatId: 'oc_p2p', messageId: `cm_${++msgId}`, value: confirmBtn.value,
     }, { send, secret: SECRET })
     expect(ok.result).toBe('confirmed')
-    expect(ctx.db.prepare('SELECT status FROM projects WHERE id = ?').get(p.id).status).toBe('paused')
+    expect(ctx.db.prepare('SELECT status FROM projects WHERE id = ?').get(p.id).status).toBe('cancelled')
 
-    // 驳回路径：再建一条提议后驳回
-    const llm2 = fakeLlm([{ action: 'write', kind: 'propose', payload: { kind: 'update_project_status', projectId: p.id, status: 'active', planEndDate: '2026-12-31' } }])
+    // 驳回路径：再建一条提议后驳回（项目已终态，提议仅作驳回语义验证，不会再生效）
+    const p2 = await mkProject(admin, ctx.members.lead.id, '客户R二期', { planEndDate: '2026-12-31' })
+    const llm2 = fakeLlm([{ action: 'write', kind: 'propose', payload: { kind: 'cancel_project', projectId: p2.id, reason: '重复立项' } }])
     await handleBotEvent(ctx.db, {
-      messageId: 's25-card-2', chatId: 'oc_p2p', chatType: 'p2p', senderOpenId: 'fs_zhang', text: '再启动',
+      messageId: 's25-card-2', chatId: 'oc_p2p', chatType: 'p2p', senderOpenId: 'fs_zhang', text: '把客户R二期取消',
     }, { llm: llm2, send, secret: SECRET })
     const rejectBtn = actions(sent[1]).find((b) => /驳回/.test(b.text.content))
     const rej = await handleCardAction(ctx.db, {
       operatorOpenId: 'fs_zhang', chatId: 'oc_p2p', messageId: `cm_${++msgId}`, value: rejectBtn.value,
     }, { send, secret: SECRET })
     expect(rej.result).toBe('rejected')
-    expect(ctx.db.prepare('SELECT status FROM projects WHERE id = ?').get(p.id).status).toBe('paused')
+    expect(ctx.db.prepare('SELECT status FROM projects WHERE id = ?').get(p2.id).status).toBe('active')
     void hmac
   })
 })

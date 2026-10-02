@@ -45,7 +45,9 @@ export const api = {
   project: (id: number) => req<import('./types').ProjectDetail>('GET', `/api/v1/projects/${id}`),
   createProject: (p: Record<string, unknown>) => req<import('./types').ProjectDetail>('POST', '/api/v1/projects', p),
   patchProject: (id: number, p: Record<string, unknown>) => req<import('./types').ProjectDetail>('PATCH', `/api/v1/projects/${id}`, p),
-  closeProject: (id: number, body: Record<string, unknown>) => req<import('./types').ProjectDetail>('POST', `/api/v1/projects/${id}/close`, body), // v0.6：body 仅 summary（结项规则=全部任务完成）
+  closeProject: (id: number, body: Record<string, unknown>) => req<import('./types').ProjectDetail>('POST', `/api/v1/projects/${id}/close`, body), // S8/S29：summary 必填（结项规则=全部任务完成）
+  closeoutDraft: (id: number) => req<{ summary: string }>('GET', `/api/v1/projects/${id}/closeout-draft`), // S8-2：AI 复盘草稿（预填可改，不关项目）
+  cancelProject: (id: number, body: Record<string, unknown>) => req<import('./types').ProjectDetail>('POST', `/api/v1/projects/${id}/cancel`, body), // S8-3/S29：reason 必填
   projectEvents: (id: number, status?: string) => req<{ events: import('./types').EventRow[] }>('GET', `/api/v1/projects/${id}/events${status ? `?status=${status}` : ''}`),
   addProjectEvent: (id: number, body: Record<string, unknown>) => req('POST', `/api/v1/projects/${id}/events`, body),
   projectDigest: (id: number) => req<Record<string, unknown>>('POST', `/api/v1/projects/${id}/digest`, {}),
