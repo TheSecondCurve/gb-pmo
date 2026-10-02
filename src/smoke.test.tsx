@@ -6,6 +6,7 @@ import Login from './pages/Login'
 import App from './App'
 import Admin from './pages/Admin'
 import Chat from './pages/Chat'
+import Projects from './pages/Projects'
 import { StoreProvider } from './store'
 
 const loginFetch = vi.fn(async () =>
@@ -118,5 +119,123 @@ describe('移动端响应式冒烟', () => {
     })
     expect(within(select).getAllByRole('option').length).toBe(2)
     expect(within(select.parentElement as HTMLElement).getByRole('button', { name: '＋ 新会话' })).toBeTruthy()
+  })
+})
+
+// PRD S30（v0.29）— 项目组合页冒烟：四视图 + 日期文案四式 + 未排期沉底 + 甘特形态。
+// jsdom 不量像素，断言结构契约（data-testid 锚点）；坐标正确性由 src/gantt.test.ts 纯函数锁定。
+describe('S30 项目组合页（v0.29）', () => {
+  const P = (id: number, over: Record<string, unknown>) => ({
+    id, name: `项目${id}`, templateCode: 'custom', typeName: '软件交付',
+    status: 'active', priority: 'medium', leadMemberId: 1, leadName: '张三', clientName: null,
+    planStartDate: null, planEndDate: null, daysToDelivery: null,
+    overdueTasks: 0, silentDays: null, lastEventAt: null, updatedAt: 1759000000000, ...over,
+  })
+  // P1 双端 / P2 只有交付 / P3 只有开始（high）/ P4 全空 / P5 已结项（有日期）/ P6 已取消（全空）
+  const projectsFixture = [
+    P(1, { name: '全排期项目', planStartDate: '2026-09-01', planEndDate: '2026-10-15', daysToDelivery: 13 }),
+    P(2, { name: '只有交付项目', leadMemberId: 1, leadName: '张三', priority: 'low', planEndDate: '2026-11-01', daysToDelivery: 30 }),
+    P(3, { name: '只有开始项目', leadMemberId: 2, leadName: '李四', priority: 'high', planStartDate: '2026-09-15' }),
+    P(4, { name: '未排期项目', leadMemberId: 2, leadName: '李四' }),
+    P(5, { name: '已结项项目', status: 'closed', planStartDate: '2026-06-01', planEndDate: '2026-08-31' }),
+    P(6, { name: '已取消项目', status: 'cancelled', leadMemberId: 3, leadName: '王五' }),
+  ]
+  const membersFixture = { members: [{ id: 1, name: '张三' }, { id: 2, name: '李四' }, { id: 3, name: '王五' }] }
+
+  const portfolioFetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.startsWith('/api/v1/projects')) return new Response(JSON.stringify({ projects: projectsFixture }), { status: 200 })
+    if (url.startsWith('/api/v1/members')) return new Response(JSON.stringify(membersFixture), { status: 200 })
+    return new Response(JSON.stringify({ tasks: [] }), { status: 200 })
+  })
+  beforeEach(() => {
+    cleanup()
+    portfolioFetch.mockClear()
+    globalThis.fetch = portfolioFetch as unknown as typeof fetch
+  })
+
+  it('S30-2: 表格视图——日期文案四式 + 未排期沉底成组不穿插 + 排序可切', async () => {
+    location.hash = '#/projects'
+    render(<StoreProvider><Projects view="table" /></StoreProvider>)
+    // 日期文案四式（S30-4）
+    expect(await screen.findByText('2026-09-01 ~ 2026-10-15')).toBeTruthy()
+    expect(screen.getByText('交付 2026-11-01')).toBeTruthy()
+    expect(screen.getByText('2026-09-15 起')).toBeTruthy()
+    // 未排期成组且在有序流之后（S30-2 null 沉底不穿插）
+    const group = document.querySelector('[data-testid="unscheduled-group"]') as HTMLElement | null
+    expect(group).toBeTruthy()
+    expect(group!.textContent).toContain('未排期（2）')
+    const rowUnscheduled = screen.getByText('未排期项目').closest('tr')!
+    const rowScheduled = screen.getByText('全排期项目').closest('tr')!
+    expect(rowScheduled.compareDocumentPosition(rowUnscheduled) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // 排序切换：交付临近 → 按剩余天数升序（13 天的排在 30 天前）
+    fireEvent.change(screen.getByLabelText('排序维度'), { target: { value: 'delivery' } })
+    const row30 = screen.getByText('只有交付项目').closest('tr')!
+    expect(rowScheduled.compareDocumentPosition(row30) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('S30-2: 看板视图——按状态三列分组，终态列可折叠', async () => {
+    render(<StoreProvider><Projects view="board" /></StoreProvider>)
+    const active = await waitFor(() => {
+      const el = document.querySelector('[data-testid="board-col-active"]') as HTMLElement | null
+      expect(el).toBeTruthy()
+      return el!
+    })
+    expect(active.textContent).toContain('进行中')
+    expect(within(active).getAllByRole('link').length).toBe(4)
+    const closed = document.querySelector('[data-testid="board-col-closed"]') as HTMLElement
+    expect(within(closed).getAllByRole('link').length).toBe(1)
+    const cancelled = document.querySelector('[data-testid="board-col-cancelled"]') as HTMLElement
+    expect(within(cancelled).getAllByRole('link').length).toBe(1)
+  })
+
+  it('S30-2: 人员视图——按牵头人分组，组间按在跑项目数降序', async () => {
+    render(<StoreProvider><Projects view="people" /></StoreProvider>)
+    await screen.findByText('全排期项目')
+    const groups = Array.from(document.querySelectorAll('[data-testid="people-group"]')) as HTMLElement[]
+    expect(groups.length).toBe(3)
+    const order = groups.map((g) => g.textContent)
+    // 张三 2 在跑（共3）> 李四 2 在跑（共2）> 王五 0 在跑；同在跑数比总数
+    expect(order.findIndex((t) => t.includes('张三'))).toBeLessThan(order.findIndex((t) => t.includes('李四')))
+    expect(order.findIndex((t) => t.includes('李四'))).toBeLessThan(order.findIndex((t) => t.includes('王五')))
+  })
+
+  it('S30-3: 时间线——今日线 + 四形态条形落位 + 未排期分组不入轴', async () => {
+    render(<StoreProvider><Projects view="timeline" /></StoreProvider>)
+    await screen.findByTestId('gantt-today')
+    // 有日期的 4 个项目画条（P1 区间 / P2 截止旗 / P3 开放条 / P5 区间灰）；全空 2 个不入轴
+    expect(document.querySelectorAll('[data-testid="gantt-bar"]').length).toBe(4)
+    expect(document.querySelectorAll('[data-testid="gantt-tick"]').length).toBeGreaterThanOrEqual(2)
+    const unscheduled = document.querySelector('[data-testid="unscheduled-group"]') as HTMLElement
+    expect(unscheduled.textContent).toContain('未排期（2）')
+    expect(unscheduled.textContent).toContain('未排期项目')
+  })
+
+  it('S30-3: 全部项目无日期 → 时间线空态引导而非空白图', async () => {
+    const emptyFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/v1/projects')) return new Response(JSON.stringify({ projects: [P(9, { name: '空项目' })] }), { status: 200 })
+      if (url.startsWith('/api/v1/members')) return new Response(JSON.stringify(membersFixture), { status: 200 })
+      return new Response(JSON.stringify({ tasks: [] }), { status: 200 })
+    })
+    globalThis.fetch = emptyFetch as unknown as typeof fetch
+    render(<StoreProvider><Projects view="timeline" /></StoreProvider>)
+    expect(await screen.findByText(/暂无可排期项目/)).toBeTruthy()
+    expect(screen.queryByTestId('gantt-today')).toBeNull()
+  })
+
+  it('S30-2: 视图 Tabs 深链（#/projects/<view>）齐全', async () => {
+    render(<StoreProvider><Projects view="table" /></StoreProvider>)
+    const tabs = await waitFor(() => {
+      const el = document.querySelector('[data-nav="portfolio-views"]') as HTMLElement | null
+      expect(el).toBeTruthy()
+      return el!
+    })
+    for (const [href, label] of [
+      ['#/projects/board', '看板'], ['#/projects/table', '表格'], ['#/projects/people', '人员'], ['#/projects/timeline', '时间线'],
+    ] as [string, string][]) {
+      const link = within(tabs).getByRole('link', { name: label })
+      expect(link.getAttribute('href')).toBe(href)
+    }
   })
 })
