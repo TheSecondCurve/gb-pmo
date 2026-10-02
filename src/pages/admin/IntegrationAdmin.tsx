@@ -112,7 +112,7 @@ function FeishuCard() {
         const r = await api.calendarInit()
         if (r.ok === false) { // v0.21：上游失败 200+reason（网关会替换 5xx 响应体），直接显示原因
           setCalMsg(`❌ ${r.reason}`)
-          toast(r.reason, 'bad')
+          toast(r.reason || '项目日历初始化失败', 'bad')
           return
         }
         setCalendarId(r.calendarId)
