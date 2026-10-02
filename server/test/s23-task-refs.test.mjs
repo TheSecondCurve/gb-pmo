@@ -76,9 +76,8 @@ describe('S23 任务参考资料', () => {
     expect(rows.deleted_at).toBeTruthy() // 行还在（软删）
     expect((await authed(ctx.app, cookie, 'GET', `/api/v1/tasks/${taskId}/refs`)).body.refs.map((r) => r.id)).toEqual([ref2.id])
 
-    // 结项后任务面只读：先补交付相关字段再走结项（模板任务全部标完成）
+    // 结项后任务面只读：模板任务全部标完成后走结项（S29：立项即进行中，无需再切状态）
     for (const t of p.tasks) await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${t.id}`, { status: 'done' })
-    await authed(ctx.app, cookie, 'PATCH', `/api/v1/projects/${p.id}`, { status: 'active' })
     const closed = await authed(ctx.app, cookie, 'POST', `/api/v1/projects/${p.id}/close`, { summary: '交付完成' })
     expect(closed.status).toBe(200)
     expect((await authed(ctx.app, cookie, 'POST', `/api/v1/tasks/${taskId}/refs`, { title: 'x', url: 'https://x.co' })).status).toBe(409)

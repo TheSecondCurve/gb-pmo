@@ -50,7 +50,7 @@ export interface MetricCard { id: string; name: string; domain: string; definiti
 
 export const PRIORITY_LABEL: Record<string, string> = { high: '高', medium: '中', low: '低' }
 export const ROLE_LABEL: Record<string, string> = { admin: '系统管理员', member: '成员' }
-export const PROJECT_STATUS_LABEL: Record<string, string> = { planning: '待启动', active: '进行中', paused: '已暂停', closed: '已结项', cancelled: '已取消' }
+export const PROJECT_STATUS_LABEL: Record<string, string> = { active: '进行中', closed: '已结项', cancelled: '已取消' } // S29 三态
 export const TASK_STATUS_LABEL: Record<string, string> = { todo: '未开始', doing: '进行中', done: '完成' } // v0.6 固定三档
 export const EVENT_TYPE_LABEL: Record<string, string> = {
   progress: '进展', risk: '风险', decision: '决策', blocker: '阻塞', schedule_change: '排期变更',

@@ -81,6 +81,11 @@ export function confirmEvent(db, id, by) {
   const e = db.prepare('SELECT * FROM project_events WHERE id = ?').get(id)
   if (!e) throw Object.assign(new Error('事件不存在'), { statusCode: 404 })
   if (e.status !== 'pending') throw Object.assign(new Error(`事件状态为 ${e.status}，仅待确认事件可确认`), { statusCode: 409 })
+  // S29 双保险：终态项目（已结项/已取消）的建议不可再生效（结束时已批量过期，此处挡新挂建议）
+  const proj = db.prepare('SELECT status FROM projects WHERE id = ?').get(e.project_id)
+  if (proj && (proj.status === 'closed' || proj.status === 'cancelled')) {
+    throw Object.assign(new Error('项目已结项/取消，建议不可确认（S29 终态只读）'), { statusCode: 409 })
+  }
 
   const apply = db.transaction(() => {
     if (e.nature === 'suggestion' && e.target_field && e.target_value !== null) {

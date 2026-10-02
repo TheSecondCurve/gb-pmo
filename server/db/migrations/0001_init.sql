@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS projects (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT NOT NULL,
   template_code TEXT NOT NULL DEFAULT 'custom',
-  status TEXT NOT NULL DEFAULT 'planning',      -- planning|active|paused|closed|cancelled
+  status TEXT NOT NULL DEFAULT 'planning',      -- active|closed|cancelled（S29 三态；planning/paused 已由 0016 归一，DEFAULT 为历史遗留，engine 始终显式赋值）
   priority TEXT NOT NULL DEFAULT 'medium',      -- high|medium|low
   lead_member_id INTEGER NOT NULL REFERENCES members(id),
   client_name TEXT,

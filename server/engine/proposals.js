@@ -1,7 +1,8 @@
 // S25（v0.17）通用提议：项目级/配置级操作的「提议→确认→生效」唯一口子。
 // 发起放开（成员均可让 AI 起草），确认按矩阵收紧；生效分发到既有 engine（校验/审计/事件同构）。
 // LLM 信任边界不变：只产提议，不选生效路径（AGENTS.md §4 / PRD §2）。
-// v0.18：模板对象裁撤——kind 收敛为四类；create_project 可带 tasks + autoSchedule（倒排算术在 engine）。
+// v0.18：模板对象裁撤——create_project 可带 tasks + autoSchedule（倒排算术在 engine）。
+// v0.28（S29）：update_project_status 随状态三态化裁撤（状态仅经结项/取消变更），新增 cancel_project（原因必填）。
 
 import * as projects from './projects.js'
 import * as projectTypes from './projectTypes.js'
@@ -16,25 +17,26 @@ const normTasks = (tasks) => (Array.isArray(tasks) ? tasks : [])
 
 // —— 提议目录：确认权限矩阵 + 生效分发（apply 强校验全部交给既有 engine） ——
 
+/** 项目级操作（结项/取消）同一确认矩阵：项目牵头人或系统管理员。 */
+async function canConfirmProjectOp(db, member, payload) {
+  const p = db.prepare('SELECT lead_member_id FROM projects WHERE id = ?').get(Number(payload.projectId))
+  if (member.role !== 'admin' && p?.lead_member_id !== member.id) {
+    return forbidden('仅项目牵头人或系统管理员可确认项目操作提议')
+  }
+  return true
+}
+
 export const PROPOSAL_KINDS = {
-  update_project_status: {
-    label: '项目状态变更',
-    async canConfirm(db, member, payload) {
-      const p = db.prepare('SELECT lead_member_id FROM projects WHERE id = ?').get(Number(payload.projectId))
-      if (member.role !== 'admin' && p?.lead_member_id !== member.id) {
-        return forbidden('仅项目牵头人或系统管理员可确认项目状态提议')
-      }
-      return true
-    },
+  cancel_project: {
+    label: '项目取消',
+    canConfirm: canConfirmProjectOp,
     apply(db, payload, by) {
-      const patch = { status: String(payload.status) }
-      if (payload.planEndDate !== undefined) patch.planEndDate = payload.planEndDate
-      return projects.updateProject(db, Number(payload.projectId), patch, by)
+      return projects.cancelProject(db, Number(payload.projectId), { reason: payload.reason }, by)
     },
   },
   close_project: {
     label: '项目结项',
-    canConfirm: null, // 与项目状态同一矩阵，对象字面量后统一赋值（牵头人/管理员）
+    canConfirm: canConfirmProjectOp,
     apply(db, payload, by) {
       return projects.closeProject(db, Number(payload.projectId), { summary: payload.summary }, by)
     },
@@ -71,8 +73,6 @@ export const PROPOSAL_KINDS = {
     },
   },
 }
-// close_project 与项目状态同一矩阵（牵头人/管理员）
-PROPOSAL_KINDS.close_project.canConfirm = PROPOSAL_KINDS.update_project_status.canConfirm
 
 // —— 口子 ——
 

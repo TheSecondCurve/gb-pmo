@@ -12,12 +12,11 @@ afterAll(() => ctx?.db.close())
 
 async function mkProject(name, leadId, priority = 'medium') {
   const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
-  // v0.12（S21-1）：切「进行中」必须有交付日期——today() 同源 +30 天，避免时间炸弹与 UTC 偏差
+  // 交付日期 today() 同源 +30 天，避免时间炸弹与 UTC 偏差；S29 起立项即进行中，无需再切状态
   const planEndDate = new Date(Date.parse(`${today()}T00:00:00Z`) + 30 * 86400000).toISOString().slice(0, 10)
   const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
     name, templateCode: 'software_delivery', leadMemberId: leadId, priority, planEndDate,
   })
-  await authed(ctx.app, cookie, 'PATCH', `/api/v1/projects/${res.body.id}`, { status: 'active' })
   return res.body
 }
 

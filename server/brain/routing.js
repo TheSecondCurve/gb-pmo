@@ -7,7 +7,7 @@ import { parseJsonLoose } from './llm.js'
 export async function routeMessage(db, msg, { llm } = {}) {
   const projects = db
     .prepare(
-      `SELECT p.id, p.name, p.client_name FROM projects p WHERE p.status IN ('planning','active','paused')`
+      `SELECT p.id, p.name, p.client_name FROM projects p WHERE p.status = 'active'`
     )
     .all()
   if (!projects.length) return { projectId: null, confidence: 0 }

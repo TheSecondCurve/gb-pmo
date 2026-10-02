@@ -84,7 +84,7 @@ curl -fsSL http://<服务器地址>/agent/skill/gb-pmo/install.sh | sh
 # 2. 终端授权（密码只走终端，不经 Agent 对话；凭证存 ~/.gb-pmo/credentials.json）
 curl -fsSL http://<服务器地址>/agent/login.sh | sh
 # 3. 使用（安装目录下的 client.sh）
-client.sh sql "SELECT id, name, status, priority FROM projects WHERE status IN ('planning','active','paused')"
+client.sh sql "SELECT id, name, status, priority FROM projects WHERE status = 'active'"
 client.sh metrics
 client.sh metric overdue_tasks '{"groupBy":"project"}'
 client.sh action generate_person_digest '{}'

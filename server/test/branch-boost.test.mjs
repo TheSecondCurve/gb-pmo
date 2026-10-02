@@ -49,7 +49,7 @@ describe('projects 分支', () => {
     expect(() => updateProject(db, p.id, { status: 'closed' }, 1)).toThrow()
     expect(() => closeProject(db, p.id, {}, 1)).toThrow()
     for (const t of listTasks(db, { projectId: p.id })) updateTask(db, t.id, { status: 'done' }, 1)
-    const closed = closeProject(db, p.id, {}, 1)
+    const closed = closeProject(db, p.id, { summary: '全部交付完成' }, 1) // v0.28：结项摘要必填
     expect(closed.status).toBe('closed')
     expect(() => closeProject(db, p.id, {}, 1)).toThrow()
     expect(listProjects(db, { statuses: ['closed'] }).length).toBe(1)

@@ -123,13 +123,19 @@ export function registerApiRoutes(app) {
   app.patch('/api/v1/projects/:id', async (req) => projects.updateProject(db, Number(req.params.id), req.body, req.member.id))
 
   app.post('/api/v1/projects/:id/close', async (req) => {
-    // S8-2：未提供摘要时由大脑基于事件流自动生成（LLM 可用则归纳，人工可改）；v0.6 规则=全部任务完成才可结项
-    let summary = req.body?.summary
-    if (!summary) {
-      const { closeoutSummary } = await import('../brain/digest.js')
-      summary = await closeoutSummary(db, Number(req.params.id))
-    }
-    return projects.closeProject(db, Number(req.params.id), { summary }, req.member.id)
+    // S8/S29：摘要必填（engine 强校验）；AI 草稿走 closeout-draft 端点预填、人工改后提交
+    return projects.closeProject(db, Number(req.params.id), { summary: req.body?.summary }, req.member.id)
+  })
+
+  app.get('/api/v1/projects/:id/closeout-draft', async (req) => {
+    // S8-2/S29：AI 复盘草稿（大脑基于事件流归纳，确定性降级兜底）——只产草稿不落库、不关项目
+    const { closeoutSummary } = await import('../brain/digest.js')
+    return { summary: await closeoutSummary(db, Number(req.params.id)) }
+  })
+
+  app.post('/api/v1/projects/:id/cancel', async (req) => {
+    // S8-3/S29：原因必填（engine 强校验）；未完任务原样冻结
+    return projects.cancelProject(db, Number(req.params.id), { reason: req.body?.reason }, req.member.id)
   })
 
   app.get('/api/v1/projects/:id/events', async (req) =>

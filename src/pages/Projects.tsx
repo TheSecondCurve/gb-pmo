@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { useStore } from '../store'
 import { Badge, Btn, Card, Empty, Field, InlineSelect, Modal, Spinner, inputCls } from '../components/ui'
-import { PRIORITY_LABEL, type Member, type ProjectRow, type ProjectType } from '../types'
+import { PRIORITY_LABEL, PROJECT_STATUS_LABEL, type Member, type ProjectRow, type ProjectType } from '../types'
 
 export default function Projects() {
   const { toast } = useStore()
@@ -47,9 +47,7 @@ export default function Projects() {
                     <td><a className="text-[var(--color-brand)] hover:underline" href={`#/projects/${p.id}`}>{p.name}</a>{p.clientName ? <span className="text-[var(--color-ink-soft)]">（{p.clientName}）</span> : null}</td>
                     <td>{p.leadName}</td>
                     <td>
-                      <InlineSelect value={p.status} options={{ planning: '待启动', active: '进行中', paused: '已暂停', cancelled: '已取消' }} onSubmit={async (v) => {
-                        try { await api.patchProject(p.id, { status: v }); toast('状态已更新'); await refresh() } catch (e) { toast((e as Error).message, 'bad') }
-                      }} />
+                      <Badge tone="muted">{PROJECT_STATUS_LABEL[p.status] || p.status}</Badge>
                     </td>
                     <td className={`num ${p.overdueTasks ? 'text-[var(--color-bad)]' : ''}`}>{p.overdueTasks}</td>
                     <td className="num">
@@ -157,7 +155,7 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Field label="客户（可选）"><input className={inputCls} value={form.clientName} onChange={(e) => set('clientName', e.target.value)} /></Field>
         <Field label="计划开始"><input type="date" className={inputCls} value={form.planStartDate} onChange={(e) => set('planStartDate', e.target.value)} /></Field>
-        <Field label="交付日期（S21：切「进行中」前必填）"><input type="date" className={inputCls} value={form.planEndDate} onChange={(e) => set('planEndDate', e.target.value)} /></Field>
+        <Field label="交付日期（选填：填了派生剩余/超期天数并进项目日历）"><input type="date" className={inputCls} value={form.planEndDate} onChange={(e) => set('planEndDate', e.target.value)} /></Field>
       </div>
       <Field label={`任务清单（每行一条；选类型自动预填${tasksDirty ? '，已自定义' : ''}；留空=空项目）`}>
         <textarea className={inputCls} rows={8} value={tasksText} onChange={(e) => { setTasksText(e.target.value); setTasksDirty(true) }} placeholder={'需求确认与范围冻结\n技术方案与排期\n开发联调\n结项复盘'} />
