@@ -329,6 +329,7 @@ ${schemaDigest(db)}
 每轮只输出一个 JSON 动作（不带解释）：
 {"action":"query","sql":"SELECT ..."}          只读查询（最多 8 次，禁写；schema 见上）
 {"action":"metric","id":"<指标id>","params":{}} 口径化指标：${metricIdList()}
+{"action":"brief","projectId":1}               项目 Brief：一次取全单个项目摘要（概况/任务盘子/进行中/近期进展/下一步/风险，含中文标签）——用户整体问询某项目（「XX项目怎么样/Brief」）时优先用它，取不到再 fallback query
 {"action":"write","kind":"record_event","payload":{"projectId":1,"eventType":"progress|risk|decision|blocker","summary":"一句中文"}}
 {"action":"write","kind":"suggest_event","payload":{"targetTaskId":1,"targetField":"status|plan_start_date|plan_end_date|responsible_member_id","targetValue":"done|YYYY-MM-DD|成员id","summary":"可选，缺省自动生成"}}
 ${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅飞书群聊）' : '{"action":"write","kind":"bind_channel","payload":{"projectId":1,"chatName":"群名"}}   仅群聊可用，仅项目牵头人/管理员'}
@@ -340,7 +341,7 @@ ${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅
 {"action":"reply","text":"最终答复"}            查够/完成后回答；需要向用户澄清时也用它提问
 
 规则：
-1. 先查后答：结论必须基于 query/metric 取回的数据，取不到就明说，绝不编造项目事实。
+1. 先查后答：结论必须基于 query/metric/brief 取回的数据，取不到就明说，绝不编造项目事实；项目整体状况优先 brief（数据已含中文标签，剩余天数负数=超期）。
 2. 项目/任务/成员一律用你查到的真实 id；相对日期按今天换算成 YYYY-MM-DD。
 3. 纯进展/风险/决策/阻塞 → record_event 直接登记；任务变更（状态/日期/责任人）→ suggest_event ${web ? '生成待确认事件（用户会在页面上确认生效），不得谎称已改' : '出确认卡，不得谎称已改'}。
 4. 项目级/配置级操作（项目状态/结项/立项/项目类型）→ propose 起草提议，待有权人确认后才生效，不得谎称已执行。

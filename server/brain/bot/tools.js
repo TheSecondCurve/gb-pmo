@@ -6,6 +6,7 @@
 import { runReadOnlyQuery } from '../../agent/sqlGuard.js'
 import { ACTIONS, BOT_ACTIONS } from '../../agent/actions.js'
 import { queryMetric } from '../../engine/metrics.js'
+import { projectBrief } from '../../engine/brief.js'
 import { addEvent } from '../../engine/events.js'
 import { assertValue, label } from '../../engine/enums.js'
 import { pushSuggestion } from '../extract.js'
@@ -26,6 +27,11 @@ export function runQueryTool(db, sql) {
 
 export function runMetricTool(db, id, params) {
   return queryMetric(db, String(id || ''), params || {})
+}
+
+/** 项目 Brief（S27）：一次取全单个项目的结构化摘要（engine 确定性组装，LLM 只叙述）。 */
+export function runBriefTool(db, projectId) {
+  return projectBrief(db, Number(projectId))
 }
 
 /**

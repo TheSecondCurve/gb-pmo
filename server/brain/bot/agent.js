@@ -1,4 +1,4 @@
-// S20 有界 ReAct 循环（K9）：LLM 每轮输出一个 JSON 动作（query / metric / write / reply），
+// S20 有界 ReAct 循环（K9）：LLM 每轮输出一个 JSON 动作（query / metric / brief / write / reply），
 // 工具结果回灌为下一轮输入；≤ maxTurns 轮 LLM、≤ MAX_QUERIES 次查询；写动作即终止（回执/确认卡由编排层发送）。
 // 读侧放开（查询无害且有据作答），写侧收敛（write 只有一次，生效路径由 tools 分发器定性）。
 
@@ -40,7 +40,7 @@ export async function runAgentLoop({ llm, systemPrompt, userText, history = [], 
         text: String(parsed.text || '').slice(0, 3000), turns, queries,
       }
     }
-    if (parsed.action === 'query' || parsed.action === 'metric') {
+    if (parsed.action === 'query' || parsed.action === 'metric' || parsed.action === 'brief') {
       if (queries >= MAX_QUERIES) {
         messages.push({ role: 'assistant', content: out }, { role: 'user', content: `查询次数已达上限（${MAX_QUERIES} 次），请基于已取回的信息直接 reply。` })
         continue
@@ -54,7 +54,7 @@ export async function runAgentLoop({ llm, systemPrompt, userText, history = [], 
       const writeResult = await execTool(parsed)
       return { kind: 'write', writeResult, turns, queries }
     }
-    messages.push({ role: 'assistant', content: out }, { role: 'user', content: `未知动作 ${parsed.action}，请输出 query / metric / write / reply 之一的 JSON。` })
+    messages.push({ role: 'assistant', content: out }, { role: 'user', content: `未知动作 ${parsed.action}，请输出 query / metric / brief / write / reply 之一的 JSON。` })
   }
   return { kind: 'reply', result: 'replied', text: '这句指令需要的查询步骤太多，我中断了。换个更具体的问法试试？', turns: maxTurns, queries }
 }
