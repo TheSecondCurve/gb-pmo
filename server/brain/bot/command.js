@@ -121,6 +121,10 @@ export async function handleBotEvent(db, evt, opts = {}) {
   // ② 外部群拒答：安全不变量，静默不回（S20-7）
   if (evt.chatType === 'group' && evt.external) return finish({ result: 'refused_external' })
 
+  // ②b 群消息必须 @ 本机器人（S20-16/v0.26.1）：group_msg 权限下事件推送为群内全部消息，
+  // 未 @ 一律忽略（不回复/不产事件/不进 LLM）；mentioned 缺省不判定（私聊与旧调用方兼容）
+  if (evt.chatType === 'group' && evt.mentioned === false) return finish({ result: 'refused_not_mentioned' })
+
   // ③ 身份门禁：只认 members.feishu_id 映射到的在职成员（权限跟人不跟群）
   const member = mapSpeaker(db, platform, evt.senderOpenId)
   // 命中即回填审计行 member_id（限额统计需要把当前这条计入）

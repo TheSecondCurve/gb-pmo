@@ -741,3 +741,44 @@ describe('S20 机器人出站发送', () => {
     }
   })
 })
+
+// S20-16（v0.26.1）— 群消息必须 @ 本机器人：应用持有 im:message.group_msg 时事件推送为
+// 群内全部消息，此前网关只剥 @ 前缀不校验对象，普通聊天被当成指令 → 机器人主动搭话（线上实测）。
+describe('S20 群 @ 判定（refused_not_mentioned）', () => {
+  it('S20-16: 未 @ 机器人（mentioned=false）的群消息一律忽略——不回复、不进 LLM、留审计', async () => {
+    const rec = recorder()
+    const evt = group('fs_zhang', 'oc_g_mention', '今天中午吃什么')
+    const out = await handleBotEvent(ctx.db, { ...evt, mentioned: false }, { llm: scriptedLlm().llm, send: rec.send, secret: SECRET })
+    expect(out.result).toBe('refused_not_mentioned')
+    expect(rec.sent).toHaveLength(0)
+    const row = botRow(evt.messageId)
+    expect(row.result).toBe('refused_not_mentioned')
+    expect(row.llm_calls).toBeNull()
+    // 不产任何事件
+    expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM project_events WHERE summary LIKE ?').get('%中午吃什么%').n).toBe(0)
+
+    // @ 了机器人（mentioned=true）不受影响：正常走门禁链
+    const rec2 = recorder()
+    const evt2 = group('fs_zhang', 'oc_g_mention', '@bot 在吗', { chatTitle: 'M群' })
+    const out2 = await handleBotEvent(ctx.db, { ...evt2, mentioned: true }, { llm: scriptedLlm(JSON.stringify({ action: 'reply', text: '在的' })).llm, send: rec2.send, secret: SECRET })
+    expect(out2.result).toBe('replied')
+    expect(rec2.sent[0].text).toBe('在的')
+    // 未带 mentioned 字段（私聊/旧调用方）不判定，兼容既有契约
+    const out3 = await handleBotEvent(ctx.db, p2p('fs_zhang', '私聊不受影响'), { llm: scriptedLlm(JSON.stringify({ action: 'reply', text: '好的' })).llm, send: recorder().send, secret: SECRET })
+    expect(out3.result).toBe('replied')
+  })
+
+  it('S20-16: resolveMention——mentions 比对机器人 open_id；身份缺失降级要求 @_user_N 前缀；私聊恒真', async () => {
+    const { resolveMention } = await import('../brain/bot/gateway.js')
+    const BOT = 'ou_bot_1'
+    const M = (openId) => [{ key: '@_user_1', id: { open_id: openId } }]
+    expect(resolveMention({ chatType: 'p2p', mentions: [], rawText: '你好' })).toBe(true) // 私聊不判定
+    expect(resolveMention({ chatType: 'group', mentions: M(BOT), rawText: '@_user_1 在吗', botOpenId: BOT })).toBe(true)
+    expect(resolveMention({ chatType: 'group', mentions: M('ou_member_9'), rawText: '@_user_1 帮我问下小王', botOpenId: BOT })).toBe(false) // @ 的是别人
+    expect(resolveMention({ chatType: 'group', mentions: [], rawText: '今天中午吃什么', botOpenId: BOT })).toBe(false) // 无 @
+    expect(resolveMention({ chatType: 'group', mentions: [...M('ou_member_9'), { key: '@_user_2', id: { open_id: BOT } }], rawText: '@_user_1 帮我 @机器人 在吗', botOpenId: BOT })).toBe(true) // 顺带 @ 到机器人也算
+    // 身份获取失败降级：带占位前缀放行（交给后续门禁），无前缀忽略
+    expect(resolveMention({ chatType: 'group', mentions: M('ou_member_9'), rawText: '@_user_1 在吗', botOpenId: null })).toBe(true)
+    expect(resolveMention({ chatType: 'group', mentions: [], rawText: '随便聊聊', botOpenId: null })).toBe(false)
+  })
+})
