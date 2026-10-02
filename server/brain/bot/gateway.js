@@ -53,6 +53,17 @@ export function parseSdkMessage(data) {
   }
 }
 
+/**
+ * 群消息 @ 判定（S20-16/v0.26.1）：应用持有 im:message.group_msg 时事件订阅推送群内全部消息，
+ * 必须 @ 本机器人才处理。私聊恒真；有机器人身份（open_id）时比对 mentions（@ 其他人不算）；
+ * 身份获取失败降级要求消息带 @_user_N 占位前缀（宁可不答不可乱答）。
+ */
+export function resolveMention({ chatType, mentions, rawText, botOpenId }) {
+  if (chatType !== 'group') return true
+  if (botOpenId) return (mentions || []).some((m) => m?.id?.open_id === botOpenId)
+  return /^@_user_\d+/.test(String(rawText || '').trim())
+}
+
 async function connectReal(db, cfg, secret) {
   let sdk
   try {
@@ -78,6 +89,14 @@ async function connectReal(db, cfg, secret) {
     return external
   }
 
+  // 机器人自身身份（S20-16）：连接时取一次，用于群消息 @ 判定；失败不阻塞连接（降级判定）
+  let botOpenId = null
+  try {
+    botOpenId = (await feishu.getBotInfo(cfg)).openId
+  } catch (e) {
+    console.warn(`[bot] 机器人身份获取失败（群消息降级为占位前缀判定）: ${e.message}`)
+  }
+
   const send = ({ chatId, text, card }) => (card ? feishu.sendCard(cfg, chatId, card) : feishu.sendText(cfg, chatId, text))
 
   const dispatcher = new sdk.EventDispatcher({}).register({
@@ -86,9 +105,9 @@ async function connectReal(db, cfg, secret) {
         const { msg, senderOpenId } = parseSdkMessage(data)
         if (msg.message_type !== 'text') return
         const chatType = msg.chat_type === 'p2p' ? 'p2p' : 'group'
-        // 群@消息文本带 @_user_N 前缀，剥掉再交给指令层
-        const text = String(JSON.parse(msg.content || '{}').text || '')
-          .replace(/^@\S+\s*/, '').trim()
+        const rawText = String(JSON.parse(msg.content || '{}').text || '')
+        // 群@消息文本带 @_user_N 前缀，剥掉再交给指令层；群消息必须 @ 本机器人（S20-16）
+        const text = rawText.replace(/^@\S+\s*/, '').trim()
         if (!text) return
         await handleBotEvent(db, {
           messageId: msg.message_id,
@@ -98,6 +117,7 @@ async function connectReal(db, cfg, secret) {
           text,
           ts: Date.now(),
           external: await isExternal(msg.chat_id, chatType),
+          mentioned: resolveMention({ chatType, mentions: msg.mentions, rawText, botOpenId }),
         }, { send, secret })
       } catch (e) {
         console.error('[bot] 消息处理失败:', e.message)

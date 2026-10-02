@@ -170,6 +170,19 @@ export async function getChat(cfg, chatId) {
   return data.data || {}
 }
 
+/** 机器人自身信息（S20-16：open_id 用于群消息 @ 判定；调用方连接时取一次缓存）。 */
+export async function getBotInfo(cfg) {
+  const token = await tenantToken(cfg)
+  const res = await fetch('https://open.feishu.cn/open-apis/bot/v3/info', {
+    headers: { authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw Object.assign(new Error(`飞书机器人信息 HTTP ${res.status}`), { statusCode: 502 })
+  const data = await res.json()
+  if (data.code !== 0) throw Object.assign(new Error(`飞书机器人信息失败(${data.code}): ${data.msg}`), { statusCode: 502 })
+  const bot = data.bot || data.data?.bot || {}
+  return { openId: bot.open_id || null, appName: bot.app_name || null }
+}
+
 // —— S22 项目日历：应用身份维护组织级日历与全日事件（calendar/v4，PRD §7.6）——
 
 async function callApi(cfg, path, method, body) {
