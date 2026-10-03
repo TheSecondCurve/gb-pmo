@@ -13,7 +13,7 @@ afterAll(() => ctx?.db.close())
 
 async function mkProject(ctx, cookie, name) {
   const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-    name, templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+    name, templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
   })
   return res.body
 }
@@ -30,7 +30,7 @@ describe('S8 结项', () => {
     const p = await mkProject(ctx, cookie, '客户F系统')
     const blocked = await authed(ctx.app, cookie, 'POST', `/api/v1/projects/${p.id}/close`, {})
     expect(blocked.status).toBe(409)
-    expect(blocked.body.openTasks.length).toBe(6)
+    expect(blocked.body.openTasks.length).toBe(14)
     expect(blocked.body.openTasks[0].title).toBeTruthy()
 
     // 旧 dispositions 入参已删除：即使传也不再豁免，规则只有「全部完成」

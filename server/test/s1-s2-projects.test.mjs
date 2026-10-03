@@ -11,15 +11,15 @@ describe('S1 立项', () => {
   it('S1-1: 当立项未指定牵头人时，应阻止完成立项', async () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
-    const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', { name: '客户A系统', templateCode: 'software_delivery' })
+    const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', { name: '客户A系统', templateCode: 'lianmai_365' })
     expect(res.status).toBe(400)
     expect(res.body.message).toContain('牵头人')
   })
 
-  it('S1-2: 软件交付类型立项 → 按绑定模板生成扁平任务清单，任务责任人默认=牵头人（v0.6 无阶段层）', async () => {
+  it('S1-2: 预置类型（365连麦）立项 → 按类型内嵌清单生成扁平任务清单，任务责任人默认=牵头人（v0.6 无阶段层；v0.30 种子为四类交付类型）', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '客户A系统', templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '客户A系统', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
       priority: 'high', planEndDate: '2026-12-31',
     })
     expect(res.status).toBe(201)
@@ -27,8 +27,8 @@ describe('S1 立项', () => {
     expect(detail.status).toBe('active') // S29：立项即进行中
     expect(detail.actualStartDate).toBe(today()) // S29：启动日=立项日自动落
     expect(detail.stages).toBeUndefined()
-    expect(detail.tasks.length).toBe(6)
-    expect(detail.tasks.map((t) => t.title)).toContain('需求确认与范围冻结')
+    expect(detail.tasks.length).toBe(14)
+    expect(detail.tasks.map((t) => t.title)).toContain('创建本场连麦记录并确定主负责人')
     expect(detail.tasks.every((t) => t.responsibleMemberId === ctx.members.lead.id)).toBe(true)
     expect(detail.tasks.every((t) => t.source === 'template')).toBe(true)
   })
@@ -36,7 +36,7 @@ describe('S1 立项', () => {
   it('S1-3: 未绑定核心渠道的项目计入管理员待办视图', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '客户B小程序', templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '客户B小程序', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
     const todo = await authed(ctx.app, cookie, 'GET', '/api/v1/admin/todo')
     expect(todo.status).toBe(200)
@@ -50,10 +50,10 @@ describe('S1 立项', () => {
     expect(todo2.body.projects.map((p) => p.name)).not.toContain('客户B小程序')
   })
 
-  it('S1-4: 自由创建 → 不含任务的空项目，支持随时添加任务（v0.6）', async () => {
+  it('S1-4: 自由创建（清空类型预填清单）→ 不含任务的空项目，支持随时添加任务（v0.6；v0.30 起经显式 tasks:[] 达成，S1-6 空清单语义）', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '内部优化', templateCode: 'custom', leadMemberId: ctx.members.dev.id,
+      name: '内部优化', templateCode: 'lianmai_365', leadMemberId: ctx.members.dev.id, tasks: [],
     })
     expect(res.status).toBe(201)
     expect(res.body.stages).toBeUndefined()
@@ -67,20 +67,20 @@ describe('S1 立项', () => {
   it('S1-5: 按项目类型立项 → 记录类型编码快照与类型外键（v0.18：清单内嵌于类型）；templateCode 兼容别名同码解析', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '类型立项E', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '类型立项E', typeCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
     expect(res.status).toBe(201)
-    expect(res.body.templateCode).toBe('software_delivery')
+    expect(res.body.templateCode).toBe('lianmai_365')
     expect(res.body.projectTypeId).toBeGreaterThan(0)
-    expect(res.body.typeName).toBe('软件交付')
+    expect(res.body.typeName).toBe('365连麦')
     expect(res.body.stages).toBeUndefined()
     expect(res.body.tasks.every((t) => t.responsibleMemberId === ctx.members.lead.id)).toBe(true)
     // 兼容：templateCode 直给按同码类型解析（Agent/旧调用）
     const legacy = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '旧入参立项F', templateCode: 'consulting', leadMemberId: ctx.members.dev.id,
+      name: '旧入参立项F', templateCode: 'consulting_1v1', leadMemberId: ctx.members.dev.id,
     })
     expect(legacy.status).toBe(201)
-    expect(legacy.body.templateCode).toBe('consulting')
+    expect(legacy.body.templateCode).toBe('consulting_1v1')
     expect(legacy.body.projectTypeId).toBeGreaterThan(0)
   })
 
@@ -88,7 +88,7 @@ describe('S1 立项', () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     // 字符串数组与 {title} 对象均可
     const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '自定义任务G', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '自定义任务G', typeCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
       tasks: ['现场调研', { title: '部署方案评审' }, '割接上线'],
     })
     expect(res.status).toBe(201)
@@ -97,13 +97,13 @@ describe('S1 立项', () => {
     expect(res.body.tasks.every((t) => t.responsibleMemberId === ctx.members.lead.id)).toBe(true)
     // 空清单 → 空项目（即使类型有预填清单）
     const empty = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '空清单H', typeCode: 'software_delivery', leadMemberId: ctx.members.dev.id, tasks: [],
+      name: '空清单H', typeCode: 'lianmai_365', leadMemberId: ctx.members.dev.id, tasks: [],
     })
     expect(empty.status).toBe(201)
     expect(empty.body.tasks).toHaveLength(0)
     // 空白标题 → 400
     const bad = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '坏清单I', typeCode: 'software_delivery', leadMemberId: ctx.members.dev.id, tasks: ['有效标题', '   '],
+      name: '坏清单I', typeCode: 'lianmai_365', leadMemberId: ctx.members.dev.id, tasks: ['有效标题', '   '],
     })
     expect(bad.status).toBe(400)
   })
@@ -112,13 +112,13 @@ describe('S1 立项', () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     // 缺交付日期 → 400
     const noEnd = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '无期倒排J', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id, autoSchedule: true,
+      name: '无期倒排J', typeCode: 'lianmai_365', leadMemberId: ctx.members.lead.id, autoSchedule: true,
     })
     expect(noEnd.status).toBe(400)
 
     // 4 条任务、10-01 → 10-05（总 4 天）：due=02/03/04/05，start=01/03/04/05
     const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '倒排项目K', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '倒排项目K', typeCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
       tasks: ['任务一', '任务二', '任务三', '任务四'],
       planStartDate: '2026-10-01', planEndDate: '2026-10-05', autoSchedule: true,
     })
@@ -131,7 +131,7 @@ describe('S1 立项', () => {
 
     // 未给 planStartDate → 锚定今天（北京日）；末条截止仍=交付日期
     const anchorToday = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '今天锚定L', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '今天锚定L', typeCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
       tasks: ['甲', '乙'], planEndDate: '2030-12-31', autoSchedule: true,
     })
     expect(anchorToday.status).toBe(201)
@@ -140,7 +140,7 @@ describe('S1 立项', () => {
 
     // 窗口短于任务数：日期钳制（start 不晚于 due），不报错
     const tight = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '紧凑倒排M', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '紧凑倒排M', typeCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
       tasks: ['a', 'b', 'c', 'd', 'e'], planStartDate: '2026-10-01', planEndDate: '2026-10-02', autoSchedule: true,
     })
     expect(tight.status).toBe(201)
@@ -160,7 +160,7 @@ describe('S1 立项', () => {
   it('S1-8/S29-1: 立项即进行中并落启动日；项目 PATCH 不再受理 status（状态仅经结项/取消变更）', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '三态项目N', typeCode: 'custom', leadMemberId: ctx.members.lead.id,
+      name: '三态项目N', typeCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
     expect(res.status).toBe(201)
     expect(res.body.status).toBe('active')
@@ -178,7 +178,7 @@ describe('S2 排期与任务维护', () => {
   it('S2-1: 责任人留空且设了计划开始日 → 进未指派视图', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '客户C交付', templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '客户C交付', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
     const task = p.body.tasks[0]
     await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${task.id}`, { responsibleMemberId: '', planStartDate: '2026-09-01' })
@@ -189,7 +189,7 @@ describe('S2 排期与任务维护', () => {
   it('S2-2: 【已废弃 v0.6】任务间前置依赖整体裁剪：旧入参与状态值一律 400', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '客户D交付', templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '客户D交付', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
     const task = p.body.tasks[0]
     // 依赖端点已删除 → 404
@@ -205,7 +205,7 @@ describe('S2 排期与任务维护', () => {
   it('S2-3: 任务更新记录可不停追加且历史不可改；结项归档后任务面（含记录）只读', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '客户F交付', templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '客户F交付', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
     const task = p.body.tasks[0]
     const r1 = await authed(ctx.app, cookie, 'POST', `/api/v1/tasks/${task.id}/records`, { content: '完成范围冻结，待评审' })
@@ -234,7 +234,7 @@ describe('S2 排期与任务维护', () => {
   it('S5-2: 优先级调整立即生效并留事件痕迹', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '客户E咨询', templateCode: 'consulting', leadMemberId: ctx.members.lead.id, priority: 'low',
+      name: '客户E咨询', templateCode: 'consulting_1v1', leadMemberId: ctx.members.lead.id, priority: 'low',
     })
     const upd = await authed(ctx.app, cookie, 'PATCH', `/api/v1/projects/${p.body.id}`, { priority: 'high' })
     expect(upd.body.priority).toBe('high')

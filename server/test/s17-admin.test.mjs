@@ -18,7 +18,7 @@ describe('S17 配置台', () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '客户P系统', templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '客户P系统', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
     const ch = upsertChannel(ctx.db, { platform: 'feishu', groupKey: 'oc_p', channelType: 'dedicated', projectId: p.body.id })
     const llm = fakeLlm(() => JSON.stringify({ events: [{ nature: 'record', eventType: 'progress', summary: '进展', confidence: 0.9 }] }))
@@ -37,7 +37,7 @@ describe('S17 配置台', () => {
   it('S17-2: 离职强制转交：未转完 409 并列出缺项；转完软删+令牌会话联动失效', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '客户Q系统', templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '客户Q系统', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
     const zhangCookie = await loginCookie(ctx.app, 'zhangsan', 'pass-123456')
     const tok = await authed(ctx.app, zhangCookie, 'POST', '/api/v1/auth/tokens', { scope: 'write' })
@@ -70,7 +70,7 @@ describe('S17 配置台', () => {
   it('S17-3: 修改沉默阈值后全局视图按新口径即时刷新', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '阈值项目', templateCode: 'software_delivery', leadMemberId: ctx.members.dev.id,
+      name: '阈值项目', templateCode: 'lianmai_365', leadMemberId: ctx.members.dev.id,
     })
     await authed(ctx.app, cookie, 'POST', `/api/v1/projects/${p.body.id}/events`, { eventType: 'progress', summary: '五天前进展' })
     ctx.db.prepare('UPDATE project_events SET business_time = ? WHERE project_id = ?').run(Date.now() - 5 * 86400000, p.body.id)
@@ -304,10 +304,10 @@ describe('S17 配置台改版：角色治理与类型/模板管理', () => {
     const leadCookie = await loginCookie(ctx.app, 'zhangsan', 'pass-123456')   // lead：普通成员
     const devCookie = await loginCookie(ctx.app, 'lisi', 'pass-123456')        // dev：普通成员
     const pLead = await authed(ctx.app, adminCookie, 'POST', '/api/v1/projects', {
-      name: '渠道权限-牵头项目', templateCode: 'custom', leadMemberId: ctx.members.lead.id,
+      name: '渠道权限-牵头项目', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
     const pDev = await authed(ctx.app, adminCookie, 'POST', '/api/v1/projects', {
-      name: '渠道权限-他人项目', templateCode: 'custom', leadMemberId: ctx.members.dev.id,
+      name: '渠道权限-他人项目', templateCode: 'lianmai_365', leadMemberId: ctx.members.dev.id,
     })
 
     // 牵头人可绑自己项目的专题渠道

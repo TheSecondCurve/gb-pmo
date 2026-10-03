@@ -60,22 +60,22 @@ describe('S4 Agent 接入（形态 B）', () => {
   it('S4-2: 「我本周的任务」经 SQL 端点返回名下未完成任务', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '客户M系统', templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '客户M系统', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
-    // 完成一项，剩 5 项未完
+    // 完成一项，剩 13 项未完（v0.30：365连麦预置清单 14 条）
     await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${p.body.tasks[0].id}`, { status: 'done' })
     const res = await sql(
       `SELECT id, title, plan_end_date FROM tasks WHERE responsible_member_id = ${ctx.members.lead.id} AND status IN ('todo','doing') ORDER BY id`
     )
     expect(res.status).toBe(200)
-    expect(res.body.rows.length).toBe(5)
+    expect(res.body.rows.length).toBe(13)
     expect(Array.isArray(res.body.rows)).toBe(true)
   })
 
   it('S4-3: 口述「验收推迟到 10 月 20」→ 建议型事件，确认后里程碑日期生效并留痕', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '客户N系统', templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '客户N系统', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
     const ms = await authed(ctx.app, cookie, 'POST', '/api/v1/milestones', { projectId: p.body.id, name: '客户验收', planDate: '2026-10-10' })
     // Agent 口述 → 写入建议型事件（SKILL 守则：nature=suggestion 不直接改）
@@ -96,7 +96,7 @@ describe('S4 Agent 接入（形态 B）', () => {
   it('S4-4: 口述「这块交给小王」→ 确认后责任人变更为王五', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '客户O系统', templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '客户O系统', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
     const task = p.body.tasks[2]
     const ins = await sql(
@@ -216,7 +216,7 @@ describe('S17-10 Agent 配置类 action', () => {
   async function mkProject() {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '客户R系统', templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id, planEndDate: '2026-12-31',
+      name: '客户R系统', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id, planEndDate: '2026-12-31',
     })
     return res.body
   }

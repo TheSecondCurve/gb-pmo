@@ -242,7 +242,7 @@ client.sh action generate_person_digest '{}'
 | 列 | 类型 | 说明 |
 |---|---|---|
 | id | INTEGER |  |
-| code | TEXT | software_delivery | consulting | custom | 自定义 |
+| code | TEXT | 预置编码（v0.30/S31）：lianmai_365 | consulting_1v1 | afternoon_tea | internal_training；旧占位 software_delivery/consulting/custom 已停用（0017） |
 | name | TEXT |  |
 | description | TEXT |  |
 | status | TEXT | active | disabled |

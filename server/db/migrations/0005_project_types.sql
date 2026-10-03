@@ -4,7 +4,7 @@
 
 CREATE TABLE IF NOT EXISTS project_types (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  code TEXT NOT NULL UNIQUE,                     -- software_delivery | consulting | custom | 自定义
+  code TEXT NOT NULL UNIQUE,                     -- 预置编码（v0.30/S31）：lianmai_365 | consulting_1v1 | afternoon_tea | internal_training；旧占位 software_delivery/consulting/custom 已停用（0017）
   name TEXT NOT NULL,
   description TEXT,
   default_template_id INTEGER NOT NULL REFERENCES project_templates(id),

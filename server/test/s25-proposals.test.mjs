@@ -18,7 +18,7 @@ function fakeLlm(turns) {
 
 async function mkProject(cookie, leadId, name, extra = {}) {
   const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-    name, templateCode: 'software_delivery', leadMemberId: leadId, ...extra,
+    name, templateCode: 'lianmai_365', leadMemberId: leadId, ...extra,
   })
   return res.body
 }
@@ -100,7 +100,7 @@ describe('S25 Agent 提议式项目与配置操作', () => {
 
     // 自定义任务清单 + 倒排（v0.18）：AI 起草 tasks，日期算术由 engine 确定性完成
     const ok = await chatPropose(member, sid, '立项：客户Q系统，软件交付', {
-      kind: 'create_project', name: '客户Q系统', typeCode: 'software_delivery',
+      kind: 'create_project', name: '客户Q系统', typeCode: 'lianmai_365',
       leadMemberId: ctx.members.lead.id, planStartDate: '2026-10-01', planEndDate: '2026-12-31',
       tasks: ['需求冻结', '方案评审', '开发联调', '验收上线'], autoSchedule: true,
     })
@@ -123,7 +123,7 @@ describe('S25 Agent 提议式项目与配置操作', () => {
 
     // 类型实例化路径（无 tasks）仍走类型内嵌清单
     const plain = await chatPropose(member, sid, '立项：客户T系统', {
-      kind: 'create_project', name: '客户T系统', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      kind: 'create_project', name: '客户T系统', typeCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
     const plainId = plain.body.assistant.meta.proposalId
     expect((await authed(ctx.app, admin, 'POST', `/api/v1/proposals/${plainId}/confirm`)).status).toBe(200)

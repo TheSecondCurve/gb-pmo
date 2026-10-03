@@ -17,7 +17,7 @@ async function admin() {
 
 async function mkProject(name, extra = {}) {
   const res = await authed(ctx.app, await admin(), 'POST', '/api/v1/projects', {
-    name, templateCode: 'custom', leadMemberId: ctx.members.lead.id, ...extra,
+    name, templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id, tasks: [], ...extra,
   })
   if (res.status !== 201) throw new Error(`mkProject failed: ${res.status} ${JSON.stringify(res.body)}`)
   return res.body

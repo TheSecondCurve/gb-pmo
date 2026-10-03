@@ -44,7 +44,7 @@ const group = (openId, chatId, text) => ({ messageId: nextMsgId(), chatId, chatT
 async function seed() {
   const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
   const mk = (name, extra = {}) =>
-    authed(ctx.app, cookie, 'POST', '/api/v1/projects', { name, templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id, ...extra })
+    authed(ctx.app, cookie, 'POST', '/api/v1/projects', { name, templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id, ...extra })
   const a = (await mk('客户M甲系统', { planEndDate: '2026-12-31' })).body
   const b = (await mk('客户M乙系统', {})).body
   // 立项 decision 事件 business_time=真实时刻（在窗口内），推出窗口保证「无动态」断言确定
