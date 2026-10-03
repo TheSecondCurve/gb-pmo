@@ -99,7 +99,7 @@ describe('routing.js 降级（无 LLM）', () => {
     const { db } = setupDb()
     createMember(db, { name: '张', username: 'z', password: 'p' }, 1)
     db.prepare(`INSERT INTO projects (name, template_code, status, priority, lead_member_id, client_name, created_at, updated_at)
-      VALUES ('官网改版', 'custom', 'active', 'high', 1, '华信集团', 0, 0)`).run()
+      VALUES ('官网改版', 'lianmai_365', 'active', 'high', 1, '华信集团', 0, 0)`).run()
     const hit = await routeMessage(db, { text: '华信集团的官网改版今天上线' })
     expect(hit.projectId).toBe(1)
     expect(hit.confidence).toBe(0.5)

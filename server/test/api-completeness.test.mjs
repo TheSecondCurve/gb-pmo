@@ -11,13 +11,13 @@ describe('API 补齐', () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '补齐项目', templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
+      name: '补齐项目', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
-    // 过滤：按项目 + 按责任人 + 按状态
+    // 过滤：按项目 + 按责任人 + 按状态（365连麦预置清单 14 条）
     const byProject = await authed(ctx.app, cookie, 'GET', `/api/v1/tasks?projectId=${p.body.id}`)
-    expect(byProject.body.tasks.length).toBe(6)
+    expect(byProject.body.tasks.length).toBe(14)
     const byOwner = await authed(ctx.app, cookie, `GET`, `/api/v1/tasks?responsibleMemberId=${ctx.members.lead.id}&status=todo`)
-    expect(byOwner.body.tasks.length).toBe(6)
+    expect(byOwner.body.tasks.length).toBe(14)
     // 里程碑更新
     const ms = await authed(ctx.app, cookie, 'POST', '/api/v1/milestones', { projectId: p.body.id, name: '上线', planDate: '2026-11-01' })
     const msUpd = await authed(ctx.app, cookie, 'PATCH', `/api/v1/milestones/${ms.body.id}`, { planDate: '2026-11-15', status: 'met', actualDate: '2026-11-14' })

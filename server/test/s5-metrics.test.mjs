@@ -13,10 +13,10 @@ describe('S5 全局 dashboard（指标同源）', () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const low = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '低优项目', templateCode: 'software_delivery', leadMemberId: ctx.members.dev.id, priority: 'low',
+      name: '低优项目', templateCode: 'lianmai_365', leadMemberId: ctx.members.dev.id, priority: 'low',
     })
     const high = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-      name: '高优项目', templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id, priority: 'high',
+      name: '高优项目', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id, priority: 'high',
     })
     // 高优项目造一个逾期任务（S2-3 口径）+ 一条旧事件（沉默）
     const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)

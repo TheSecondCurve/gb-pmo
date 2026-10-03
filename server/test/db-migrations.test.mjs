@@ -12,9 +12,9 @@ describe('迁移', () => {
     // v0.18：模板对象并入项目类型——模板表已裁撤，任务清单挂在类型下
     expect(db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name IN ('project_templates','template_tasks','template_stages','stages','dependencies')`).all()).toEqual([])
     const types = db.prepare('SELECT COUNT(*) AS n FROM project_types').get().n
-    expect(types).toBe(3)
+    expect(types).toBe(7) // v0.30（S31）：3 个占位（已停用）+ 4 类交付类型
     const tasks = db.prepare('SELECT COUNT(*) AS n FROM project_type_tasks').get().n
-    expect(tasks).toBe(10) // 软件交付 6 + 咨询 4（回填自原默认模板；custom 本就为空）
+    expect(tasks).toBe(66) // 占位种子 10（软件交付 6 + 咨询 4，随类型停用保留）+ 交付四类 56（14+12+16+14）
     // default_template_id 列已随迁移删除
     expect(db.prepare(`SELECT COUNT(*) AS n FROM pragma_table_info('project_types') WHERE name = 'default_template_id'`).get().n).toBe(0)
     migrate(db)

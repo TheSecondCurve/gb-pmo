@@ -17,7 +17,7 @@ function fakeLlm(handler) {
 async function mkProject(name, leadId) {
   const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
   const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-    name, templateCode: 'software_delivery', leadMemberId: leadId, planEndDate: '2026-12-31',
+    name, templateCode: 'lianmai_365', leadMemberId: leadId, planEndDate: '2026-12-31',
   })
   return res.body
 }
@@ -99,11 +99,11 @@ describe('S3 IM 抽取与分拣', () => {
   it('S3-4: 完成信号生成状态变更建议并推送责任人；确认后生效', async () => {
     const a = await mkProject('客户E系统', ctx.members.lead.id)
     const ch = upsertChannel(ctx.db, { platform: 'wecom', groupKey: 'wk_e', channelType: 'dedicated', projectId: a.id })
-    const target = a.tasks.find((t) => t.title.includes('测试'))
+    const target = a.tasks.find((t) => t.title.includes('设备预检'))
     const llm = fakeLlm(() =>
-      JSON.stringify({ events: [{ nature: 'suggestion', eventType: 'status_change', summary: '测试与缺陷修复已上线', targetTaskId: target.id, targetField: 'status', targetValue: 'done', confidence: 0.92 }] })
+      JSON.stringify({ events: [{ nature: 'suggestion', eventType: 'status_change', summary: '设备预检已完成', targetTaskId: target.id, targetField: 'status', targetValue: 'done', confidence: 0.92 }] })
     )
-    const stats = await ingestMessages(ctx.db, ch, [{ id: 'wm_1', speakerId: 'wk_wang', text: '测试全部通过了，已上线', ts: Date.now() }], { llm })
+    const stats = await ingestMessages(ctx.db, ch, [{ id: 'wm_1', speakerId: 'wk_wang', text: '设备预检完成了，都检查过了', ts: Date.now() }], { llm })
     expect(stats.suggestions).toBe(1)
     const evt = ctx.db.prepare(`SELECT * FROM project_events WHERE target_task_id = ? AND status = 'pending'`).get(target.id)
     expect(evt).toBeTruthy()

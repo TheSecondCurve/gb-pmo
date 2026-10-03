@@ -15,7 +15,7 @@ async function mkProject(name, leadId, priority = 'medium') {
   // 交付日期 today() 同源 +30 天，避免时间炸弹与 UTC 偏差；S29 起立项即进行中，无需再切状态
   const planEndDate = new Date(Date.parse(`${today()}T00:00:00Z`) + 30 * 86400000).toISOString().slice(0, 10)
   const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-    name, templateCode: 'software_delivery', leadMemberId: leadId, priority, planEndDate,
+    name, templateCode: 'lianmai_365', leadMemberId: leadId, priority, planEndDate,
   })
   return res.body
 }

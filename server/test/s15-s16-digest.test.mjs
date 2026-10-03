@@ -15,7 +15,7 @@ function fakeLlm(handler) {
 async function mkProject(name, leadId) {
   const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
   const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-    name, templateCode: 'software_delivery', leadMemberId: leadId,
+    name, templateCode: 'lianmai_365', leadMemberId: leadId,
   })
   return res.body
 }
@@ -25,11 +25,11 @@ describe('S15 by 项目梳理', () => {
     ctx = await setupApp()
     const p = await mkProject('客户J系统', ctx.members.lead.id)
     addEvent(ctx.db, { projectId: p.id, eventType: 'progress', nature: 'record', summary: '需求评审完成', sourcePlatform: 'feishu' })
-    const target = p.tasks.find((t) => t.title.includes('开发联调'))
+    const target = p.tasks.find((t) => t.title.includes('预热'))
     const llm = fakeLlm(() =>
       JSON.stringify({
-        narrative: '开发联调进度落后（任务#' + target.id + '），需求侧已确认范围（事件#1）。',
-        suggestions: [{ summary: '开发联调顺延 3 天', targetTaskId: target.id, targetField: 'plan_end_date', targetValue: '2026-11-30' }],
+        narrative: '预热文案进度落后（任务#' + target.id + '），需求侧已确认范围（事件#1）。',
+        suggestions: [{ summary: '预热文案顺延 3 天', targetTaskId: target.id, targetField: 'plan_end_date', targetValue: '2026-11-30' }],
       })
     )
     const out = await projectDigest(ctx.db, p.id, { llm })
@@ -43,9 +43,9 @@ describe('S15 by 项目梳理', () => {
 
   it('S15-2: 排期调整建议以建议型事件呈现，人确认后才变更并留痕', async () => {
     const p = await mkProject('客户K系统', ctx.members.lead.id)
-    const target = p.tasks.find((t) => t.title.includes('测试'))
+    const target = p.tasks.find((t) => t.title.includes('推流'))
     const evt = addEvent(ctx.db, {
-      projectId: p.id, nature: 'suggestion', eventType: 'suggestion', summary: '[梳理建议] 测试延至月底',
+      projectId: p.id, nature: 'suggestion', eventType: 'suggestion', summary: '[梳理建议] 推流报备延至月底',
       targetTaskId: target.id, targetField: 'plan_end_date', targetValue: '2026-10-31', generatedBy: 'digest',
     })
     expect(evt.status).toBe('pending')

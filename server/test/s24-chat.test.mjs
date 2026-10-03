@@ -21,7 +21,7 @@ function fakeLlm(turns, capture) {
 
 async function mkProject(app, cookie, leadId, name) {
   const res = await authed(app, cookie, 'POST', '/api/v1/projects', {
-    name, templateCode: 'software_delivery', leadMemberId: leadId, planEndDate: '2026-12-31',
+    name, templateCode: 'lianmai_365', leadMemberId: leadId, planEndDate: '2026-12-31',
   })
   return res.body
 }

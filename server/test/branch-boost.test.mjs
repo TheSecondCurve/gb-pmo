@@ -23,7 +23,7 @@ function seed(db) {
 }
 
 function mk(db, leadId, name = 'P') {
-  return createProject(db, { name, templateCode: 'software_delivery', leadMemberId: leadId }, 1)
+  return createProject(db, { name, templateCode: 'lianmai_365', leadMemberId: leadId }, 1)
 }
 
 describe('projects 分支', () => {

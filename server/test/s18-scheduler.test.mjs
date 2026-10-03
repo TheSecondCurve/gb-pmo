@@ -15,7 +15,7 @@ afterAll(() => { ctx?.db.close(); globalThis.fetch = undefined })
 async function mkProject(name, leadId) {
   const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
   const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-    name, templateCode: 'software_delivery', leadMemberId: leadId, planEndDate: '2026-12-31',
+    name, templateCode: 'lianmai_365', leadMemberId: leadId, planEndDate: '2026-12-31',
   })
   return res.body
 }
