@@ -12,7 +12,7 @@ describe('S30 项目组合页数据契约', () => {
   it('S30-1: ?status=active,closed,cancelled 返回全部三态项目且行含四个月期字段；缺省仅进行中', async () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
-    const base = { templateCode: 'custom', leadMemberId: ctx.members.lead.id }
+    const base = { templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id, tasks: [] }
 
     const a = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', { ...base, name: '在跑甲' })
     expect(a.status).toBe(201)

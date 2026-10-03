@@ -44,7 +44,7 @@ const p2p = (openId, text) => ({ messageId: nextMsgId(), chatId: 'oc_s27_p2p', c
 async function seedProject(name) {
   const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
   const p = (await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
-    name, templateCode: 'software_delivery', leadMemberId: ctx.members.lead.id, planEndDate: '2026-12-31',
+    name, templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id, planEndDate: '2026-12-31',
   })).body
   const pid = p.id
   const lead = ctx.members.lead.id

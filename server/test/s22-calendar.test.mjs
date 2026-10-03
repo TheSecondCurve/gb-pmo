@@ -22,7 +22,7 @@ async function admin() {
 
 async function mkProject(name, extra = {}) {
   const res = await authed(ctx.app, await admin(), 'POST', '/api/v1/projects', {
-    name, templateCode: 'custom', leadMemberId: ctx.members.lead.id, ...extra,
+    name, templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id, tasks: [], ...extra,
   })
   if (res.status !== 201) throw new Error(`mkProject failed: ${res.status} ${JSON.stringify(res.body)}`)
   return res.body
@@ -140,7 +140,7 @@ describe('S22 飞书项目日历', () => {
     const cookie = await admin()
     configureCalendar(ctx.db)
     const closed = await mkProject('已结项保留', { planStartDate: '2026-01-10', planEndDate: dayOff(10) })
-    closeProject(ctx.db, closed.id, { summary: '交付完成' }, 1) // custom 模板零任务，可直接结项
+    closeProject(ctx.db, closed.id, { summary: '交付完成' }, 1) // 空清单项目（tasks:[]），可直接结项
     // 定格为实际周期（绕过结束时刻，直接布置实际起止）
     ctx.db.prepare('UPDATE projects SET actual_start_date = ?, actual_end_date = ? WHERE id = ?')
       .run('2026-01-10', '2026-03-15', closed.id)
