@@ -107,6 +107,8 @@ export const api = {
   projectTypes: () => req<{ types: import('./types').ProjectType[] }>('GET', '/api/v1/project-types'),
   createProjectType: (p: Record<string, unknown>) => req<{ type: import('./types').ProjectType }>('POST', '/api/v1/admin/project-types', p),
   patchProjectType: (id: number, p: Record<string, unknown>) => req<{ type: import('./types').ProjectType }>('PATCH', `/api/v1/admin/project-types/${id}`, p),
+  // S17-13（v0.31）：删除类型——无引用守卫物理删除，有引用 400（服务端守卫为准）
+  deleteProjectType: (id: number) => req<{ ok: boolean }>('DELETE', `/api/v1/admin/project-types/${id}`),
   // S17-9（v0.18）：任务清单 AI 起草——类型编辑器/立项弹窗共用（全员；草稿不落库）
   draftProjectTasks: (body: { name: string; description?: string }) =>
     req<{ tasks: string[] }>('POST', '/api/v1/projects/draft-tasks', body),

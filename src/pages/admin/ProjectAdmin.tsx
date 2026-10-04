@@ -58,7 +58,14 @@ function TypesTab() {
                           await api.patchProjectType(t.id, { status: t.status === 'active' ? 'disabled' : 'active' })
                           toast(t.status === 'active' ? '已停用：立项不可再选，历史项目不受影响' : '已启用'); await refresh()
                         } catch (e) { toast((e as Error).message, 'bad') }
-                      }}>{t.status === 'active' ? '停用' : '启用'}</Btn>
+                      }}>{t.status === 'active' ? '停用' : '启用'}</Btn>{' '}
+                      <Btn small kind="ghost" onClick={async () => {
+                        if (!confirm(`删除类型「${t.name}（${t.code}）」？不可恢复；仍有项目引用会被拒绝。`)) return
+                        try {
+                          await api.deleteProjectType(t.id)
+                          toast('类型已删除'); await refresh()
+                        } catch (e) { toast((e as Error).message, 'bad') }
+                      }}>删除</Btn>
                     </td>
                   </tr>
                 ))}

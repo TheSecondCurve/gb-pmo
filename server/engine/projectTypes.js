@@ -81,6 +81,27 @@ export function updateProjectType(db, id, patch, by) {
   return getProjectType(db, id)
 }
 
+/** 删除类型（S17-13，v0.31）：带守卫的物理删除——仅当无任何项目引用（含已结项/已取消）时允许，
+ * 同事务级联清除内嵌任务清单并留审计，code 唯一占用随之解除（删后可重建同码）。
+ * 「删除=软删」约定在本对象的特例：无引用的类型没有需保留的历史；有引用的移出口径仍是停用。 */
+export function deleteProjectType(db, id, by) {
+  const cur = getProjectType(db, id)
+  if (!cur) throw Object.assign(new Error('项目类型不存在'), { statusCode: 404 })
+  const refs = db.prepare('SELECT COUNT(*) AS n FROM projects WHERE project_type_id = ?').get(id).n
+  if (refs > 0) {
+    throw Object.assign(
+      new Error(`该类型有 ${refs} 个项目引用（含已结项/已取消），不能删除；请改用停用（立项不可再选、历史项目不受影响）`),
+      { statusCode: 400 },
+    )
+  }
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM project_type_tasks WHERE type_id = ?').run(id)
+    db.prepare('DELETE FROM project_types WHERE id = ?').run(id)
+    audit(db, { memberId: by, action: 'projectType.delete', objectType: 'project_type', objectId: id, detail: { code: cur.code } })
+  })
+  tx()
+}
+
 // —— 立项解析（createProject 调用）——
 
 /** typeCode 为主入参；templateCode 为兼容别名（v0.18 前类型/模板同码 1:1，按同码类型解析）。 */

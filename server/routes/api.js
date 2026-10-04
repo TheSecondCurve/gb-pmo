@@ -403,6 +403,13 @@ export function registerApiRoutes(app) {
     return { type: projectTypes.updateProjectType(db, Number(req.params.id), req.body, req.member.id) }
   })
 
+  // S17-13（v0.31）：删除类型——无引用守卫物理删除（级联清任务清单），有引用 400 提示停用
+  app.delete('/api/v1/admin/project-types/:id', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    projectTypes.deleteProjectType(db, Number(req.params.id), req.member.id)
+    return { ok: true }
+  })
+
   app.get('/api/v1/admin/tokens', async (req, reply) => {
     if (!requireAdmin(req, reply)) return
     const { listTokens: lt } = await import('../engine/auth.js')
