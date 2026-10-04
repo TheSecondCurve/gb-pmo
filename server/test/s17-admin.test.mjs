@@ -258,6 +258,53 @@ describe('S17 配置台改版：角色治理与类型/模板管理', () => {
     }
   })
 
+  it('S17-13: 项目类型删除——无引用可删（级联清任务清单、留审计、编码可重建）；有引用（含已结项）400 提示停用；成员 403；不存在 404', async () => {
+    const local = await setupApp()
+    try {
+      const adminCookie = await loginCookie(local.app, 'admin', 'admin-pass-123')
+      const memberCookie = await loginCookie(local.app, 'lisi', 'pass-123456')
+
+      // 无引用类型：删除成功 → 行与内嵌任务清单级联消失、留审计、编码占用解除（可重建同码）
+      const t = await authed(local.app, adminCookie, 'POST', '/api/v1/admin/project-types', {
+        code: 'temp_type', name: '临时类型', tasks: [{ title: '任务A' }, { title: '任务B' }],
+      })
+      expect(t.status).toBe(201)
+      const del = await authed(local.app, adminCookie, 'DELETE', `/api/v1/admin/project-types/${t.body.type.id}`)
+      expect(del.status).toBe(200)
+      const list = await authed(local.app, memberCookie, 'GET', '/api/v1/project-types')
+      expect(list.body.types.find((x) => x.code === 'temp_type')).toBeUndefined()
+      expect(local.db.prepare('SELECT COUNT(*) AS n FROM project_type_tasks WHERE type_id = ?').get(t.body.type.id).n).toBe(0)
+      expect(local.db.prepare(`SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'projectType.delete' AND object_id = ?`).get(String(t.body.type.id)).n).toBe(1)
+      const recreate = await authed(local.app, adminCookie, 'POST', '/api/v1/admin/project-types', {
+        code: 'temp_type', name: '重建同码', tasks: [{ title: '新任务' }],
+      })
+      expect(recreate.status).toBe(201)
+
+      // 有引用类型：在跑项目占用 → 400 提示改用停用，行保留；已结项项目仍占用（历史项目类型外键与类型名展示依赖类型行）
+      const t2 = await authed(local.app, adminCookie, 'POST', '/api/v1/admin/project-types', {
+        code: 'ref_type', name: '被引用类型', tasks: [{ title: '任务C' }],
+      })
+      const p = await authed(local.app, adminCookie, 'POST', '/api/v1/projects', {
+        name: '引用类型的项目', typeCode: 'ref_type', leadMemberId: local.members.lead.id,
+      })
+      expect(p.status).toBe(201)
+      const blocked = await authed(local.app, adminCookie, 'DELETE', `/api/v1/admin/project-types/${t2.body.type.id}`)
+      expect(blocked.status).toBe(400)
+      expect(blocked.body.message).toContain('停用')
+      local.db.prepare(`UPDATE projects SET status = 'closed' WHERE id = ?`).run(p.body.id)
+      const blocked2 = await authed(local.app, adminCookie, 'DELETE', `/api/v1/admin/project-types/${t2.body.type.id}`)
+      expect(blocked2.status).toBe(400)
+      const still = await authed(local.app, adminCookie, 'GET', '/api/v1/project-types')
+      expect(still.body.types.find((x) => x.code === 'ref_type')).toBeTruthy()
+
+      // 权限与存在性：成员 403；未知 id 404
+      expect((await authed(local.app, memberCookie, 'DELETE', `/api/v1/admin/project-types/${t2.body.type.id}`)).status).toBe(403)
+      expect((await authed(local.app, adminCookie, 'DELETE', '/api/v1/admin/project-types/99999')).status).toBe(404)
+    } finally {
+      local.db.close()
+    }
+  })
+
   it('S17-9: 任务清单 AI 起草——类型编辑器/立项弹窗共用端点；LLM 产草稿回填不落库；未配置给指引；留审计', async () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')

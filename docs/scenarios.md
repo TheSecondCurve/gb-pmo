@@ -108,6 +108,7 @@
 | S17-10 | 当系统管理员 PAT 经 action 端点发起配置类操作（upsert_channel / delete_channel / put_setting / reset_channel_cursor）时，与 web 配置台同构生效并留审计；成员 PAT 403；游标重置回看 1~90 天（v0.9）；`draft_task_list` 任务清单起草成员 write scope 可用、草稿不落库（v0.18）；`create_template`/`draft_template_tasks` 已裁撤（未知 action 拒绝） | `server/test/s4-agent.test.mjs` |
 | S17-11 | 当系统管理员配置 LLM 时，各类别（DeepSeek / GLM 国内 Coding Plan）分别保存 apiKey/baseUrl/model 互不覆盖；切换 provider 即生效（含定时任务、无需重启），切回后原配置可用；生效类别未配 key 走降级；baseUrl/model 按类别默认补齐；测试连接按所选类别端点；未知 provider 400；存量扁平配置自动迁移不丢 key；未配置指引不绑定类别（v0.14/v0.15） | `server/test/s17-admin.test.mjs`、`server/test/misc-units.test.mjs`、`server/test/s18-scheduler.test.mjs` |
 | S17-12 | 当普通成员调用渠道写接口（新增/改绑/删除）时，仅当其为目标（删除时=当前绑定）项目的牵头人且渠道为专题渠道时放行，否则 403；通用群维护仅系统管理员；Agent action 通道维持仅系统管理员 PAT（S17-10）；项目详情页「绑定渠道」入口按同权限显隐（v0.24） | `server/test/s17-admin.test.mjs` |
+| S17-13 | 当系统管理员删除一个项目类型时，仅当该类型无任何项目引用（含已结项/已取消）时允许物理删除（同事务级联清除内嵌任务清单、留审计、编码占用随之解除，删后可重建同码类型）；类型仍被任何项目引用时应 400 并提示改用停用；普通成员 403；类型不存在 404（v0.31） | `server/test/s17-admin.test.mjs` |
 
 ## S18（P0）— 管理员 — 大脑调度与手动对齐（v0.7）
 
