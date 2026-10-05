@@ -4,9 +4,10 @@ export interface Member {
   team?: string | null; isKeyPerson: boolean; maxParallelProjects: number; role: 'admin' | 'member'
   status: 'active' | 'offboarded'
 }
+export interface TypeTaskRef { title: string; url: string; note?: string | null }
 export interface ProjectType {
   id: number; code: string; name: string; description?: string | null
-  tasks: { title: string }[] // v0.18：任务清单内嵌于类型（立项时预填，可覆盖）
+  tasks: { title: string; refs?: TypeTaskRef[] }[] // v0.18 任务清单内嵌于类型（立项时预填，可覆盖）；v0.33 每任务可挂参考链接（S33，立项时随标题拷贝）
   status: 'active' | 'disabled'; projectCount: number; openProjectCount: number
 }
 export interface ProjectRow {

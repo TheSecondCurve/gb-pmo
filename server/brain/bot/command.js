@@ -340,8 +340,8 @@ ${schemaDigest(db)}
 ${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅飞书群聊）' : '{"action":"write","kind":"bind_channel","payload":{"projectId":1,"chatName":"群名"}}   仅群聊可用，仅项目牵头人/管理员'}
 {"action":"write","kind":"propose","payload":{"kind":"cancel_project","projectId":1,"reason":"取消原因（必填）"}}  取消项目提议（原因必填，S29）
 {"action":"write","kind":"propose","payload":{"kind":"close_project","projectId":1,"summary":"结项总结（必填）"}}   结项提议（总结必填，S29；确认时按 S8 校验：任务须全部完成）
-{"action":"write","kind":"propose","payload":{"kind":"create_project","name":"...","typeCode":"...","leadMemberId":1,"planStartDate?","planEndDate?","tasks":["标题",...]?,"autoSchedule":true?}}  立项提议（tasks 缺省按类型内嵌清单实例化；autoSchedule=true 按「计划开始（缺省今天）→交付日期」倒排每条任务计划起止，须有 planEndDate）
-{"action":"write","kind":"propose","payload":{"kind":"create_project_type","code":"...","name":"...","tasks":["标题",...]}}  新建项目类型提议（任务清单内嵌于类型）
+{"action":"write","kind":"propose","payload":{"kind":"create_project","name":"...","typeCode":"...","leadMemberId":1,"planStartDate?","planEndDate?","tasks":["标题"|{"title":"...","refs":[{"title":"SOP名","url":"https://...","note?":"备注"}]}...]?,"autoSchedule":true?}}  立项提议（tasks 缺省按类型内嵌清单实例化、含类型预设的逐步骤参考资料；纯标题覆盖=不带参考资料，refs 显式给出才带；autoSchedule=true 按「计划开始（缺省今天）→交付日期」倒排每条任务计划起止，须有 planEndDate）
+{"action":"write","kind":"propose","payload":{"kind":"create_project_type","code":"...","name":"...","tasks":["标题"|{"title":"...","refs":[{"title":"SOP名","url":"https://..."}...]}...]}}  新建项目类型提议（任务清单内嵌于类型；有标准 SOP/知识库文档的步骤可挂 refs，每步 ≤10 条，立项时随任务预填给执行人，S33）
 {"action":"write","kind":"trigger","payload":{"name":"trigger_extraction|generate_project_digest|generate_person_digest|push_report","params":{}}}
 {"action":"reply","text":"最终答复"}            查够/完成后回答；需要向用户澄清时也用它提问
 
