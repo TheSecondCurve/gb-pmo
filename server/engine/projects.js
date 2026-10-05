@@ -3,7 +3,7 @@ import { today, dayDiff, addDays } from '../db/time.js'
 import { assertValue } from './enums.js'
 import { addEvent } from './events.js'
 import { audit } from './auth.js'
-import { resolveTypeForCreate, typeTaskTitles, normalizeTaskTitles } from './projectTypes.js'
+import { resolveTypeForCreate, typeTaskItems, normalizeTypeTasks } from './projectTypes.js'
 
 const OPEN_STATUSES = ['active'] // S29（v0.28）三态：进行中→已结项/已取消
 const TERMINAL_STATUSES = ['closed', 'cancelled']
@@ -45,8 +45,9 @@ export function backScheduleDates({ planStartDate, planEndDate, count }) {
 
 /**
  * S1 立项（v0.18；S29 修订）：选项目类型 → 按其内嵌任务清单实例化（source=template）；
- * 载荷显式给 tasks（标题数组）→ 覆盖实例化（source=manual，允许空清单，S1-6）；
- * autoSchedule=true → 按 [计划开始（缺省今天）→ 交付日期] 均分倒排任务计划起止（S1-7）。
+ * 载荷显式给 tasks（标题数组或 {title, refs} 数组，S33）→ 覆盖实例化（source=manual，允许空清单，S1-6；
+ * 纯标题=不带模板参考，显式 refs 才带）；autoSchedule=true → 按 [计划开始（缺省今天）→ 交付日期]
+ * 均分倒排任务计划起止（S1-7）。模板任务的参考随标题同事务拷贝进 task_refs（创建人=立项人，S23 全套接管）。
  * templateCode 为 typeCode 的兼容别名（同码解析）。牵头人必填、任务默认责任人=牵头人（D3）。
  * S29：立项即「进行中」，启动日=立项日自动落（不再有待启动/已暂停）。
  */
@@ -59,9 +60,10 @@ export function createProject(db, input, by) {
   const lead = db.prepare(`SELECT id FROM members WHERE id = ? AND status = 'active'`).get(leadMemberId)
   if (!lead) throw Object.assign(new Error('牵头人不存在或已离职'), { statusCode: 400 })
   const type = resolveTypeForCreate(db, { typeCode, templateCode })
-  const customTitles = normalizeTaskTitles(input.tasks)
-  const titles = customTitles ?? typeTaskTitles(db, type.id)
-  const source = customTitles !== undefined ? 'manual' : 'template'
+  const customItems = normalizeTypeTasks(input.tasks)
+  const items = customItems ?? typeTaskItems(db, type.id)
+  const source = customItems !== undefined ? 'manual' : 'template'
+  const titles = items.map((it) => it.title)
   const schedule = autoSchedule ? backScheduleDates({ planStartDate, planEndDate, count: titles.length }) : null
 
   const now = Date.now()
@@ -73,13 +75,16 @@ export function createProject(db, input, by) {
     ).run(name, type.code, type.id, priority, leadMemberId, clientName || null,
       planStartDate || null, planEndDate || null, today(), by ?? null, now, now)
     const projectId = Number(info.lastInsertRowid)
-
-    titles.forEach((title, i) => {
+    const refCount = items.reduce((s, it) => s + it.refs.length, 0)
+    const refStmt = db.prepare('INSERT INTO task_refs (task_id, title, url, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    items.forEach((item, i) => {
       const win = schedule?.[i]
-      db.prepare(
+      const taskInfo = db.prepare(
         `INSERT INTO tasks (project_id, title, responsible_member_id, status, plan_start_date, plan_end_date, source, created_at, updated_at)
          VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?)`
-      ).run(projectId, title, leadMemberId, win ? win.planStartDate : (planStartDate || today()), win ? win.planEndDate : null, source, now, now)
+      ).run(projectId, item.title, leadMemberId, win ? win.planStartDate : (planStartDate || today()), win ? win.planEndDate : null, source, now, now)
+      // S33：模板/自定义任务的参考随标题拷贝进 task_refs（创建人=立项人；落表即被 S23 全套能力接管）
+      item.refs.forEach((ref) => refStmt.run(Number(taskInfo.lastInsertRowid), ref.title, ref.url, ref.note, by ?? null, now))
     })
     for (const m of milestones) {
       db.prepare('INSERT INTO milestones (project_id, name, plan_date, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
@@ -87,10 +92,10 @@ export function createProject(db, input, by) {
     }
     addEvent(db, {
       projectId, eventType: 'decision', nature: 'record', sourcePlatform: 'web', generatedBy: 'web',
-      summary: `项目立项：类型「${type.name}」${customTitles !== undefined ? `· 自定义任务 ${titles.length} 项` : `· 预填清单 ${titles.length} 项`}，牵头人 #${leadMemberId}${planEndDate ? `，计划 ${planStartDate || ''}~${planEndDate}` : ''}${schedule ? '，任务按交付日期倒排' : ''}`,
+      summary: `项目立项：类型「${type.name}」${customItems !== undefined ? `· 自定义任务 ${titles.length} 项` : `· 预填清单 ${titles.length} 项`}，牵头人 #${leadMemberId}${planEndDate ? `，计划 ${planStartDate || ''}~${planEndDate}` : ''}${schedule ? '，任务按交付日期倒排' : ''}${refCount ? `，预填参考资料 ${refCount} 条` : ''}`,
       speakerMemberId: by ?? null,
     })
-    audit(db, { memberId: by, action: 'project.create', objectType: 'project', objectId: projectId, detail: { typeCode: type.code, taskSource: source, tasks: titles.length, autoSchedule: Boolean(autoSchedule) } })
+    audit(db, { memberId: by, action: 'project.create', objectType: 'project', objectId: projectId, detail: { typeCode: type.code, taskSource: source, tasks: titles.length, taskRefs: refCount, autoSchedule: Boolean(autoSchedule) } })
     return projectId
   })
   const id = created()

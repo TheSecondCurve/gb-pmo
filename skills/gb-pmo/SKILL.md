@@ -360,6 +360,17 @@ client.sh action generate_person_digest '{}'
 | message_id | TEXT | 触发清空的那条消息（审计溯源） |
 | cleared_at | INTEGER |  |
 
+### project_type_task_refs
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| type_task_id | INTEGER |  |
+| title | TEXT | 名称（如「预热文案模板」「设备预检清单」） |
+| url | TEXT | 链接（http/https；飞书文档/wiki 均可） |
+| note | TEXT | 备注（可选：适用时机/范围） |
+| sort_order | INTEGER |  |
+
 ## 枚举（值 ↔ 中文 label，双向对齐）
 
 - **memberRole**: admin=系统管理员、member=成员

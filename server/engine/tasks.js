@@ -2,6 +2,7 @@ import { camelizeRow, camelizeRows } from '../db/index.mjs'
 import { today } from '../db/time.js'
 import { assertValue } from './enums.js'
 import { getProject } from './projects.js'
+import { HTTP_URL } from './projectTypes.js'
 import { addEvent } from './events.js'
 import { audit } from './auth.js'
 
@@ -151,9 +152,8 @@ export function listTaskRecords(db, taskId) {
   )
 }
 
-// —— 任务参考资料（S23，v0.13）：SOP/知识库链接，手工维护；推送（日报/预警/个人梳理）附带给执行人 —— 
-
-const HTTP_URL = /^https?:\/\//i
+// —— 任务参考资料（S23，v0.13）：SOP/知识库链接，手工维护；推送（日报/预警/个人梳理）附带给执行人 ——
+// url 校验与类型模板侧同规则（S33）：HTTP_URL 单一真相源在 projectTypes.js（最底层，无环）。
 
 export function listTaskRefs(db, taskId) {
   return camelizeRows(

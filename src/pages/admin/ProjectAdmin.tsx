@@ -33,7 +33,7 @@ function TypesTab() {
   return (
     <div className="space-y-4">
       <Card
-        title={`项目类型（${types.length}）：任务清单内嵌，立项时预填（可增删改，v0.18）`}
+        title={`项目类型（${types.length}）：任务清单内嵌，立项时预填（可增删改，v0.18；任务可逐步骤挂参考资料，v0.33）`}
         actions={<Btn small onClick={() => setEditing('new')}>+ 新建类型</Btn>}
       >
         {types.length === 0 ? <Empty hint="暂无项目类型" /> : (
@@ -80,7 +80,11 @@ function TypesTab() {
   )
 }
 
-/** 类型编辑器（v0.18）：任务清单内嵌，每行一条任务标题；给出即整体替换（S17-8） */
+/** 类型编辑器（v0.18；v0.33 参考资料扩展）：任务标题仍每行一条批量维护（textarea / AI 起草习惯不变），
+ * 「逐步骤参考资料」按顺序号给任务挂 SOP/知识库链接（名称+http(s) 链接+备注，每步 ≤10 条），
+ * 参考按顺序号跟随标题行；保存时任务与参考随 tasks 整体替换（S17-8/S33）。 */
+interface DraftRef { title: string; url: string; note: string }
+
 function TypeEditor({ type, onClose, onDone }: { type: ProjectType | null; onClose: () => void; onDone: () => Promise<void> }) {
   const { toast } = useStore()
   const [form, setForm] = useState(() => type
@@ -89,16 +93,36 @@ function TypeEditor({ type, onClose, onDone }: { type: ProjectType | null; onClo
         tasksText: type.tasks.map((t) => t.title).join('\n'),
       }
     : { code: '', name: '', description: '', tasksText: '' })
+  // 参考按「顺序号-1」挂任务（与 textarea 解析后的非空行一一对应；行数变少时超出的参考保存时丢弃）
+  const [refs, setRefs] = useState<DraftRef[][]>(() =>
+    type ? type.tasks.map((t) => (t.refs ?? []).map((r) => ({ title: r.title, url: r.url, note: r.note || '' }))) : [])
   const [err, setErr] = useState('')
   const [drafting, setDrafting] = useState(false)
 
-  const parse = () => {
-    const tasks = form.tasksText
-      .split('\n')
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((title) => ({ title }))
-    return { tasks }
+  const titles = form.tasksText
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+  const orphanRefs = refs.slice(titles.length).reduce((s, r) => s + r.filter((x) => x.title.trim() || x.url.trim()).length, 0)
+
+  const setLineRefs = (i: number, next: DraftRef[]) => {
+    setRefs((prev) => { const cp = [...prev]; cp[i] = next; return cp })
+  }
+
+  const parse = () => ({
+    tasks: titles.map((title, i) => ({ title, refs: refs[i] ?? [] })),
+  })
+
+  /** 客户端轻校验：参考行名称/链接须成对填（半填行提示，空行静默丢弃；完整校验在服务端 400 兜底）。 */
+  const validateRefs = (): string => {
+    for (let i = 0; i < refs.length; i++) {
+      for (const r of refs[i] ?? []) {
+        const half = !r.title.trim() !== !r.url.trim()
+        if (half) return `第 ${i + 1} 步有参考资料缺名称或链接（成对填写；不需要的行点「删」）`
+        if (r.url.trim() && !/^https?:\/\//i.test(r.url.trim())) return `第 ${i + 1} 步的参考链接须为 http(s)`
+      }
+    }
+    return ''
   }
 
   return (
@@ -119,16 +143,52 @@ function TypeEditor({ type, onClose, onDone }: { type: ProjectType | null; onClo
           try {
             const out = await api.draftProjectTasks({ name: form.name, description: form.description })
             setForm((f) => ({ ...f, tasksText: out.tasks.join('\n') }))
-            toast(`AI 起草 ${out.tasks.length} 条任务，可继续编辑后保存（草稿未落库）`)
+            toast(`AI 起草 ${out.tasks.length} 条任务，可继续编辑后保存（草稿未落库；参考资料按顺序号保留，请核对）`)
           } catch (e) { setErr((e as Error).message) } finally { setDrafting(false) }
         }}>{drafting ? 'AI 起草中…' : '✨ AI 起草任务清单'}</Btn>
         <span className="text-[11px] text-[var(--color-ink-soft)]">按类型名+说明生成草稿（S17-9）；需已在配置台配置 LLM（外部依赖 → LLM，任一类别均可）</span>
       </div>
       {err && <div className="mb-2 rounded bg-red-50 px-2 py-1 text-[12px] text-[var(--color-bad)]">{err}</div>}
-      <div className="text-[11px] text-[var(--color-ink-soft)]">编辑保存 = 任务清单整体替换；已立项项目是立项时的实例拷贝，不受影响。</div>
+
+      <Field label="逐步骤参考资料（SOP/知识库/表单链接；按上行号对应任务，立项时随任务预填给执行人，每步 ≤10 条）">
+        {titles.length === 0 ? (
+          <div className="text-[12px] text-[var(--color-ink-soft)]">先在上方填任务标题，这里会按行出现挂参考的入口。</div>
+        ) : (
+          <ul className="space-y-1.5 rounded-md border border-[var(--color-line)] p-2.5 text-[12px]">
+            {titles.map((title, i) => (
+              <li key={i}>
+                <div className="flex items-center gap-2">
+                  <span className="num w-5 shrink-0 text-right text-[var(--color-ink-soft)]">{i + 1}</span>
+                  <span className="min-w-0 flex-1 truncate" title={title}>{title}</span>
+                  {(refs[i]?.length ?? 0) > 0 && <span className="shrink-0 text-[var(--color-ink-soft)]">参考 {refs[i].length}</span>}
+                  <Btn small kind="ghost" disabled={(refs[i]?.length ?? 0) >= 10} onClick={() => setLineRefs(i, [...(refs[i] ?? []), { title: '', url: '', note: '' }])}>+ 参考</Btn>
+                </div>
+                {(refs[i] ?? []).map((r, j) => (
+                  <div key={j} className="mt-1 flex flex-wrap items-center gap-1 pl-7">
+                    <input className={inputCls + ' !w-36'} placeholder="参考名称 *" value={r.title}
+                      onChange={(e) => setLineRefs(i, refs[i].map((x, k) => (k === j ? { ...x, title: e.target.value } : x)))} />
+                    <input className={inputCls + ' min-w-[12rem] flex-1 font-mono !text-[12px]'} placeholder="链接 https://… *" value={r.url}
+                      onChange={(e) => setLineRefs(i, refs[i].map((x, k) => (k === j ? { ...x, url: e.target.value } : x)))} />
+                    <input className={inputCls + ' !w-36'} placeholder="备注（可选）" value={r.note}
+                      onChange={(e) => setLineRefs(i, refs[i].map((x, k) => (k === j ? { ...x, note: e.target.value } : x)))} />
+                    <Btn small kind="ghost" onClick={() => setLineRefs(i, refs[i].filter((_, k) => k !== j))}>删</Btn>
+                  </div>
+                ))}
+              </li>
+            ))}
+          </ul>
+        )}
+        {orphanRefs > 0 && (
+          <div className="mt-1 text-[11px] text-[var(--color-warn,var(--color-bad))]">任务行数已少于挂参考的行数：第 {titles.length + 1} 步之后的 {orphanRefs} 条参考将在保存时丢弃。</div>
+        )}
+      </Field>
+
+      <div className="text-[11px] text-[var(--color-ink-soft)]">编辑保存 = 任务清单与参考资料整体替换；已立项项目是立项时的实例拷贝，不受影响。</div>
       <div className="mt-3 flex justify-end gap-2">
         <Btn onClick={onClose}>取消</Btn>
         <Btn kind="primary" disabled={!form.code || !form.name} onClick={async () => {
+          const refErr = validateRefs()
+          if (refErr) { setErr(refErr); return }
           try {
             const parsed = parse()
             if (type) await api.patchProjectType(type.id, { name: form.name, description: form.description, ...parsed })

@@ -11,6 +11,7 @@ import { addEvent } from '../../engine/events.js'
 import { assertValue, label } from '../../engine/enums.js'
 import { pushSuggestion } from '../extract.js'
 import { createProposal, PROPOSAL_KINDS } from '../../engine/proposals.js'
+import { normalizeTypeTasks } from '../../engine/projectTypes.js'
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 // 建议字段 → 事件类型（与 IM 抽取器同口径，confirmEvent.applyTaskPatch 支持的字段子集）
@@ -130,6 +131,16 @@ function writeBindChannel(db, payload, ctx) {
 // —— S25（v0.17）项目级/配置级提议：软校验（真实 id + 合法枚举 + 摘要化），生效见 engine/proposals.js ——
 
 const normTasks = (tasks) => (Array.isArray(tasks) ? tasks : []).map((t) => (typeof t === 'string' ? { title: t } : t)).filter((t) => t && t.title)
+
+/** S33：提议载荷里的任务参考提前校验（复用引擎归一；确认时引擎兜底再校验一次）。 */
+const checkTaskRefs = (tasks) => {
+  try {
+    normalizeTypeTasks(tasks.map((t) => (typeof t === 'string' ? { title: t } : t)))
+    return ''
+  } catch (e) {
+    return e.message
+  }
+}
 const DATE_OK = /^\d{4}-\d{2}-\d{2}$/
 
 function writePropose(db, payload, ctx) {
@@ -180,6 +191,8 @@ function softValidateProposal(db, kind, p) {
     const tasks = normTasks(p.tasks)
     if (tasks.some((t) => !String(t.title).trim())) return { error: 'tasks 内不可有空白标题' }
     if (tasks.length > 30) return { error: 'tasks 至多 30 条' }
+    const refErr = checkTaskRefs(tasks) // S33：带 refs 的任务项提前校验（引擎在确认时兜底）
+    if (refErr) return { error: refErr }
     const autoSchedule = p.autoSchedule === true
     if (autoSchedule && !p.planEndDate) return { error: 'autoSchedule 倒排须同时给 planEndDate（交付日期，YYYY-MM-DD）' }
     return {
@@ -199,9 +212,11 @@ function softValidateProposal(db, kind, p) {
     const tasks = normTasks(p.tasks)
     if (tasks.some((t) => !String(t.title).trim())) return { error: 'tasks 内不可有空白标题' }
     if (tasks.length > 30) return { error: 'tasks 至多 30 条' }
+    const refErr = checkTaskRefs(tasks) // S33：类型模板步骤可挂参考链接（提议提前校验，引擎确认时兜底）
+    if (refErr) return { error: refErr }
     return {
       payload: { code: String(p.code), name: String(p.name), ...(p.description ? { description: String(p.description) } : {}), tasks },
-      summary: `新建项目类型「${p.name}」（${p.code}，内嵌任务 ${tasks.length} 项）`,
+      summary: `新建项目类型「${p.name}」（${p.code}，内嵌任务 ${tasks.length} 项${tasks.reduce((s, t) => s + ((t.refs ?? []).length), 0) ? `，参考资料 ${tasks.reduce((s, t) => s + ((t.refs ?? []).length), 0)} 条` : ''}）`,
     }
   }
   return { error: `未知提议类型 ${kind}` }

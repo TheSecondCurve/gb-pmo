@@ -504,7 +504,7 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
         <Field label="计划开始"><input type="date" className={inputCls} value={form.planStartDate} onChange={(e) => set('planStartDate', e.target.value)} /></Field>
         <Field label="交付日期（选填：填了派生剩余/超期天数并进项目日历）"><input type="date" className={inputCls} value={form.planEndDate} onChange={(e) => set('planEndDate', e.target.value)} /></Field>
       </div>
-      <Field label={`任务清单（每行一条；选类型自动预填${tasksDirty ? '，已自定义' : ''}；留空=空项目）`}>
+      <Field label={`任务清单（每行一条；选类型自动预填${tasksDirty ? '，已自定义——不携带类型预设的参考资料' : '，含类型逐步骤参考资料（立项后任务行可见「参考 N」）'}；留空=空项目）`}>
         <textarea className={inputCls} rows={8} value={tasksText} onChange={(e) => { setTasksText(e.target.value); setTasksDirty(true) }} placeholder={'需求确认与范围冻结\n技术方案与排期\n开发联调\n结项复盘'} />
       </Field>
       <div className="mb-2 flex flex-wrap items-center gap-2">
