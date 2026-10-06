@@ -9,25 +9,28 @@ import { getLlm } from '../llm.js'
 import { updateMember } from '../../engine/members.js'
 import { bjDayStartMs } from '../../db/time.js'
 import { morningReport } from '../../engine/morning.js'
+import { tasksInventory } from '../../engine/tasks.js'
 import { runAgentLoop } from './agent.js'
-import { runQueryTool, runMetricTool, runWriteTool, runBriefTool } from './tools.js'
+import { runQueryTool, runMetricTool, runWriteTool, runBriefTool, runRecentChatTool } from './tools.js'
 
 // —— 帮助文案（按 surface；/bind 仅飞书私聊，web 清单不出现） ——
 
 const HELP_IM = `我是项目大脑机器人，可以直接用自然语言使唤我：
 · 查询/汇总：「我的任务」「A 项目现在怎么样」「逾期有哪些」「总结一下 A 项目」
+· 任务盘点：/tasks（别名 /任务、/盘点）——项目群=本项目任务清单（未分配责任人置顶），私聊=全部在跑项目的未分配任务
 · 登记：「登记进展：接口联调完成」「登记风险：等客户环境」（记录型，直接生效）
-· 变更提议：「把任务 #12 标为完成」「任务 #12 推迟到 2026-10-05」（出确认卡，责任人/牵头人确认后生效）
+· 变更提议：「把任务 #12 标为完成」「任务 #12 推迟到 2026-10-05」「任务 #12 转给小王」（出确认卡，任意已绑定成员点按生效）
 · 群登记：管理员或牵头人在群里 @我 说「这是 XX 项目的群」
 · 记忆：我记得本会话最近的对话（约 2 小时内、群聊含他人发言），发 /new 立刻清空重新开始
-· 命令：/bind <绑定码>（绑定飞书账号，仅私聊）、/new（开新话题，清空上下文）、/morning（今日晨报：项目群=本项目，私聊=全部在跑项目）、/help`
+· 命令：/bind <绑定码>（绑定飞书账号，仅私聊）、/new（开新话题，清空上下文）、/morning（今日晨报：项目群=本项目，私聊=全部在跑项目）、/tasks（任务盘点）、/help`
 
 const HELP_WEB = `我是项目大脑 AI 助手，直接用自然语言使唤我：
 · 查询/汇总：「我的任务」「A 项目现在怎么样」「逾期有哪些」「总结一下 A 项目」
+· 任务盘点：/tasks（别名 /任务、/盘点）——全部在跑项目的未分配责任人任务，按项目分组
 · 登记：「登记进展：接口联调完成」「登记风险：等客户环境」（记录型，直接生效）
-· 变更提议：「把任务 #12 标为完成」「任务 #12 推迟到 2026-10-05」（生成待确认事件，页面上点「生效/驳回」后才变更）
+· 变更提议：「把任务 #12 标为完成」「任务 #12 推迟到 2026-10-05」（生成待确认事件，页面上点「生效/驳回」后变更）
 · 记忆：我记得本会话最近的对话，发 /new 立刻清空重新开始（也可左侧新建会话）
-· 命令：/new（别名 /clear，开新话题，清空上下文）、/morning（今日晨报：全部在跑项目）、/help`
+· 命令：/new（别名 /clear，开新话题，清空上下文）、/morning（今日晨报：全部在跑项目）、/tasks（任务盘点）、/help`
 
 export function helpText(surface) {
   return surface === 'web' ? HELP_WEB : HELP_IM
@@ -106,10 +109,24 @@ async function slashMorning(db, env, reply) {
   }
 }
 
+// S20-17（v0.34）任务盘点：定域与晨报同构——专题群=本群项目全部未完任务（未分配置顶），其余=全部在跑项目的未分配任务
+async function slashTasks(db, env, reply) {
+  if (!env.member) {
+    return reply('还未识别你的飞书账号。请先在系统 web 端登录生成飞书绑定码（10 分钟内有效），再私聊我发送 /bind <绑定码> 完成绑定。', { intent: 'tasks', result: 'guidance' })
+  }
+  try {
+    const r = tasksInventory(db, { projectId: morningScopeProjectId(db, env) })
+    return reply(r.text, { memberId: env.member.id, intent: 'tasks', result: 'replied' })
+  } catch (e) {
+    return reply(`任务盘点生成失败：${e.message}`, { memberId: env.member.id, intent: 'tasks', result: 'error' })
+  }
+}
+
 const SLASH_COMMANDS = {
   '/bind': { surfaces: ['im'], run: slashBind },
   '/new': { surfaces: ['im', 'web'], aliases: ['/clear'], run: slashNew },
   '/morning': { surfaces: ['im', 'web'], aliases: ['/晨报', '/today'], run: slashMorning },
+  '/tasks': { surfaces: ['im', 'web'], aliases: ['/任务', '/盘点'], run: slashTasks },
   '/help': {
     surfaces: ['im', 'web'],
     run: (db, env, reply) => reply(helpText(env.surface), { memberId: env.member?.id, intent: 'help', result: 'replied' }),
@@ -151,7 +168,7 @@ const noLlmText = (surface) => surface === 'web'
 
 // —— 工具执行器（读自由写收敛；两入口共用，此前在两个编排层逐字重复） ——
 
-export function makeExecTool(db, env, { llm, sqlLog = [] } = {}) {
+export function makeExecTool(db, env, { llm, sqlLog = [], fetchChat } = {}) {
   return async (parsed) => {
     if (parsed.action === 'query') {
       try {
@@ -167,6 +184,13 @@ export function makeExecTool(db, env, { llm, sqlLog = [] } = {}) {
         return JSON.stringify(runMetricTool(db, parsed.id, parsed.params)).slice(0, 4000)
       } catch (e) {
         return `指标失败：${e.message}`
+      }
+    }
+    if (parsed.action === 'recent_chat') {
+      try {
+        return await runRecentChatTool(db, env, { fetchChat, limit: parsed.limit })
+      } catch (e) {
+        return `recent_chat 失败：${e.message}（可改用 query 查已抽取事件，或让用户直接复述讨论结论）`
       }
     }
     if (parsed.action === 'brief') {
@@ -198,7 +222,8 @@ export function makeExecTool(db, env, { llm, sqlLog = [] } = {}) {
  * @param {object} env   会话信封 { surface:'im'|'web', platform, chatId, chatType, member, channel?,
  *                       text, ts, messageId?, senderOpenId?, evt?(原始 IM 事件，写工具取快照/引用) }
  * @param {object} opts  { llm(测试注入), history(适配器装配的多轮上下文), reply(text,patch)→Promise,
- *                       systemPrompt(字符串), detailExtra(适配器附加审计细节，如 historyDegraded) }
+ *                       systemPrompt(字符串), detailExtra(适配器附加审计细节，如 historyDegraded),
+ *                       fetchChat?(S20-18 recent_chat 的消息拉取注入，缺省用平台连接器) }
  * @returns 文本出口（斜杠/限额/降级/答复/写回执）经 opts.reply 投递并透传其返回值；
  *          卡片出口返回 { type:'card', writeResult, llmCalls, detail }，由适配器渲染（飞书发卡、web 页面按钮）。
  */
@@ -224,7 +249,7 @@ export async function runConversation(db, env, opts = {}) {
     systemPrompt: opts.systemPrompt,
     userText: env.text,
     history: opts.history ?? [],
-    execTool: makeExecTool(db, env, { llm, sqlLog }),
+    execTool: makeExecTool(db, env, { llm, sqlLog, fetchChat: opts.fetchChat }),
   })
   const detail = { turns: out.turns, queries: out.queries, sql: sqlLog, history: (opts.history ?? []).length, ...(opts.detailExtra ?? {}) }
 
