@@ -1,6 +1,6 @@
 import { camelizeRow, camelizeRows } from '../db/index.mjs'
 import { today } from '../db/time.js'
-import { assertValue } from './enums.js'
+import { assertValue, label } from './enums.js'
 import { getProject } from './projects.js'
 import { HTTP_URL } from './projectTypes.js'
 import { addEvent } from './events.js'
@@ -41,6 +41,62 @@ export function listUnassigned(db) {
        WHERE t.responsible_member_id IS NULL AND t.plan_start_date IS NOT NULL AND t.status IN ('todo','doing') ORDER BY t.plan_start_date`
     ).all()
   )
+}
+
+const INV_MAX_PER_PROJECT = 40 // 盘点单项目列出的任务条数上限（模板任务 ≤30，防御性截断）
+
+const invLine = (t) => `· #${t.id} ${t.title}（${label('taskStatus', t.status)}${t.plan_end_date ? `，截止 ${t.plan_end_date}` : ''}${t.responsible_name ? `，${t.responsible_name}` : ''}）`
+
+/** S20-17 任务盘点（v0.34，/tasks 斜杠命令）：确定性组装，零 LLM。
+ *  projectId 给定 → 该项目全部未完任务（未分配责任人段置顶 + 计数）；
+ *  缺省 → 全部在跑项目的未分配责任人任务（按项目分组，全有主项目明确说明）。
+ *  口径：未完 = status != 'done' 且 responsible_member_id IS NULL——宽于 S2-1 listUnassigned 的
+ *  「已设开始日」兜底告警口径（那是异常检测，这是会议盘点视图，两者语义并存）。 */
+export function tasksInventory(db, { projectId } = {}) {
+  if (projectId) {
+    const project = db.prepare('SELECT id, name FROM projects WHERE id = ?').get(projectId)
+    if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
+    const rows = db.prepare(
+      `SELECT t.id, t.title, t.status, t.plan_end_date, m.name AS responsible_name
+       FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
+       WHERE t.project_id = ? AND t.status != 'done' ORDER BY t.id`
+    ).all(projectId)
+    const unassigned = rows.filter((t) => !t.responsible_name)
+    const owned = rows.filter((t) => t.responsible_name)
+    const lines = [`项目「${project.name}」任务盘点：未完 ${rows.length} 条，未分配责任人 ${unassigned.length} 条`, '']
+    if (unassigned.length) {
+      lines.push(`⚠ 未分配责任人（${unassigned.length}）：`)
+      lines.push(...unassigned.slice(0, INV_MAX_PER_PROJECT).map(invLine))
+      if (unassigned.length > INV_MAX_PER_PROJECT) lines.push(`（其余 ${unassigned.length - INV_MAX_PER_PROJECT} 条略）`)
+      lines.push('')
+    }
+    if (owned.length) {
+      lines.push(`已分配（${owned.length}）：`)
+      lines.push(...owned.slice(0, INV_MAX_PER_PROJECT).map(invLine))
+      if (owned.length > INV_MAX_PER_PROJECT) lines.push(`（其余 ${owned.length - INV_MAX_PER_PROJECT} 条略）`)
+    }
+    if (!unassigned.length && !owned.length) lines.push('（项目没有未完成任务）')
+    return { text: lines.join('\n'), unassigned: unassigned.length, total: rows.length }
+  }
+  const projects = db.prepare(`SELECT id, name FROM projects WHERE status = 'active' ORDER BY id`).all()
+  const byProject = new Map(projects.map((p) => [p.id, { name: p.name, rows: [] }]))
+  const rows = db.prepare(
+    `SELECT t.id, t.title, t.status, t.plan_end_date, t.project_id
+     FROM tasks t JOIN projects p ON p.id = t.project_id
+     WHERE t.responsible_member_id IS NULL AND t.status != 'done' AND p.status = 'active' ORDER BY t.project_id, t.id`
+  ).all()
+  for (const t of rows) byProject.get(t.project_id)?.rows.push(t)
+  const total = rows.length
+  const lines = [`在跑项目未分配责任人任务盘点：${projects.length} 个在跑项目，未分配 ${total} 条`, '']
+  for (const { name, rows: list } of byProject.values()) {
+    if (!list.length) { lines.push(`【${name}】均已分配`); continue }
+    lines.push(`【${name}】${list.length} 条：`)
+    lines.push(...list.slice(0, INV_MAX_PER_PROJECT).map(invLine))
+    if (list.length > INV_MAX_PER_PROJECT) lines.push(`（其余 ${list.length - INV_MAX_PER_PROJECT} 条略）`)
+    lines.push('')
+  }
+  if (!total) lines.push('在跑项目任务均已分配责任人。')
+  return { text: lines.join('\n').trimEnd(), unassigned: total, totalProjects: projects.length }
 }
 
 export function createTask(db, input, by) {
