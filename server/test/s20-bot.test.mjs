@@ -124,7 +124,7 @@ describe('S20 机器人指令通道 — 门禁与查询', () => {
 })
 
 describe('S20 机器人指令通道 — 写路径（确认卡）', () => {
-  it('S20-2: 口述变更 → pending 建议 + 确认卡；责任人确认生效留痕；无权者/伪造签名被拒', async () => {
+  it('S20-2: 口述变更 → pending 建议 + 确认卡；任意绑定成员确认生效留痕；未绑定/伪造签名被拒（v0.34）', async () => {
     const p = await mkProject('客户B系统', ctx.members.lead.id)
     const taskId = ctx.db.prepare('SELECT id FROM tasks WHERE project_id = ? ORDER BY id').get(p.id).id
     const { llm } = scriptedLlm(
@@ -146,23 +146,23 @@ describe('S20 机器人指令通道 — 写路径（确认卡）', () => {
     const confirmBtn = card.elements.find((e) => e.tag === 'action').actions[0]
     expect(confirmBtn.value.a).toBe('confirm')
 
-    // 无权者（李四：非责任人/非牵头人/非管理员）点确认 → 拒，事件仍 pending
-    const denied = await handleCardAction(ctx.db, { operatorOpenId: 'fs_li', value: confirmBtn.value, chatId: 'oc_p2p', messageId: nextMsgId() }, { send: recorder().send, secret: SECRET })
-    expect(denied.result).toBe('refused_permission')
+    // 未绑定操作者点确认 → 拒，事件仍 pending（身份门禁保留）
+    const unbound = await handleCardAction(ctx.db, { operatorOpenId: 'fs_nobody', value: confirmBtn.value, chatId: 'oc_p2p', messageId: nextMsgId() }, { send: recorder().send, secret: SECRET })
+    expect(unbound.result).toBe('refused_permission')
     expect(ctx.db.prepare('SELECT status FROM project_events WHERE id = ?').get(evtRow.id).status).toBe('pending')
 
     // 伪造签名 → 拒
     const forged = await handleCardAction(ctx.db, { operatorOpenId: 'fs_zhang', value: { ...confirmBtn.value, s: 'deadbeef' }, chatId: 'oc_p2p', messageId: nextMsgId() }, { send: recorder().send, secret: SECRET })
     expect(forged.result).toBe('error')
 
-    // 责任人（张三=默认责任人）确认 → 生效、留痕
+    // 普通成员（李四：非责任人/非牵头人/非管理员）确认 → 生效、留痕（v0.34 全员可确认，与 web 端点口径一致）
     const okRec = recorder()
-    const ok = await handleCardAction(ctx.db, { operatorOpenId: 'fs_zhang', value: confirmBtn.value, chatId: 'oc_p2p', messageId: nextMsgId() }, { send: okRec.send, secret: SECRET })
+    const ok = await handleCardAction(ctx.db, { operatorOpenId: 'fs_li', value: confirmBtn.value, chatId: 'oc_p2p', messageId: nextMsgId() }, { send: okRec.send, secret: SECRET })
     expect(ok.result).toBe('confirmed')
     expect(okRec.sent[0].text).toContain('已生效')
     const after = ctx.db.prepare('SELECT status, decided_by FROM project_events WHERE id = ?').get(evtRow.id)
     expect(after.status).toBe('effective')
-    expect(after.decided_by).toBe(ctx.members.lead.id)
+    expect(after.decided_by).toBe(ctx.members.dev.id)
     expect(ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId).status).toBe('done')
   })
 
@@ -780,5 +780,137 @@ describe('S20 群 @ 判定（refused_not_mentioned）', () => {
     // 身份获取失败降级：带占位前缀放行（交给后续门禁），无前缀忽略
     expect(resolveMention({ chatType: 'group', mentions: M('ou_member_9'), rawText: '@_user_1 在吗', botOpenId: null })).toBe(true)
     expect(resolveMention({ chatType: 'group', mentions: [], rawText: '随便聊聊', botOpenId: null })).toBe(false)
+  })
+})
+
+// —— v0.34：任务盘点 /tasks（S20-17）与群讨论上下文 recent_chat（S20-18）——
+// 同文件共享库：S20-5 会把当日限额设回 50，这里在各自 describe 内抬高（describe 级 beforeAll 晚于 S20-5 执行），避免撞 refused_quota
+
+describe('S20 机器人指令通道 — 任务盘点 /tasks（v0.34）', () => {
+  beforeAll(() => setSetting(ctx.db, 'im.feishu', { commandQuotaPerDay: 500 }, 1))
+
+  it('S20-17: 专题群 /tasks——本项目全部未完任务，未分配责任人置顶+计数；已完成无主任务不出现（零 LLM，别名等价）', async () => {
+    const p = await mkProject('盘点甲项目', ctx.members.lead.id)
+    // 两条无主未完：一条带截止日，一条无任何日期（口径宽于 S2-1「已设开始日」）
+    ctx.db.prepare(`UPDATE tasks SET responsible_member_id = NULL, plan_end_date = '2026-10-08' WHERE id = (SELECT id FROM tasks WHERE project_id = ? ORDER BY id LIMIT 1)`).run(p.id)
+    ctx.db.prepare(`UPDATE tasks SET responsible_member_id = NULL, plan_start_date = NULL, plan_end_date = NULL WHERE id = (SELECT id FROM tasks WHERE project_id = ? ORDER BY id LIMIT 1 OFFSET 1)`).run(p.id)
+    // 一条已完成的无主任务：盘点口径是未完（status != done），不应出现
+    ctx.db.prepare(`UPDATE tasks SET title = '已完成的无主任务X9', responsible_member_id = NULL, status = 'done', actual_end_date = '2026-10-01' WHERE id = (SELECT id FROM tasks WHERE project_id = ? ORDER BY id LIMIT 1 OFFSET 2)`).run(p.id)
+    upsertChannel(ctx.db, { platform: 'feishu', groupKey: 'oc_inv', name: '盘点群', channelType: 'dedicated', projectId: p.id }, ctx.members.admin.id)
+
+    // 零 LLM：不传 llm 也能回（确定性命令，进 LLM 之前）
+    const rec = recorder()
+    const out = await handleBotEvent(ctx.db, { ...group('fs_zhang', 'oc_inv', '/tasks'), mentioned: true }, { send: rec.send, secret: SECRET })
+    expect(out.result).toBe('replied')
+    const text = rec.sent[0].text
+    expect(text).toContain('盘点甲项目')
+    expect(text).toContain('未分配责任人 2 条')
+    expect(text).toContain('2026-10-08')
+    expect(text).toContain('张三') // 有主任务带负责人名（牵头人默认责任人）
+    expect(text).not.toContain('已完成的无主任务X9')
+
+    // 别名 /盘点 等价
+    const rec2 = recorder()
+    const out2 = await handleBotEvent(ctx.db, { ...group('fs_li', 'oc_inv', '/盘点'), mentioned: true }, { send: rec2.send, secret: SECRET })
+    expect(out2.result).toBe('replied')
+    expect(rec2.sent[0].text).toContain('盘点甲项目')
+  })
+
+  it('S20-17: 私聊 /tasks——全部在跑项目未分配任务按项目分组；全有主项目明确说明', async () => {
+    const pa = await mkProject('盘点乙项目', ctx.members.lead.id)
+    const pb = await mkProject('盘点丙项目', ctx.members.lead.id)
+    ctx.db.prepare(`UPDATE tasks SET responsible_member_id = NULL WHERE id = (SELECT id FROM tasks WHERE project_id = ? ORDER BY id LIMIT 1)`).run(pa.id)
+    // 乙项目造一条独特标题无主任务，断言分组归属
+    ctx.db.prepare(`INSERT INTO tasks (project_id, title, responsible_member_id, status, source, created_at, updated_at) VALUES (?, '盘点乙独有无主任务Q7', NULL, 'todo', 'manual', ?, ?)`).run(pa.id, Date.now(), Date.now())
+
+    const rec = recorder()
+    const out = await handleBotEvent(ctx.db, p2p('fs_zhang', '/tasks'), { send: rec.send, secret: SECRET })
+    expect(out.result).toBe('replied')
+    const text = rec.sent[0].text
+    expect(text).toContain('盘点乙项目')
+    expect(text).toContain('盘点乙独有无主任务Q7')
+    expect(text).toContain('盘点丙项目')
+    expect(text).toContain('均已分配') // 丙项目全有主
+  })
+
+  it('S20-17: 未绑定成员 /tasks 回绑定引导（同 /morning）；engine tasksInventory 口径直调', async () => {
+    const rec = recorder()
+    const out = await handleBotEvent(ctx.db, p2p('fs_stranger2', '/tasks'), { send: rec.send, secret: SECRET })
+    expect(out.result).toBe('guidance')
+    expect(rec.sent[0].text).toContain('绑定')
+
+    // engine 直调：无开始日的无主任务也在列（与 S2-1 listUnassigned 的兜底口径并存、语义不同）
+    const { tasksInventory } = await import('../engine/tasks.js')
+    const p = await mkProject('盘点丁项目', ctx.members.lead.id)
+    ctx.db.prepare(`UPDATE tasks SET responsible_member_id = NULL, plan_start_date = NULL, plan_end_date = NULL WHERE id = (SELECT id FROM tasks WHERE project_id = ? ORDER BY id LIMIT 1)`).run(p.id)
+    const scoped = tasksInventory(ctx.db, { projectId: p.id })
+    expect(scoped.text).toContain('未分配责任人 1 条')
+    const globalInv = tasksInventory(ctx.db, {})
+    expect(globalInv.text).toContain('盘点丁项目')
+  })
+})
+
+describe('S20 机器人指令通道 — 群讨论上下文 recent_chat（v0.34）', () => {
+  beforeAll(() => setSetting(ctx.db, 'im.feishu', { commandQuotaPerDay: 500 }, 1))
+
+  it('S20-18: 专题群 recent_chat 拉最近讨论——回看窗/尾条数/说话人映射/机器人消息过滤/不挪游标不产事件', async () => {
+    const p = await mkProject('讨论甲项目', ctx.members.lead.id)
+    upsertChannel(ctx.db, { platform: 'feishu', groupKey: 'oc_rc', name: '讨论群', channelType: 'dedicated', projectId: p.id }, ctx.members.admin.id)
+    const cursorBefore = ctx.db.prepare('SELECT cursor FROM channels WHERE group_key = ?').get('oc_rc').cursor
+    const eventsBefore = ctx.db.prepare('SELECT COUNT(*) AS n FROM project_events').get().n
+
+    // 机器人自己的一条回复已落 bot_commands（recent_chat 应过滤；回执文本与 fake 消息文本分开，避免多轮历史注入干扰断言）
+    const rec0 = recorder()
+    await handleBotEvent(ctx.db, { ...group('fs_zhang', 'oc_rc', '@bot 在吗'), mentioned: true }, { llm: scriptedLlm(JSON.stringify({ action: 'reply', text: '预置回执Z3' })).llm, send: rec0.send, secret: SECRET })
+
+    const fetchCalls = []
+    const fetchChat = async (cfg, channel, cursor) => {
+      fetchCalls.push({ groupKey: channel.groupKey, cursor: Number(cursor) })
+      return {
+        messages: [
+          { id: 'om_rc_1', speakerId: 'fs_zhang', text: '任务还是给小王吧', ts: Date.now() - 60_000 },
+          { id: rec0.sent[0].messageId, speakerId: 'ou_bot', text: '机器人回执Y5', ts: Date.now() - 50_000 },
+          { id: 'om_rc_2', speakerId: 'fs_stranger', text: '同意，小王最近有空', ts: Date.now() - 40_000 },
+        ],
+        nextCursor: '9999999999',
+      }
+    }
+    const { llm, calls } = scriptedLlm(
+      JSON.stringify({ action: 'recent_chat', limit: 20 }),
+      JSON.stringify({ action: 'reply', text: '按刚才讨论：建议把任务转给小王，确认卡已发。' })
+    )
+    const rec = recorder()
+    const out = await handleBotEvent(ctx.db, { ...group('fs_zhang', 'oc_rc', '@bot 按刚才讨论的办'), mentioned: true }, { llm, send: rec.send, secret: SECRET, fetchChat })
+    expect(out.result).toBe('replied')
+
+    // 连接器收到回看窗口游标（≈ now - 7200s，允许偏差）
+    expect(fetchCalls.length).toBe(1)
+    expect(fetchCalls[0].groupKey).toBe('oc_rc')
+    expect(Math.abs(fetchCalls[0].cursor - (Math.floor(Date.now() / 1000) - 7200))).toBeLessThan(180)
+
+    // 第二轮 LLM 收到的工具结果：说话人映射、未识别标注、机器人自身消息被过滤
+    const feedback = calls[1].map((m) => m.content).join('\n')
+    expect(feedback).toContain('张三：任务还是给小王吧')
+    expect(feedback).toContain('未识别：同意，小王最近有空')
+    expect(feedback).not.toContain('机器人回执Y5')
+
+    // 临时拉取不挪抽取游标、不产生事件
+    expect(ctx.db.prepare('SELECT cursor FROM channels WHERE group_key = ?').get('oc_rc').cursor).toBe(cursorBefore)
+    expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM project_events').get().n).toBe(eventsBefore)
+
+    // 系统提示声明 recent_chat 动作
+    expect(calls[0][0].content).toContain('recent_chat')
+  })
+
+  it('S20-18: 私聊 recent_chat 不可用（返回文案，LLM 走其它路径作答）', async () => {
+    const { llm, calls } = scriptedLlm(
+      JSON.stringify({ action: 'recent_chat' }),
+      JSON.stringify({ action: 'reply', text: '你直接告诉我要调整哪个任务就行。' })
+    )
+    const rec = recorder()
+    const out = await handleBotEvent(ctx.db, p2p('fs_zhang', '按刚才讨论的办'), { llm, send: rec.send, secret: SECRET })
+    expect(out.result).toBe('replied')
+    const feedback = calls[1].map((m) => m.content).join('\n')
+    expect(feedback).toContain('仅项目专题群')
   })
 })
