@@ -28,6 +28,10 @@ describe('S4 Agent 接入（形态 B）', () => {
     expect(login.statusCode).toBe(200)
     expect(login.body).toContain('/api/v1/auth/agent-login')
     expect(login.body).toContain('/dev/tty')
+    // v0.34.1：密码读取回车即返回（stty 静默 + read -r），不再用 head -c 512（读满 512 字节才返回 → 交互 tty 上阻塞卡死）
+    expect(login.body).not.toContain('head -c 512')
+    expect(login.body).toContain('stty -echo')
+    expect(login.body).toContain('read -r PASSWORD')
     const install = await ctx.app.inject({ method: 'GET', url: '/agent/skill/gb-pmo/install.sh' })
     expect(install.statusCode).toBe(200)
     expect(install.body).toContain('.agents/skills')

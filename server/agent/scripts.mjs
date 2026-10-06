@@ -32,8 +32,13 @@ if [ "\${X_FORCE_LOGIN:-0}" = "1" ]; then rm -f "\$CRED_FILE"; fi
 if [ -f "\$CRED_FILE" ]; then echo "已存在凭证（\$(stat -f %Sp "\$CRED_FILE" 2>/dev/null || stat -c %a "\$CRED_FILE")），跳过授权；重签请 X_FORCE_LOGIN=1"; exit 0; fi
 printf "gb-pmo 用户名: "
 read -r USERNAME < /dev/tty || true
+# 密码静默读取（v0.34.1）：stty -echo + read——回车即返回；不可用 head -c N（读满 N 字节或 EOF 才返回，
+# 交互 tty 上永远等不齐 → 输完密码卡死）。curl|sh 管道下 shebang 无效、dash 无 read -s，故走 POSIX stty。
 printf "gb-pmo 密码: "
-PASSWORD=\$(head -c 512 < /dev/tty | tr -d '\\n')
+stty -echo < /dev/tty
+PASSWORD=''
+read -r PASSWORD < /dev/tty || true
+stty echo < /dev/tty
 echo
 RESP=\$(curl -fsS --noproxy '127.0.0.1,localhost' -X POST "\$BASE_URL/api/v1/auth/agent-login" \\
   -H 'Content-Type: application/json' \\
