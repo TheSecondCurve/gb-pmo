@@ -369,7 +369,7 @@ ${ctxLine}
 数据库 schema（SQLite；SQL 里的「今天」用 BJ_TODAY()）：
 ${schemaDigest(db)}
 
-每轮只输出一个 JSON 动作（不带解释）：
+每轮只输出一个 JSON 动作（不带解释、不输出裸文本；要向用户说的话——答复/提问/澄清——一律装进 {"action":"reply","text":"..."}）：
 {"action":"query","sql":"SELECT ..."}          只读查询（最多 8 次，禁写；schema 见上）
 {"action":"metric","id":"<指标id>","params":{}} 口径化指标：${metricIdList()}
 {"action":"brief","projectId":1}               项目 Brief：一次取全单个项目摘要（概况/任务盘子/进行中/近期进展/下一步/风险，含中文标签）——用户整体问询某项目（「XX项目怎么样/Brief」）时优先用它，取不到再 fallback query
