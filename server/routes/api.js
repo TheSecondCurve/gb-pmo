@@ -392,6 +392,38 @@ export function registerApiRoutes(app) {
     return out
   })
 
+  // —— S34（v0.35）备份：S3 兼容存储（阿里云 OSS / Cloudflare R2 / AWS S3 / MinIO）——测试连通性 / 立即备份 / 历史 ——
+  // body 可带未保存的覆盖值（同 test-llm 的 S17-4 语义：表单值可先测后存）
+  app.post('/api/v1/admin/backup/test', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { testBackupConnection } = await import('../engine/backup.js')
+    const cfg = { ...getSetting(db, 'backup'), ...(req.body || {}) }
+    const out = await testBackupConnection(cfg, { fetchImpl: app.backupFetch ?? undefined })
+    auth.audit(db, { memberId: req.member.id, action: 'backup.test', objectType: 'backup', detail: { ok: out.ok, reason: out.reason } })
+    return out
+  })
+
+  app.post('/api/v1/admin/backup/run', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { runBackup } = await import('../engine/backup.js')
+    try {
+      return await runBackup(db, { memberId: req.member.id, fetchImpl: app.backupFetch ?? undefined })
+    } catch (e) {
+      // 上游失败不走 5xx（v0.21 PaaS 网关会替换响应体）：200 + {ok:false,reason}，服务端落 error 日志
+      if (e.statusCode >= 500) {
+        req.log.error(e)
+        return { ok: false, reason: e.message }
+      }
+      throw e
+    }
+  })
+
+  app.get('/api/v1/admin/backup/history', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { listBackupHistory } = await import('../engine/backup.js')
+    return { history: listBackupHistory(db) }
+  })
+
   // S17-8（v0.18）：项目类型管理（内嵌任务清单；任务模板对象已裁撤，仅系统管理员）
   app.post('/api/v1/admin/project-types', async (req, reply) => {
     if (!requireAdmin(req, reply)) return

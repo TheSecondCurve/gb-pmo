@@ -29,6 +29,7 @@ export const ADMIN_SECTIONS: { key: string; label: string; tabs: { key: string; 
     tabs: [
       { key: 'shell', label: '诊断 Shell' },
       { key: 'selfcheck', label: '飞书自检' },
+      { key: 'backup', label: '数据库备份' },
     ],
   },
 ]

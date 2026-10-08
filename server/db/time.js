@@ -33,6 +33,12 @@ export function dayDiff(fromDay, toDay) {
   return Math.round((Date.parse(`${toDay}T00:00:00Z`) - Date.parse(`${fromDay}T00:00:00Z`)) / DAY_MS)
 }
 
+/** 北京时刻戳串（YYYYMMDD-HHMMSS，零填充字典序=时间序；备份对象命名用，S34）。 */
+export function bjStamp(at = new Date()) {
+  const iso = new Date((at == null ? new Date() : new Date(at)).getTime() + OFFSET).toISOString()
+  return `${iso.slice(0, 10).replace(/-/g, '')}-${iso.slice(11, 19).replace(/:/g, '')}`
+}
+
 /** 北京日历日加 N 天（N 可为负/零；与 dayDiff 同一 UTC 午夜基准，纯日期串运算）。 */
 export function addDays(day, n) {
   return new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10)

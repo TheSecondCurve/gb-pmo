@@ -1,5 +1,7 @@
 # 需求初稿（PRD）— 企业项目大脑（Project Brain）
 
+> **v0.35**（2026-10-08）：**SQLite 定时异地备份——S3 兼容对象存储（S34，配置台「运维诊断→数据库备份」）**——单机 SQLite 是全部数据的唯一载体，本地备份（scripts/backup.sh）与容器同生共死（PaaS 重建即丢）。新增四块：①**存储配置**：settings 新 key `backup`（endpoint/region/bucket/AccessKey ID+Secret/对象前缀/路径风格/云端保留份数，附 OSS/R2/MinIO 预设）——一套 **S3 兼容协议覆盖阿里云 OSS / Cloudflare R2 / AWS S3 / MinIO**，SigV4 签名手写实现**零新依赖**（以 AWS 官方文档示例向量为单测锚点；region 留空按 endpoint 推断）；②**测试连通性**：HEAD 桶 → PUT/DELETE 探针对象三步验证，把「桶不存在 / AccessKey 权限或签名被拒 / 网络不通」映射为明确原因，表单值可先测后存（同 LLM 测试连接语义，S17-4）；③**定时备份**：挂在既有大脑调度器（S18）下第五个任务 `backup`（`scheduler.backupCron` 默认 `30 3 * * *` 每日 03:30 + `backupEnabled` 开关，保存即热生效），动作 = better-sqlite3 在线 backup API 快照（等价 `sqlite3 .backup`，禁 cp 热库）→ gzip → 上传 `gb-pmo-<北京时刻戳>.db.gz` → **云端滚动保留**（默认 30 份，超出即删最旧）；④**立即备份 + 历史**：`POST /api/v1/admin/backup/run` / `GET …/backup/history`，成功失败均落审计。存储未配全时定时/手动均跳过并回明确原因（与 S22 未初始化静默跳过同构）；普通成员全部 403；上游失败走 200+reason（v0.21 PaaS 网关模式）。本地 scripts/backup.sh 保留（本地+异地两层叠加）。详见 S34 与 §7.16。
+
 > **v0.34.1**（2026-10-06）：**修复：login.sh 密码输入后卡死（S4-1，线上实测根因）**——现象：`curl …/agent/login.sh | sh` 输完用户名与密码回车后脚本无响应。根因：密码读取用了 `head -c 512 < /dev/tty`——`head -c N` 必须**读满 N 字节或遇 EOF** 才返回，一行密码远不足 512 字节而交互 tty 不会 EOF，于是阻塞等剩余输入（用户按一次 Ctrl+D 才能解卡续跑）。当初用 `head -c` 是为了绕开「`curl | sh` 管道执行时 shebang 无效、Ubuntu dash 无 bash 的 `read -s`」的静默回显问题，但选错了工具。修复：改用 POSIX 标准做法 `stty -echo < /dev/tty; read -r PASSWORD < /dev/tty || true; stty echo < /dev/tty`——关回显静默输入、**回车即返回**、dash/bash 双兼容；`read` 加 `|| true` 保护使 EOF（Ctrl+D）时 `stty echo` 仍能恢复终端回显再走后续校验。用户名读取（`read -r`）与 PowerShell 版（`Read-Host -AsSecureString`）本就正确，不动。S4-1 验收标准补「密码输入回车即继续，不阻塞」。
 
 > **v0.34**（2026-10-06）：**群内任务盘点与讨论闭环（S20-17/S20-18 + S20-2 权限修订）**——目标场景：项目群里 @机器人盘点任务（含未分配责任人）、成员自由讨论、再 @机器人按讨论更新归属人，讨论与会议信息自然沉淀为项目进展。三项增量：①**`/tasks` 任务盘点斜杠命令（S20-17，别名 `/任务`、`/盘点`）**：确定性零 LLM 成本（与 `/morning` 同构，进 LLM 之前、不限额、LLM 未配置可用），专题群=本群绑定项目的**全部未完任务清单**（未分配责任人段置顶 + 计数，每条带 #id/标题/状态/计划截止），私聊/通用群/未登记群/web 会话=**全部在跑项目中未分配责任人的未完任务**（按项目分组，全都有主时明确说明）；组装在 `engine/tasks.js` 新函数 `tasksInventory` 确定性完成（口径：`responsible_member_id IS NULL AND status != 'done'`，宽于 S2-1 `listUnassigned` 的「已设开始日」兜底口径，两者语义并存）。②**`recent_chat` 群讨论上下文工具（S20-18）**：LLM 读侧新动作——仅**专题群**可用，连接器临时拉取本群最近消息（回看窗口 2 小时，取尾 N 条默认 20 上限 50），**不挪抽取游标、不产事件**（不影响 S3 定时抽取与 S20-10 去重）；说话人经 feishu_id 映射（未识别标注），机器人自身消息（`bot_commands` 已有 message_id）过滤；解决「群聊多轮上下文（S20-13）只含机器人问答、看不到未 @机器人的群内讨论」的缺口——用户说「按刚才讨论的把任务 X 给小王」时 LLM 先 `recent_chat` 读讨论再起建议；计入有界循环查询次数（读侧护栏同源）。③**建议事件确认权限放开为全员（S20-2 修订）**：任务面建议（状态/日期/责任人）确认卡的点按人从「目标任务责任人/项目牵头人/系统管理员」放开为**任意已绑定成员**（未绑定操作者/伪造签名仍拒），与 web 端点既有口径对齐（`POST /api/v1/events/:id/confirm` 本就只要求登录）；依据：D1 全员透明 + 小团队协作现实（群讨论后任何在场成员点按即可闭环，认领场景被指派人可自确认）。**边界不变**：项目级提议（结项/取消/立项/项目类型，S25）仍按既有权限矩阵（牵头人/管理员/拟任牵头人）；定时抽取器（S3）建议白名单仍不含责任人字段——归属变更仍只能显式 @机器人发起，不自动从聊天抽取。帮助文案（`/help`）与确认卡文案同步。详见 S20-17/S20-18 与 §7.5 修订。
@@ -231,7 +233,7 @@
 > **场景 S17（P0）— IT/管理员 — 全线（配置台，web 落地）**
 > - 触发时机：系统管理员使用 web 配置台（**仅系统管理员可进入**；普通成员进入提示无权限，全部配置写接口 403）。
 > - 信息架构（2026-09-30 拍板）：二级菜单 + 每页 Tab，路由直达可收藏，未来配置项按此扩展——
->   - **项目管理**：① 项目类型（类型 CRUD + **内嵌任务清单编辑**——纯任务列表一行一条，v0.18；**「逐步骤参考资料」编辑段：按行号给任务挂/删参考链接（标题+http(s) 链接+备注），随任务清单整体替换，v0.33/S33**；编辑器「**AI 起草**」生成任务清单草稿，v0.8/v0.18；**删除=无引用守卫物理删除、有引用提示改用停用**，v0.31）② 渠道（专题渠道绑定项目、通用群清单与分拣阈值、未绑渠道待办、**「立即对齐」手动触发抽取（全部或指定渠道，v0.7）**）③ 阈值与推送（全局阈值、**大脑调度 cron 三件套：信息更新对齐/预警提醒/日报提醒，v0.7**）；
+>   - **项目管理**：① 项目类型（类型 CRUD + **内嵌任务清单编辑**——纯任务列表一行一条，v0.18；**「逐步骤参考资料」编辑段：按行号给任务挂/删参考链接（标题+http(s) 链接+备注），随任务清单整体替换，v0.33/S33**；编辑器「**AI 起草**」生成任务清单草稿，v0.8/v0.18；**删除=无引用守卫物理删除、有引用提示改用停用**，v0.31）② 渠道（专题渠道绑定项目、通用群清单与分拣阈值、未绑渠道待办、**「立即对齐」手动触发抽取（全部或指定渠道，v0.7）**）③ 阈值与推送（全局阈值、**大脑调度 cron：信息更新对齐/预警提醒/日报提醒/项目日历同步，v0.7/S22；数据库备份，v0.35/S34**）；
 >   - **用户管理**：① 成员身份表（姓名、用户名、飞书/企微 id、团队、关键人标记、并行上限、在职状态、**角色**）② 令牌治理（全员 PAT 视图与吊销；签发仍走命令行）；
 >   - **外部依赖**：① LLM（类别 provider + 各类别**独立**的 base_url/api_key/model + 测试连接；类别=DeepSeek / GLM 国内 Coding Plan（智谱），provider=当前生效类别，v0.14/v0.15）② 飞书（app_id/app_secret，申请流程见附录 A）③ 企业微信（会话存档 corpid/secret/RSA 私钥，完整流程见附录 A）。
 > - 产生/变更的记录：配置变更（审计日志）。
@@ -462,6 +464,18 @@
 >   - S33-4 当删除无引用类型时，任务行与参考行同事务级联清除（S17-13 同构；有引用仍 400 提示停用）。
 >   - S33-5 当迁移重复执行时，不产生重复参考行；既有类型/任务/项目零影响（新表空=无参考，行为同 v0.32）。
 
+> **场景 S34（P0）— 管理员/系统 — SQLite 定时异地备份（v0.35）**
+> - 触发时机：单机 SQLite 是全部数据的唯一载体，本地备份依赖宿主机 cron 且与容器同生共死；管理员希望把数据库定时备份到对象存储（阿里云 OSS / Cloudflare R2 等 S3 兼容服务）实现异地容灾（用户 2026-10-08 拍板）。
+> - 操作内容：配置台「运维诊断→数据库备份」维护 S3 兼容存储配置（endpoint / region / bucket / AccessKey ID+Secret / 对象前缀 / 路径风格 / 云端保留份数，附 OSS / R2 / MinIO 预设）；「测试连接」以探针对象验证桶可访问与写权限（HEAD 桶 → PUT 探针 → DELETE 探针），表单值可先测后存；「立即备份」手动触发一次。定时备份挂在既有大脑调度器（S18）下：`scheduler.backupCron`（默认每日 03:30）+ `backupEnabled` 开关，心跳判定保存即生效。备份动作 = better-sqlite3 在线 backup API 快照（等价 `sqlite3 .backup`，禁止 cp 热库）→ gzip → PUT `<前缀>gb-pmo-<北京时刻戳>.db.gz` → 按对象名列出前缀下备份对象、超出保留份数的最旧对象滚动删除。存储未配全（endpoint/bucket/accessKeyId/secretAccessKey 任一为空）时定时与手动均跳过并回明确原因（与 S22 未初始化静默跳过同构）。
+> - 产生/变更的记录：settings 新 key `backup`（存储配置；密钥明文存库，与 LLM/IM 凭证同待遇——内网单进程、仅管理员可读写）与 `scheduler` 的 backupCron/backupEnabled；`audit_logs` 落 `backup.test` / `backup.run` 审计行（含对象 key、字节数、耗时、删除数）；无新表、无迁移。
+> - 完成标志：配置台保存存储配置并测试连通后，下一个 cron 时点（或点「立即备份」）桶内出现 gzip 备份对象；对象数超保留份数后最旧对象被自动清理。
+> - 审批/协作：仅系统管理员（web 配置台 403 矩阵；Agent `put_setting` 同构）；备份含全库数据，桶应私有读写、AccessKey 仅授该桶。
+> - 验收标准：
+>   - S34-1 当普通成员调用备份配置/测试/执行/历史任一端点时应 403；当管理员保存非法配置（endpoint 非 http(s)、keepCount 越界、pathStyle 非布尔、backupCron 非法）时应 400 并指明字段；对象前缀保存时应归一化（去首斜杠、补尾斜杠）。
+>   - S34-2 当管理员测试连通性时，应按「HEAD 桶 → PUT 探针对象 → DELETE 探针」验证并把失败映射为明确原因（桶不存在 / AccessKey 权限或签名被拒 / 网络不通）；请求须为 S3 SigV4 签名（签名实现以 AWS 官方文档示例向量为单测锚点）；表单未保存的值可直接先测（同 S17-4 语义）。
+>   - S34-3 当执行备份时，应产生在线快照的 gzip 对象（key=前缀+`gb-pmo-YYYYMMDD-HHMMSS.db.gz`，北京时刻），内容解压后为完整 SQLite 库（含备份前写入的数据）；成功与失败均落审计，历史端点可读最近记录。
+>   - S34-4 当云端备份对象数超过保留份数时，应只删除最旧的超出部分；当存储未配全时定时/手动备份应跳过（skipped+原因）且不发起网络请求；调度器判定应包含 backup 任务（enabled 开关生效）。
+
 **P1/P2 场景（编号预分配，细节在晋级时补全）：**
 
 | 编号 | 级别 | 场景 | 一句话说明 |
@@ -619,7 +633,7 @@ Interactive dashboard 是 P0 标配交付（见 analytics-design.md）。**维�
 
 ### 7.9 管理员诊断台（S26，v0.19）
 
-**背景**：Docker/PaaS 部署下容器不可 exec（平台不提供 shell 入口），排障（看进程环境、测容器内网络、定位飞书长连接断点）没有抓手。配置台新增二级菜单「运维诊断」，两个能力：
+**背景**：Docker/PaaS 部署下容器不可 exec（平台不提供 shell 入口），排障（看进程环境、测容器内网络、定位飞书长连接断点）没有抓手。配置台新增二级菜单「运维诊断」，首版两个能力（v0.35 起新增第三个 Tab「数据库备份」，见 §7.16）：
 
 - **诊断 shell**：`POST /api/v1/admin/debug/shell`（engine `debug.runShell`）——`debug.shellEnabled` 总开关**默认关**；开启后以 `/bin/sh -c <command>` 执行（slim 镜像无 bash 也可用），`debug.timeoutMs`（1s~60s，默认 10s）超时终止回 `timedOut`，`debug.maxOutputBytes`（默认 128KB）超限截断回 `truncated`。每次执行（含被拒绝的）入 `audit_logs`（action=`debug.shell`，含命令原文/退出码/耗时）。**安全边界**：等价于把容器执行权交给管理员账号——仅管理员角色可调（普通成员 403）、开关默认关、内网部署、全程审计；不用时应保持关闭。该能力**只服务运维排障**，不属于任何业务流。
 - **飞书长连接自检**：`POST /api/v1/admin/debug/feishu-selfcheck`——复用 `im.feishu` 已存凭证跑三段诊断：①`tenant_access_token`（凭证+到 open.feishu.cn 的网络）→ ②官方 SDK `WSClient` 握手（autoReconnect=false 快速失败）→ ③事件接收提示（该段需人工私聊发消息，回显检查清单：订阅「接收消息 v2.0」/`im:message.p2p_msg:readonly` 已发布/可用范围）。逐段回显通过/失败与断点提示；凭证未配置时①即返回配置指引（不发外网）。独立同款 CLI：`scripts/feishu-ws-test.mjs`。
@@ -686,6 +700,18 @@ Interactive dashboard 是 P0 标配交付（见 analytics-design.md）。**维�
 **数据与语义**：新表 `project_type_task_refs`（`type_task_id` 外键挂 `project_type_tasks`，结构镜像实例侧 `task_refs` 去掉软删/创建人——配置对象整体替换、变更历史走 `projectType.update` 审计）；`project_type_tasks` 一列不动。类型编辑给出 `tasks` 即**任务行+参考行整体替换**（S17-8 既有语义扩展）；删除类型级联清两表（S17-13 扩展）。载荷任务项 `{title, refs?}`，refs 校验与实例侧 `addTaskRef` 同规则（标题必填、url 须 http(s)、每任务 ≤10 条防呆），`HTTP_URL` 正则抽公共常量两处共用。立项拷贝在 `createProject` 同事务完成，`created_by`=立项人；**自定义覆盖（S1-6）纯标题=不带模板参考**（「给出即整体替换」的自然延伸，不做按标题匹配保留的魔法），载荷显式 `{title, refs}` 才带。提议通道（S25 `create_project_type`/`create_project`）载荷透传，Agent 产类型/立项提议时可带 SOP 链接。
 
 **不做的**：存量预置类型（0017/0018 十三类）不自动回填参考链接（自动按步骤名猜挂容易挂错，由管理员按知识库 SOP 在配置台补挂）；类型描述里的 SOP 总链接保留；立项弹窗不增加参考编辑（仍只发标题，立项后在项目页维护）；不做链接有效性探测/快照。
+
+### 7.16 SQLite 定时异地备份（S34，v0.35）
+
+**动机**：单机 SQLite 是全部数据唯一载体，`scripts/backup.sh` 的本地备份与容器同生共死（PaaS 重建即丢）；把快照推进对象存储才有异地容灾语义。本地脚本保留，形成「本地 + 异地」两层。
+
+**存储**：S3 兼容协议一套覆盖——阿里云 OSS（S3 兼容 API，virtual-hosted 风格、region=地域前缀如 oss-cn-hangzhou）、Cloudflare R2（免出口流量费，region=auto）、AWS S3 / MinIO（路径风格 pathStyle）。SigV4 签名手写实现（`engine/s3.js`，**零新依赖**；签名函数以 AWS 官方文档示例向量为单测锚点）；region 留空按 endpoint 推断。密钥明文存 settings（与 LLM/IM 凭证同待遇：内网单进程、admin-only 端点；桶应私有读写、AccessKey 仅授该桶）。
+
+**备份链路**（`engine/backup.js`）：better-sqlite3 `db.backup()` 在线快照（等价 `sqlite3 .backup`，tech-architecture 禁 cp 热库）→ `zlib.gzipSync` → `PUT <prefix>gb-pmo-<bjStamp>.db.gz`（时刻戳北京时区，`time.js` 唯一真相源新增 `bjStamp()`）→ ListObjectsV2 列前缀下 `gb-pmo-*.db.gz` 对象 → 超出 `keepCount`（默认 30，1~365）的最旧对象逐个 DELETE。临时目录用后即删；网络操作 120s 超时。
+
+**接线**：定时挂在既有调度器（S18）第五个任务 `backup`（`scheduler.backupCron` 默认 `30 3 * * *`、`backupEnabled` 默认 true，心跳热生效；cron 行在「项目管理→阈值与推送」与既有四任务同列）。存储配置独立 settings key `backup`，校验：endpoint 须 http(s) URL、keepCount 1~365、pathStyle 布尔、prefix 归一化（去首斜杠补尾斜杠）；四项完整性（endpoint/bucket/accessKeyId/secretAccessKey）在测试/执行时判定，未配全=跳过并回原因（与 S22 未初始化静默跳过同构）。三个 admin 端点：`POST /api/v1/admin/backup/test`（body 可带未存覆盖值，三步探针）、`POST /api/v1/admin/backup/run`（立即备份；上游失败 200+`{ok:false,reason}` 走 v0.21 PaaS 网关模式）、`GET /api/v1/admin/backup/history`（读 `backup.run` 审计最近 10 条）。测试经 buildApp 注入 `backupFetch` 假实现，不发出真实网络。Agent `put_setting` 白名单自动包含新 key（setSetting 同一校验口）。
+
+**不做的**：不做增量/WAL 归档（团队规模全量 gzip 足够，恢复=下载+gunzip+起服务，照 db-migrations 冒烟路径手工执行）；不做恢复按钮与多云双写；备份失败不推送告警（审计+error 日志，后续按需）。
 
 ### 7.3 偏离记录（须写入项目实例文档）
 

@@ -88,6 +88,8 @@ export const DEFAULT_SETTINGS = {
     reportEnabled: true,
     calendarSyncCron: '*/30 * * * *', // 项目日历同步（S22，默认每 30 分钟）
     calendarSyncEnabled: true,
+    backupCron: '30 3 * * *',          // 数据库异地备份（S34，默认每日 03:30 避开整点；存储未配全时静默跳过）
+    backupEnabled: true,
   },
   // S22 项目日历：feishuCalendarId 空=未初始化（配置台「外部依赖→飞书」初始化写入；同步任务静默跳过）
   calendar: { feishuCalendarId: '' },
@@ -113,4 +115,17 @@ export const DEFAULT_SETTINGS = {
   debug: { shellEnabled: false, timeoutMs: 10000, maxOutputBytes: 131072 },
   // S24 Web AI 助手会话：每成员每日指令限额（北京日，与 bot_commands 审计同口径）
   chat: { quotaPerDay: 50 },
+  // S34（v0.35）备份存储：S3 兼容协议一套覆盖阿里云 OSS / Cloudflare R2 / AWS S3 / MinIO（SigV4 手写签名，零依赖）。
+  // 四项完整性（endpoint/bucket/accessKeyId/secretAccessKey）在测试连接/执行时判定——未配全=跳过（S22 同构）；
+  // 密钥明文存库与 LLM/IM 凭证同待遇（内网单进程、admin-only 端点）；定时由 scheduler.backupCron/backupEnabled 驱动。
+  backup: {
+    endpoint: '',       // 如 https://oss-cn-hangzhou.aliyuncs.com / https://<accountId>.r2.cloudflarestorage.com / http://minio:9000
+    region: '',         // 留空按 endpoint 推断：R2=auto、OSS=地域前缀（oss-cn-hangzhou）、其余 us-east-1
+    bucket: '',
+    accessKeyId: '',
+    secretAccessKey: '',
+    prefix: 'backups/', // 对象前缀（保存时归一化：去首斜杠、补尾斜杠；空=桶根）
+    pathStyle: false,   // 路径风格寻址（MinIO/自建 S3 常需 true；OSS/R2 用 virtual-hosted）
+    keepCount: 30,      // 云端滚动保留份数（1~365，超出删最旧）
+  },
 }
