@@ -3,7 +3,7 @@ import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { upsertChannel } from '../engine/tasks.js'
 import { ingestMessages } from '../brain/extract.js'
 import { handleBotEvent, handleCardAction, issueBindCode, buildBindCard } from '../brain/bot/command.js'
-import { syncBot, parseSdkMessage } from '../brain/bot/gateway.js'
+import { syncBot, parseSdkMessage, extractMessageText } from '../brain/bot/gateway.js'
 import { sendText, sendCard } from '../brain/connectors/feishu.js'
 import { runReadOnlyQuery } from '../agent/sqlGuard.js'
 import { runWriteTool } from '../brain/bot/tools.js'
@@ -708,6 +708,72 @@ describe('S20 网关事件载荷解析', () => {
     const r = parseSdkMessage({})
     expect(r.msg).toEqual({})
     expect(r.senderOpenId).toBe('')
+  })
+})
+
+// S20-20（v0.37）富文本（post）消息拍平：飞书输入框把 "- " 列表行/粘贴格式自动转 post，此前网关
+// 只认 text，此类消息在审计落库前被静默丢弃（线上实测：多行带列表的立项指令零回复零痕迹）。
+describe('S20-20 网关富文本（post）消息拍平', () => {
+  // 2026-10-08 线上真实载荷（om_x100b6340207db5b…，飞书消息历史 API 原样）：
+  // "- " 前缀被拆为独立 text 元素，段间空段落，title 为空串
+  const REAL_POST_CONTENT = JSON.stringify({
+    title: '',
+    content: [
+      [{ tag: 'text', text: '新建一个项目：问问斯斯上线前准备项目', style: [] }],
+      [],
+      [{ tag: 'text', text: '目前列进去的工作项：', style: [] }],
+      [],
+      [{ tag: 'text', text: '- ', style: [] }, { tag: 'text', text: '私董专区内容 - 下午茶上传', style: [] }],
+      [{ tag: 'text', text: '- ', style: [] }, { tag: 'text', text: '私董专区内容 - 更新内训播放时长', style: [] }],
+    ],
+  })
+
+  it('S20-20: 线上真实 post 载荷拍平为原文（段内元素直连、段落换行连接、空段落成空行）', () => {
+    expect(extractMessageText('post', REAL_POST_CONTENT)).toBe(
+      '新建一个项目：问问斯斯上线前准备项目\n\n目前列进去的工作项：\n\n- 私董专区内容 - 下午茶上传\n- 私董专区内容 - 更新内训播放时长'
+    )
+  })
+
+  it('S20-20: text 原样；post 的 @元素渲染 @名字（缺省 @用户）、链接取锚文本、图片 [图片] 占位、非空 title 置顶', () => {
+    expect(extractMessageText('text', JSON.stringify({ text: '你好' }))).toBe('你好')
+    const post = JSON.stringify({
+      title: '会议纪要',
+      content: [
+        [{ tag: 'text', text: '转给' }, { tag: 'at', user_id: 'ou_9', user_name: '李四' }, { tag: 'text', text: ' 处理' }],
+        [{ tag: 'a', text: '参考文档', href: 'https://x' }, { tag: 'img', image_key: 'k' }],
+        [{ tag: 'at', user_id: 'ou_8' }],
+      ],
+    })
+    expect(extractMessageText('post', post)).toBe('会议纪要\n转给@李四 处理\n参考文档[图片]\n@用户')
+  })
+
+  it('S20-20: 非法 content、无段落与其余消息类型（图片/文件/语音等）返回空串，由网关静默忽略', () => {
+    expect(extractMessageText('post', 'not-json')).toBe('')
+    expect(extractMessageText('post', JSON.stringify({ title: '', content: [] }))).toBe('')
+    expect(extractMessageText('image', JSON.stringify({ image_key: 'k' }))).toBe('')
+    expect(extractMessageText('text', JSON.stringify({}))).toBe('')
+    // 纯空白段落拍平出 \n（非空串）——由网关既有 trim 空判定静默忽略，与旧行为一致
+    expect(extractMessageText('post', JSON.stringify({ title: '', content: [[], []] }))).toBe('\n')
+  })
+
+  it('S20-20: post 私聊指令拍平后进管线——LLM 收到拍平文本、审计原文=拍平文本、照常回复', async () => {
+    const { llm, calls } = scriptedLlm(
+      JSON.stringify({ action: 'query', sql: 'SELECT COUNT(*) AS n FROM projects' }),
+      JSON.stringify({ action: 'reply', text: '已了解，准备起草立项提议。' })
+    )
+    const rec = recorder()
+    const evt = p2p('fs_zhang', extractMessageText('post', REAL_POST_CONTENT))
+    const out = await handleBotEvent(ctx.db, evt, { llm, send: rec.send, secret: SECRET })
+    expect(out.result).toBe('replied')
+    expect(rec.sent[0].text).toContain('立项提议')
+    // LLM 收到的用户消息 = 拍平文本（多行与 "- " 列表行保留；messages 数组随循环按引用追加、共享库带前序
+    // 测试会话历史，按内容定位本项目消息）
+    const userMsg = calls[0].find((m) => m.role === 'user' && m.content.includes('新建一个项目')).content
+    expect(userMsg).toContain('新建一个项目：问问斯斯上线前准备项目')
+    expect(userMsg).toContain('\n- 私董专区内容 - 下午茶上传')
+    // 审计原文 = 拍平文本
+    const row = botRow(evt.messageId)
+    expect(row.raw_text).toContain('- 私董专区内容 - 更新内训播放时长')
   })
 })
 

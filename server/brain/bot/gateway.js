@@ -54,6 +54,28 @@ export function parseSdkMessage(data) {
 }
 
 /**
+ * S20-20（v0.37）：入站消息 → 纯文本。text 原样；post（富文本）按段落拍平——text/a 取文字、
+ * at 渲染 @名字（缺省 @用户）、img 以 [图片] 占位、段落换行连接、非空 title 置顶；其余消息类型
+ * 与非法 content 返回 ''（调用方按空文本静默忽略）。线上实测：飞书输入框把 "- " 列表行自动
+ * 转 post，此前网关只认 text，此类消息在审计前被静默丢弃（零回复零痕迹）。
+ */
+export function extractMessageText(messageType, content) {
+  let parsed = {}
+  try { parsed = JSON.parse(content || '{}') } catch { return '' }
+  if (messageType === 'text') return String(parsed.text || '')
+  if (messageType !== 'post' || !Array.isArray(parsed.content)) return ''
+  const paragraphs = parsed.content.map((els) =>
+    (Array.isArray(els) ? els : []).map((e) => {
+      if (e?.tag === 'text' || e?.tag === 'a') return String(e.text || '')
+      if (e?.tag === 'at') return e.user_name ? `@${e.user_name}` : '@用户'
+      if (e?.tag === 'img') return '[图片]'
+      return ''
+    }).join(''))
+  const title = String(parsed.title || '').trim()
+  return (title ? `${title}\n` : '') + paragraphs.join('\n')
+}
+
+/**
  * 群消息 @ 判定（S20-16/v0.26.1）：应用持有 im:message.group_msg 时事件订阅推送群内全部消息，
  * 必须 @ 本机器人才处理。私聊恒真；有机器人身份（open_id）时比对 mentions（@ 其他人不算）；
  * 身份获取失败降级要求消息带 @_user_N 占位前缀（宁可不答不可乱答）。
@@ -105,9 +127,9 @@ async function connectReal(db, cfg, secret) {
     'im.message.receive_v1': async (data) => {
       try {
         const { msg, senderOpenId } = parseSdkMessage(data)
-        if (msg.message_type !== 'text') return
+        // S20-20：text 原样、post（富文本）按段落拍平；其余类型/拍平为空返回 ''，由下方空判定统一静默忽略
+        const rawText = extractMessageText(msg.message_type, msg.content)
         const chatType = msg.chat_type === 'p2p' ? 'p2p' : 'group'
-        const rawText = String(JSON.parse(msg.content || '{}').text || '')
         // 群@消息文本带 @_user_N 前缀，剥掉再交给指令层；群消息必须 @ 本机器人（S20-16）
         const text = rawText.replace(/^@\S+\s*/, '').trim()
         if (!text) return
