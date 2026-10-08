@@ -158,6 +158,22 @@ export async function sendCard(cfg, chatId, card) {
   return postMessage(cfg, 'chat_id', chatId, 'interactive', card)
 }
 
+/** 编辑应用已发送的文本消息（S20-19 私聊占位反馈：「收到，正在处理…」原地替换为最终答复）。
+ *  「更新应用发送的消息内容」PUT /im/v1/messages/:message_id——仅应用自己发的 text/post 可编辑，
+ *  需 im:message:update 权限；content 为全量替换（非增量）。失败 throw 由调用方降级为另发新消息。 */
+export async function patchText(cfg, messageId, text) {
+  const token = await tenantToken(cfg)
+  const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ msg_type: 'text', content: JSON.stringify({ text }) }),
+  })
+  if (!res.ok) throw Object.assign(new Error(`飞书编辑消息 HTTP ${res.status}`), { statusCode: 502 })
+  const data = await res.json()
+  if (data.code !== 0) throw Object.assign(new Error(`飞书编辑消息失败(${data.code}): ${data.msg}`), { statusCode: 502 })
+  return { ok: true }
+}
+
 /** 群信息（external 字段用于 S20-7 外部群拒答；调用方负责缓存）。 */
 export async function getChat(cfg, chatId) {
   const token = await tenantToken(cfg)

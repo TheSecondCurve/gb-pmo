@@ -223,7 +223,8 @@ export function makeExecTool(db, env, { llm, sqlLog = [], fetchChat } = {}) {
  *                       text, ts, messageId?, senderOpenId?, evt?(原始 IM 事件，写工具取快照/引用) }
  * @param {object} opts  { llm(测试注入), history(适配器装配的多轮上下文), reply(text,patch)→Promise,
  *                       systemPrompt(字符串), detailExtra(适配器附加审计细节，如 historyDegraded),
- *                       fetchChat?(S20-18 recent_chat 的消息拉取注入，缺省用平台连接器) }
+ *                       fetchChat?(S20-18 recent_chat 的消息拉取注入，缺省用平台连接器),
+ *                       onLlmStart?(S20-19 慢路径开始回调——限额/LLM 检查通过后、进循环前，飞书私聊占位反馈用) }
  * @returns 文本出口（斜杠/限额/降级/答复/写回执）经 opts.reply 投递并透传其返回值；
  *          卡片出口返回 { type:'card', writeResult, llmCalls, detail }，由适配器渲染（飞书发卡、web 页面按钮）。
  */
@@ -241,6 +242,12 @@ export async function runConversation(db, env, opts = {}) {
   // ③ LLM 解析（未配置降级指引，斜杠命令已在上一步先行可用）
   const llm = getLlm(db, opts.llm)
   if (!llm) return await opts.reply(noLlmText(env.surface), { memberId: env.member.id, intent: 'gate', result: 'no_llm' })
+
+  // ③b S20-19 慢路径开始：适配器回调（飞书私聊发「正在处理」占位）——毫秒级出口（斜杠/限额/未配置）
+  //     都不会走到这里；回调抛错吞掉，不阻塞主链路（占位是纯投递层 UX）
+  if (opts.onLlmStart) {
+    try { await opts.onLlmStart() } catch { /* 占位发送失败降级为无占位 */ }
+  }
 
   // ④ 有界循环（读自由写收敛；写即终止）
   const sqlLog = []

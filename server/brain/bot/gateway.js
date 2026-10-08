@@ -98,6 +98,8 @@ async function connectReal(db, cfg, secret) {
   }
 
   const send = ({ chatId, text, card }) => (card ? feishu.sendCard(cfg, chatId, card) : feishu.sendText(cfg, chatId, text))
+  // S20-19 私聊占位反馈的编辑通道：把占位消息原地替换为最终答复（应用需 im:message:update 权限，缺权限时运行时降级另发新消息）
+  const patch = ({ messageId, text }) => feishu.patchText(cfg, messageId, text)
 
   const dispatcher = new sdk.EventDispatcher({}).register({
     'im.message.receive_v1': async (data) => {
@@ -118,7 +120,7 @@ async function connectReal(db, cfg, secret) {
           ts: Date.now(),
           external: await isExternal(msg.chat_id, chatType),
           mentioned: resolveMention({ chatType, mentions: msg.mentions, rawText, botOpenId }),
-        }, { send, secret })
+        }, { send, patch, secret })
       } catch (e) {
         console.error('[bot] 消息处理失败:', e.message)
       }
