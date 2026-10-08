@@ -6,6 +6,7 @@
 
 import * as projects from './projects.js'
 import * as projectTypes from './projectTypes.js'
+import * as tasks from './tasks.js'
 
 const notFound = () => Object.assign(new Error('提议不存在'), { statusCode: 404 })
 const conflict = (msg) => Object.assign(new Error(msg), { statusCode: 409 })
@@ -70,6 +71,38 @@ export const PROPOSAL_KINDS = {
         code: payload.code, name: payload.name, description: payload.description,
         tasks: normTasks(payload.tasks),
       }, by)
+    },
+  },
+  // S35（v0.39）项目维护面补全：建任务/建里程碑/项目信息变更——发起放开、确认=牵头人或管理员，
+  // 生效分发回既有引擎（终态守卫/D3 缺省责任人/审计/留痕事件全继承）。
+  add_task: {
+    label: '新增任务',
+    canConfirm: canConfirmProjectOp,
+    apply(db, payload, by) {
+      return tasks.createTask(db, {
+        projectId: Number(payload.projectId), title: payload.title,
+        ...(payload.responsibleMemberId != null ? { responsibleMemberId: Number(payload.responsibleMemberId) } : {}),
+        ...(payload.planStartDate ? { planStartDate: payload.planStartDate } : {}),
+        ...(payload.planEndDate ? { planEndDate: payload.planEndDate } : {}),
+      }, by)
+    },
+  },
+  add_milestone: {
+    label: '新增里程碑',
+    canConfirm: canConfirmProjectOp,
+    apply(db, payload, by) {
+      return tasks.createMilestone(db, { projectId: Number(payload.projectId), name: payload.name, planDate: payload.planDate || null }, by)
+    },
+  },
+  update_project: {
+    label: '项目信息变更',
+    canConfirm: canConfirmProjectOp,
+    apply(db, payload, by) {
+      const patch = {}
+      for (const k of ['name', 'clientName', 'priority', 'planStartDate', 'planEndDate', 'leadMemberId']) {
+        if (payload[k] !== undefined) patch[k] = payload[k]
+      }
+      return projects.updateProject(db, Number(payload.projectId), patch, by)
     },
   },
 }

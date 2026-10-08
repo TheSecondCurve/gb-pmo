@@ -111,9 +111,11 @@ export async function ingestMessages(db, channel, messages, { llm: llmOverride }
   return stats
 }
 
-/** 建议推送（S3-4/S20-2 共用）：目标任务责任人 + 项目牵头人（去重），记 pushed_to。 */
+/** 建议推送（S3-4/S20-2 共用）：目标任务责任人 + 项目牵头人（去重），记 pushed_to。
+ *  里程碑目标（S35，target_object='milestone'，id 复用 target_task_id 列）无责任人语义，
+ *  且不得按同 id 任务误 JOIN 责任人——只推项目牵头人。 */
 export function pushSuggestion(db, evt) {
-  const target = evt.targetTaskId
+  const target = evt.targetTaskId && evt.targetObject !== 'milestone'
     ? db.prepare('SELECT responsible_member_id AS rid FROM tasks WHERE id = ?').get(evt.targetTaskId)
     : null
   const lead = db.prepare('SELECT lead_member_id AS lid FROM projects WHERE id = ?').get(evt.projectId)

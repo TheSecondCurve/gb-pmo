@@ -137,8 +137,14 @@ function applyTaskPatch(db, e) {
 }
 
 function applyMilestonePatch(db, e) {
-  if (e.target_field !== 'plan_date') {
+  // S35：扩展状态字段（达成/延误/取消）；met 落实际日期=当天（北京日），镜像任务 done→actual_end_date 口径
+  if (e.target_field === 'plan_date') {
+    db.prepare('UPDATE milestones SET plan_date = ?, updated_at = ? WHERE id = ?').run(e.target_value, Date.now(), e.target_task_id)
+  } else if (e.target_field === 'status') {
+    assertValue('milestoneStatus', e.target_value)
+    db.prepare('UPDATE milestones SET status = ?, actual_date = ?, updated_at = ? WHERE id = ?')
+      .run(e.target_value, e.target_value === 'met' ? today() : null, Date.now(), e.target_task_id)
+  } else {
     throw Object.assign(new Error(`不支持的里程碑建议字段: ${e.target_field}`), { statusCode: 400 })
   }
-  db.prepare('UPDATE milestones SET plan_date = ?, updated_at = ? WHERE id = ?').run(e.target_value, Date.now(), e.target_task_id)
 }
