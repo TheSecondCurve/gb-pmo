@@ -13,11 +13,11 @@ export function getSetting(db, key) {
 // 值校验器（按 key）：保存前拦截非法值，中文错误带 400。
 const VALIDATORS = {
   scheduler(value) {
-    for (const k of ['extractionCron', 'alertCron', 'reportCron', 'calendarSyncCron']) {
+    for (const k of ['extractionCron', 'alertCron', 'reportCron', 'calendarSyncCron', 'backupCron']) {
       if (value?.[k] === undefined) continue
       parseCron(value[k]) // 非法即 throw（statusCode 400，含字段与原因）
     }
-    for (const k of ['extractionEnabled', 'alertEnabled', 'reportEnabled', 'calendarSyncEnabled']) {
+    for (const k of ['extractionEnabled', 'alertEnabled', 'reportEnabled', 'calendarSyncEnabled', 'backupEnabled']) {
       if (value?.[k] === undefined) continue
       if (typeof value[k] !== 'boolean') {
         throw Object.assign(new Error(`scheduler.${k} 须为布尔值（true/false）`), { statusCode: 400 })
@@ -57,12 +57,34 @@ const VALIDATORS = {
       throw Object.assign(new Error('debug.maxOutputBytes 须为 1024~1048576 的整数（字节）'), { statusCode: 400 })
     }
   },
+  // S34（v0.35）：备份存储——endpoint 须完整 http(s) URL；keepCount 1~365；pathStyle 布尔。
+  // 四项完整性（endpoint/bucket/accessKeyId/secretAccessKey）不在此拦——测试连接/执行时判定并回原因（S22 同构）。
+  backup(value) {
+    if (value?.endpoint !== undefined && value.endpoint !== '' && !/^https?:\/\/.+\..+/.test(String(value.endpoint))) {
+      throw Object.assign(
+        new Error('backup.endpoint 须为完整 http(s) URL（如 https://oss-cn-hangzhou.aliyuncs.com 或 https://<accountId>.r2.cloudflarestorage.com）'),
+        { statusCode: 400 }
+      )
+    }
+    if (value?.keepCount !== undefined && (!Number.isInteger(value.keepCount) || value.keepCount < 1 || value.keepCount > 365)) {
+      throw Object.assign(new Error('backup.keepCount 须为 1~365 的整数（云端保留份数）'), { statusCode: 400 })
+    }
+    if (value?.pathStyle !== undefined && typeof value.pathStyle !== 'boolean') {
+      throw Object.assign(new Error('backup.pathStyle 须为布尔值（MinIO/自建 S3 多为 true；OSS/R2 用 false）'), { statusCode: 400 })
+    }
+  },
 }
 
 // 保存前归一化（按 key，整体重写 value）：v0.15 起 llm 按类别分开存储——写入只作用于目标类别的子配置
 // （apiKey 未传=沿用该类别已存；baseUrl/model 空或等于别的类别默认时回填本类别默认，自定义值保留），
 // 其他类别的子配置原样保留（切换互不覆盖），provider 显式落库。
 const NORMALIZERS = {
+  // S34（v0.35）：备份对象前缀归一化——去首斜杠、补尾斜杠（空=桶根保持空）
+  backup(value) {
+    if (!value || typeof value !== 'object' || value.prefix === undefined) return
+    const p = String(value.prefix ?? '').trim().replace(/^\/+/, '')
+    value.prefix = p && !p.endsWith('/') ? `${p}/` : p
+  },
   llm(value, prev) {
     if (!value || typeof value !== 'object') return
     const provider = value.provider ?? prev?.provider ?? DEFAULT_SETTINGS.llm.provider

@@ -136,6 +136,10 @@ export const api = {
   // S22 飞书项目日历：初始化（创建组织级日历）/ 立即同步（对账式）
   calendarInit: () => req<{ calendarId: string; ok?: boolean; reason?: string }>('POST', '/api/v1/admin/calendar/init', {}),
   calendarSync: () => req<{ calendarId: string; created: number; updated: number; skipped: number; errors: { projectId: number; name: string; error: string }[] } | { skipped: boolean; reason: string }>('POST', '/api/v1/admin/calendar/sync', {}),
+  // S34 数据库异地备份：测试连通性（body 可带未存表单值）/ 立即备份 / 最近历史（仅管理员）
+  testBackup: (body: object) => req<{ ok: boolean; reason?: string; durationMs?: number }>('POST', '/api/v1/admin/backup/test', body),
+  runBackup: () => req<{ ok: boolean; skipped?: boolean; reason?: string; key?: string; bytes?: number; durationMs?: number; deleted?: number }>('POST', '/api/v1/admin/backup/run', {}),
+  backupHistory: () => req<{ history: { at: number; memberName: string; ok?: boolean; key?: string; bytes?: number; durationMs?: number; deleted?: number; error?: string; reason?: string }[] }>('GET', '/api/v1/admin/backup/history'),
   tokens: () => req<{ tokens: { id: number; name: string; tokenPrefix: string; scope: string; createdAt: number; expiresAt: number; revokedAt?: number | null }[] }>('GET', '/api/v1/auth/tokens'),
   issueToken: (scope: string, name: string) => req<{ token: string; id: number; scope: string; expiresAt: number }>('POST', '/api/v1/auth/tokens', { scope, name }),
   revokeToken: (id: number) => req('DELETE', `/api/v1/auth/tokens/${id}`),

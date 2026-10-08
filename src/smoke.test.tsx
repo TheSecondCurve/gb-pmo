@@ -98,6 +98,24 @@ describe('移动端响应式冒烟', () => {
     expect(screen.getByText(/保存即热生效/)).toBeTruthy()
   })
 
+  // S34（v0.35）：数据库异地备份配置卡——存储字段 + 三按钮齐全，删掉即红
+  it('Admin：数据库备份配置卡（S34）——endpoint/bucket/保留份数 + 测试连接/立即备份按钮', async () => {
+    location.hash = '#/admin/ops/backup'
+    const sFetch = vi.fn(async () => new Response(JSON.stringify({
+      backup: { endpoint: '', region: '', bucket: '', accessKeyId: '', secretAccessKey: '', prefix: 'backups/', pathStyle: false, keepCount: 30 },
+      scheduler: { backupCron: '30 3 * * *', backupEnabled: true },
+      history: [],
+    }), { status: 200 }))
+    globalThis.fetch = sFetch as unknown as typeof fetch
+    render(<StoreProvider><Admin section="ops" tab="backup" /></StoreProvider>)
+    expect((await screen.findByLabelText(/S3 兼容端点/)) as HTMLInputElement).toBeTruthy()
+    expect((screen.getByLabelText(/Bucket/) as HTMLInputElement).value).toBe('')
+    expect((screen.getByLabelText(/云端保留份数（1~365，超出删最旧）/) as HTMLInputElement).value).toBe('30')
+    expect(screen.getByRole('button', { name: /测试连接（当前表单值，可先测后存）/ })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '立即备份' })).toBeTruthy()
+    expect(screen.getByText(/30 3 \* \* \*/)).toBeTruthy() // 定时状态行回显 cron
+  })
+
   it('Chat：移动端会话选择条列出全部会话并可新建', async () => {
     location.hash = '#/chat'
     const chatFetch = vi.fn(async (input: RequestInfo | URL) => {
