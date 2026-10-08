@@ -8,3 +8,4 @@ backups/
 *.db.gz
 .DS_Store
 .video_agent/
+.zcode/
