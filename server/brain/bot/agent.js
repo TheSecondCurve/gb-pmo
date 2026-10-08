@@ -28,6 +28,15 @@ export async function runAgentLoop({ llm, systemPrompt, userText, history = [], 
     const out = await llm.complete(messages, { json: true, temperature: 0.2 })
     const parsed = parseJsonLoose(out)
     if (!parsed || !parsed.action) {
+      // S20-21（v0.38）：LLM 偶发不守 JSON 协议——多轮工具调用后想向用户澄清/作答时直接输出中文散文
+      // （线上实测 GLM-5.3-Flash，temperature 0.2 仍偶发），内容本身就是要给用户看的话，直接透出；
+      // 缺 action 但带非空 text 的半成品 JSON 同理。空输出与破碎 JSON 维持「没听懂」兜底。
+      const bare = typeof parsed?.text === 'string' && parsed.text.trim()
+        ? parsed.text
+        : out && !/^[{[]/.test(String(out).trim()) ? String(out) : ''
+      if (bare.trim()) {
+        return { kind: 'reply', result: 'replied', text: bare.slice(0, 3000), turns, queries }
+      }
       return {
         kind: 'reply', result: 'replied',
         text: '抱歉，这句我没听懂。可以试试：「我的任务」「A 项目现在怎么样」「登记风险：接口联调卡住」，或发 /help 看能力清单。',

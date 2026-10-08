@@ -290,8 +290,8 @@ describe('S20 机器人指令通道 — 对抗与边界（护栏/循环/写校�
 
   it('agent 循环边界：坏 JSON 降级、未知动作纠偏、查询超预算、轮数耗尽、clarify 归类', async () => {
     const noop = async () => '工具结果'
-    // 坏 JSON → 降级话术
-    const r1 = await runAgentLoop({ llm: { name: 'f', complete: async () => '不是 JSON' }, systemPrompt: 's', userText: 'u', execTool: noop })
+    // 坏 JSON（破碎、以 { 开头）→ 降级话术（非 JSON 散文的透出见 S20-21 用例）
+    const r1 = await runAgentLoop({ llm: { name: 'f', complete: async () => '{"action":"reply","text":"半截' }, systemPrompt: 's', userText: 'u', execTool: noop })
     expect(r1.result).toBe('replied')
     expect(r1.text).toContain('没听懂')
     // 未知动作 → 纠偏后 reply
@@ -320,6 +320,57 @@ describe('S20 机器人指令通道 — 对抗与边界（护栏/循环/写校�
     // clarify → clarified
     const r5 = await runAgentLoop({ llm: { name: 'f', complete: async () => '{"action":"clarify","text":"你指哪个项目？"}' }, systemPrompt: 's', userText: 'u', execTool: noop })
     expect(r5.result).toBe('clarified')
+  })
+
+  // S20-21（v0.38）LLM 偶发不守 JSON 协议的分层降级：线上实测（真实凭证+真实系统提示全链路复现）
+  // GLM-5.3-Flash 多轮工具调用后想向用户澄清时直接输出中文散文（内容正确、就是要给用户看的话），
+  // 此前 parseJsonLoose 失败一律回「没听懂」——用户收到驴唇不对马嘴的回复。
+  it('S20-21: 非 JSON 散文/缺 action 的半成品 JSON 透出为答复；空输出与破碎 JSON 维持没听懂', async () => {
+    const noop = async () => '工具结果'
+    // ① 纯散文（线上复现原文形态：多轮查询后向用户提问澄清）→ 原样透出
+    const prose = '已核对现有配置，起草立项提议前需确认几点：\n\n1. 项目类型：当前启用的类型有 365连麦、1v1商业咨询…\n2. 牵头人：默认写斯斯（id=1）？\n\n确认后我立即起草立项提议。'
+    const r1 = await runAgentLoop({ llm: { name: 'f', complete: async () => prose }, systemPrompt: 's', userText: 'u', execTool: noop })
+    expect(r1.kind).toBe('reply')
+    expect(r1.result).toBe('replied')
+    expect(r1.text).toBe(prose)
+    // ② 缺 action 但带非空 text 的半成品 JSON → 透出 text
+    const r2 = await runAgentLoop({ llm: { name: 'f', complete: async () => '{"text":"建议先确认项目类型再立项。"}' }, systemPrompt: 's', userText: 'u', execTool: noop })
+    expect(r2.result).toBe('replied')
+    expect(r2.text).toBe('建议先确认项目类型再立项。')
+    // ③ 空输出 → 没听懂
+    const r3 = await runAgentLoop({ llm: { name: 'f', complete: async () => '' }, systemPrompt: 's', userText: 'u', execTool: noop })
+    expect(r3.text).toContain('没听懂')
+    // ④ 破碎 JSON（以 { 开头解析失败）→ 没听懂
+    const r4 = await runAgentLoop({ llm: { name: 'f', complete: async () => '{"action":"query","sql":"SELECT' }, systemPrompt: 's', userText: 'u', execTool: noop })
+    expect(r4.text).toContain('没听懂')
+    // ⑤ 缺 action 且无 text 的 JSON → 没听懂（不透出对象字符串）
+    const r5 = await runAgentLoop({ llm: { name: 'f', complete: async () => '{"foo":1}' }, systemPrompt: 's', userText: 'u', execTool: noop })
+    expect(r5.text).toContain('没听懂')
+    // ⑥ 透出发生在工具调用之后时 turns/queries 照实计数
+    let n = 0
+    const r6 = await runAgentLoop({
+      llm: { name: 'f', complete: async () => (n++ === 0 ? '{"action":"query","sql":"SELECT 1"}' : prose) },
+      systemPrompt: 's', userText: 'u', execTool: async () => '[{"n":1}]',
+    })
+    expect(r6.text).toBe(prose)
+    expect(r6.turns).toBe(2)
+    expect(r6.queries).toBe(1)
+  })
+
+  it('S20-21: 私聊全链路——首轮查询后模型散文澄清，用户收到澄清原文而非「没听懂」；系统提示含裸文本禁令', async () => {
+    const prose = '起草立项提议前需确认：1. 项目类型选哪个？2. 牵头人默认是你吗？'
+    const { llm, calls } = scriptedLlm(
+      JSON.stringify({ action: 'query', sql: 'SELECT id, code, name FROM project_types WHERE status = \'active\'' }),
+      prose,
+    )
+    const rec = recorder()
+    // 独立 chatId：避免本用例消息混入 oc_p2p 共享会话历史、干扰其他用例的上下文断言
+    const evt = { ...p2p('fs_zhang', '新建一个项目：问问斯斯上线前准备项目'), chatId: 'oc_s2021' }
+    const out = await handleBotEvent(ctx.db, evt, { llm, send: rec.send, secret: SECRET })
+    expect(out.result).toBe('replied')
+    expect(rec.sent[0].text).toBe(prose)
+    // 系统提示加固：裸文本禁令进协议头
+    expect(calls[0][0].content).toContain('不输出裸文本')
   })
 
   it('写分发校验：非法载荷一律拒绝并给中文理由，不落库', async () => {
@@ -767,8 +818,8 @@ describe('S20-20 网关富文本（post）消息拍平', () => {
     expect(out.result).toBe('replied')
     expect(rec.sent[0].text).toContain('立项提议')
     // LLM 收到的用户消息 = 拍平文本（多行与 "- " 列表行保留；messages 数组随循环按引用追加、共享库带前序
-    // 测试会话历史，按内容定位本项目消息）
-    const userMsg = calls[0].find((m) => m.role === 'user' && m.content.includes('新建一个项目')).content
+    // 测试会话历史，按列表行内容定位本项目消息）
+    const userMsg = calls[0].find((m) => m.role === 'user' && m.content.includes('私董专区内容 - 下午茶上传')).content
     expect(userMsg).toContain('新建一个项目：问问斯斯上线前准备项目')
     expect(userMsg).toContain('\n- 私董专区内容 - 下午茶上传')
     // 审计原文 = 拍平文本
