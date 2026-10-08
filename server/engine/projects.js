@@ -181,6 +181,12 @@ export function updateProject(db, id, patch, by) {
   if ('priority' in patch && patch.priority !== cur.priority) {
     fields.priority = assertValue('priority', patch.priority)
   }
+  // S35（v0.39）换牵头人补全：此前无任何通道可改；新牵头人须在职，变更落 owner_change 留痕
+  if ('leadMemberId' in patch && patch.leadMemberId !== cur.leadMemberId) {
+    const lead = db.prepare(`SELECT id FROM members WHERE id = ? AND status = 'active'`).get(Number(patch.leadMemberId))
+    if (!lead) throw Object.assign(new Error('新牵头人不存在或已离职'), { statusCode: 400 })
+    fields.lead_member_id = lead.id
+  }
   if (!Object.keys(fields).length) return getProjectDetail(db, id)
   fields.updated_at = Date.now()
   const tx = db.transaction(() => {
@@ -190,6 +196,12 @@ export function updateProject(db, id, patch, by) {
       addEvent(db, {
         projectId: id, eventType: 'priority_change', nature: 'record', sourcePlatform: 'web', generatedBy: 'web',
         summary: `优先级 ${cur.priority} → ${fields.priority}（#${by}）`, speakerMemberId: by,
+      })
+    }
+    if (fields.lead_member_id) {
+      addEvent(db, {
+        projectId: id, eventType: 'owner_change', nature: 'record', sourcePlatform: 'web', generatedBy: 'web',
+        summary: `项目牵头人 #${cur.leadMemberId} → #${fields.lead_member_id}（#${by}）`, speakerMemberId: by,
       })
     }
     audit(db, { memberId: by, action: 'project.update', objectType: 'project', objectId: id, detail: { fields: Object.keys(patch) } })

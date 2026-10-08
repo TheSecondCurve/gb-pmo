@@ -485,6 +485,21 @@
 >   - S34-3 当执行备份时，应产生在线快照的 gzip 对象（key=前缀+`gb-pmo-YYYYMMDD-HHMMSS.db.gz`，北京时刻），内容解压后为完整 SQLite 库（含备份前写入的数据）；成功与失败均落审计，历史端点可读最近记录。
 >   - S34-4 当云端备份对象数超过保留份数时，应只删除最旧的超出部分；当存储未配全时定时/手动备份应跳过（skipped+原因）且不发起网络请求；调度器判定应包含 backup 任务（enabled 开关生效）。
 
+> **场景 S35（P0）— 成员 — 全线 — 机器人项目维护面补全（v0.39）**
+> - 触发时机：项目专题群里口述「建立任务：XXX，归属给我」时，机器人只能登记事件、无法建任务（线上实测 2026-10-08：`bot_commands` #73 → `project_events` #3，任务未建）——项目维度的创建/维护动作在 IM 面存在能力空档；用户拍板「项目群里会发生的事都要能经机器人操作完成」（用户 2026-10-08）。
+> - 操作内容：机器人写面新增三类**提议**（确认卡，牵头人/管理员点按生效）与一类**建议事件**扩维（全员可确认，与任务建议同口径）：①`add_task` 给项目建任务（标题必填，责任人/起止日可选，缺省责任人=项目牵头人 D3）；②`add_milestone` 加里程碑（名称必填，计划日期可选）；③`update_project` 项目信息变更（名称/客户名/优先级/计划起止/牵头人，至少一个字段；状态不可经此改，S29）；④`suggest_event` 扩展里程碑目标（`targetMilestoneId`，字段 `plan_date` 改期 / `status` 达成·延误·取消，达成时落实际日期=当天）。顺带补全引擎缺口：`projects.updateProject` 支持换牵头人（web/Agent/机器人同通道，落 `owner_change` 留痕事件）；`pushSuggestion` 里程碑目标不再误 JOIN 同 id 任务的通知。
+> - 产生/变更的记录：复用 `proposals`（新增 kind）与 `project_events`（`target_object='milestone'`）既有结构，零迁移；生效分发到 `tasks.createTask` / `tasks.createMilestone` / `projects.updateProject` 既有引擎（终态守卫、审计、留痕事件全部继承）。
+> - 完成标志：群内/私聊口述上述维护意图 → 机器人产确认卡 → 有权人点按 → 任务/里程碑/项目字段真实落库并回执「已生效」；协议系统提示词同步新动作与「不得谎称已生效」。
+> - 审批/协作：`add_task`/`add_milestone`/`update_project` 确认矩阵=项目牵头人或系统管理员（与立项/结项/取消同口径：动项目盘子的事牵头的拍板）；提议人可自行撤回（S25 既有规则）；里程碑建议沿用任务建议「任意绑定成员可确认」（v0.34 口径）。
+> - 明确不做：任务改名与删除（任务无删除语义、改名低频走页面）；任务参考资料经机器人维护（页面/Agent 通道已有，S23）；渠道解绑（配置台已有）；成员/权限类操作（非项目维度，S17 面）。
+> - 验收标准：
+>   - S35-1 当成员口述建任务时，机器人应产 `add_task` 提议确认卡而不直接落库；projectId 不真实或 title 空白应拒绝并说明原因；确认生效后任务应为 `todo`、责任人缺省=项目牵头人（D3）、落 `task.create` 审计；项目已结项/取消时确认应失败并提示任务面只读；非牵头人且非管理员确认应 403，提议人可撤回。
+>   - S35-2 当口述修改项目信息（名称/客户名/优先级/计划起止）时，应产 `update_project` 提议确认卡；一个变更字段都不给、优先级非法、或试图改 `status` 时应拒绝（状态仅经结项/取消，S29）；确认生效后走 `updateProject` 同一校验与留痕（优先级变更落事件、审计可查）。
+>   - S35-3 当 `update_project` 携带 `leadMemberId` 确认生效时，项目牵头人应变更并落 `owner_change` 留痕事件；新牵头人不在职时确认应失败。（web PATCH 同通道生效）
+>   - S35-4 当口述里程碑改期或状态变更（达成/延误/取消）时，应产 `target_object='milestone'` 的待确认建议事件；确认后里程碑计划日期/状态应生效，`met` 应落实际日期=当天（北京日）；里程碑 id 不真实应拒绝；建议推送不应误通知与里程碑同 id 任务的责任人。
+>   - S35-5 当口述加里程碑时，应产 `add_milestone` 提议确认卡，生效后落 `milestones`（`planned`）；名称空白或项目 id 不真实应拒绝。
+>   - S35-6 机器人协议系统提示词应包含新动作行（add_task / add_milestone / update_project / 里程碑建议）与「不得谎称已生效」规则；私聊全链路（口述 → 卡 → 点按 → 落库回执）可用。
+
 **P1/P2 场景（编号预分配，细节在晋级时补全）：**
 
 | 编号 | 级别 | 场景 | 一句话说明 |
@@ -721,6 +736,14 @@ Interactive dashboard 是 P0 标配交付（见 analytics-design.md）。**维�
 **接线**：定时挂在既有调度器（S18）第五个任务 `backup`（`scheduler.backupCron` 默认 `30 3 * * *`、`backupEnabled` 默认 true，心跳热生效；cron 行在「项目管理→阈值与推送」与既有四任务同列）。存储配置独立 settings key `backup`，校验：endpoint 须 http(s) URL、keepCount 1~365、pathStyle 布尔、prefix 归一化（去首斜杠补尾斜杠）；四项完整性（endpoint/bucket/accessKeyId/secretAccessKey）在测试/执行时判定，未配全=跳过并回原因（与 S22 未初始化静默跳过同构）。三个 admin 端点：`POST /api/v1/admin/backup/test`（body 可带未存覆盖值，三步探针）、`POST /api/v1/admin/backup/run`（立即备份；上游失败 200+`{ok:false,reason}` 走 v0.21 PaaS 网关模式）、`GET /api/v1/admin/backup/history`（读 `backup.run` 审计最近 10 条）。测试经 buildApp 注入 `backupFetch` 假实现，不发出真实网络。Agent `put_setting` 白名单自动包含新 key（setSetting 同一校验口）。
 
 **不做的**：不做增量/WAL 归档（团队规模全量 gzip 足够，恢复=下载+gunzip+起服务，照 db-migrations 冒烟路径手工执行）；不做恢复按钮与多云双写；备份失败不推送告警（审计+error 日志，后续按需）。
+
+### 7.17 机器人项目维护面补全（S35，v0.39）
+
+**动机与口径**：线上实测（2026-10-08，`bot_commands` #73）暴露 IM 面能力空档——口述「建立任务」只能落成阻塞事件，任务建不出来。本特性把**项目维度的创建/维护动作补进机器人写面**，全部沿用既有信任边界：创建/变更类走**提议确认卡**（`proposals` 新 kind：`add_task` / `add_milestone` / `update_project`，确认矩阵=项目牵头人或系统管理员，与立项/结项/取消同口径）；里程碑改期/状态走**建议事件**（`project_events.target_object='milestone'`，S4-3 既有通道，任意绑定成员可确认，v0.34 口径）。LLM 只起草不生效（AGENTS.md §4），确认分发回既有引擎（`tasks.createTask` / `tasks.createMilestone` / `projects.updateProject`），终态守卫、D3 缺省责任人、审计、留痕事件零改动继承。
+
+**顺带的引擎补全**：`projects.updateProject` 此前不支持换牵头人（任何通道都改不了）——本特性补上 `leadMemberId` 支持（新牵头人须在职，变更落 `owner_change` 留痕事件），web PATCH / Agent / 机器人三通道同享；`pushSuggestion` 对 `target_object='milestone'` 的建议不再按同 id 任务误通知责任人。
+
+**明确不做**：任务改名/删除（无删除语义、改名低频走页面）、任务参考资料经机器人维护（S23 页面/Agent 已有）、渠道解绑（配置台已有）、成员/权限操作（非项目维度）。
 
 ### 7.3 偏离记录（须写入项目实例文档）
 

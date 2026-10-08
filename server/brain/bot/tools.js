@@ -113,6 +113,8 @@ function writeRecordEvent(db, payload, ctx) {
 }
 
 function writeSuggestEvent(db, payload, ctx) {
+  const milestoneId = Number(payload.targetMilestoneId)
+  if (milestoneId) return writeMilestoneSuggest(db, payload, ctx, milestoneId) // S35：里程碑改期/状态
   const taskId = Number(payload.targetTaskId)
   const task = taskId
     ? db.prepare('SELECT t.id, t.title, t.project_id AS pid, p.status AS project_status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?').get(taskId)
@@ -149,6 +151,48 @@ function writeSuggestEvent(db, payload, ctx) {
     targetTaskId: taskId, targetField: field, targetValue: String(value), generatedBy: 'agent',
   })
   pushSuggestion(db, evt) // 既有语义：推目标任务责任人 + 项目牵头人（pushes 表）
+  return { type: 'card', cardKind: 'suggest', eventId: evt.id, summary: evt.summary, eventType: evt.eventType }
+}
+
+// S35：里程碑建议——建议通道扩展到里程碑（target_object='milestone'，确认走 events.applyMilestonePatch）。
+// 全员可确认口径与任务建议一致（v0.34）；plan_date 改期 / status 达成·延误·取消（met 落实际日期在确认侧）。
+const MILESTONE_FIELDS = { plan_date: 'schedule_change', status: 'status_change' }
+
+function writeMilestoneSuggest(db, payload, ctx, milestoneId) {
+  const ms = db
+    .prepare('SELECT m.id, m.name, m.project_id AS pid, p.status AS project_status FROM milestones m JOIN projects p ON p.id = m.project_id WHERE m.id = ?')
+    .get(milestoneId)
+  if (!ms) return refused('targetMilestoneId 必填且须为真实里程碑 id（先 query 查里程碑）')
+  if (ms.project_status === 'closed' || ms.project_status === 'cancelled') return refused('项目已结项/取消，任务面只读')
+  if (payload.projectId !== undefined && payload.projectId !== null && Number(payload.projectId) !== ms.pid) {
+    return refused('里程碑不属于该项目')
+  }
+  const field = String(payload.targetField || '')
+  if (!(field in MILESTONE_FIELDS)) return refused('targetField 仅支持 plan_date / status')
+  let value = payload.targetValue
+  let valueLabel
+  if (field === 'plan_date') {
+    if (!DATE_RE.test(String(value))) return refused('日期值须为 YYYY-MM-DD（按今天自己换算）')
+    valueLabel = String(value)
+  } else {
+    try {
+      value = assertValue('milestoneStatus', String(value))
+      valueLabel = label('milestoneStatus', value)
+    } catch {
+      return refused('状态值须为 planned / met / missed / cancelled')
+    }
+  }
+  const fieldLabel = { plan_date: '计划日期', status: '状态' }[field]
+  const summary = String(payload.summary || '').trim() || `里程碑「${ms.name}」${fieldLabel} → ${valueLabel}`
+  const evt = addEvent(db, {
+    projectId: ms.pid, businessTime: ctx.evt?.ts || Date.now(), nature: 'suggestion',
+    eventType: MILESTONE_FIELDS[field], summary: summary.slice(0, 200),
+    rawSnapshot: (ctx.evt?.text || '').slice(0, 2000) || null,
+    sourcePlatform: ctx.sourcePlatform || 'feishu', sourceRef: ctx.evt?.messageId || null,
+    speakerMemberId: ctx.member.id, speakerLabel: ctx.member.name,
+    targetObject: 'milestone', targetTaskId: milestoneId, targetField: field, targetValue: String(value), generatedBy: 'agent',
+  })
+  pushSuggestion(db, evt)
   return { type: 'card', cardKind: 'suggest', eventId: evt.id, summary: evt.summary, eventType: evt.eventType }
 }
 
@@ -257,6 +301,67 @@ function softValidateProposal(db, kind, p) {
       payload: { code: String(p.code), name: String(p.name), ...(p.description ? { description: String(p.description) } : {}), tasks },
       summary: `新建项目类型「${p.name}」（${p.code}，内嵌任务 ${tasks.length} 项${tasks.reduce((s, t) => s + ((t.refs ?? []).length), 0) ? `，参考资料 ${tasks.reduce((s, t) => s + ((t.refs ?? []).length), 0)} 条` : ''}）`,
     }
+  }
+  // —— S35 项目维护面：建任务 / 建里程碑 / 项目信息变更（软校验，硬校验在引擎确认时兜底）——
+  if (kind === 'add_task') {
+    const proj = getProj(db, p.projectId)
+    if (!proj) return { error: 'projectId 必填且须为真实项目 id（先 query 查项目）' }
+    const title = String(p.title || '').trim()
+    if (!title) return { error: 'title 必填（任务标题）' }
+    if (p.planStartDate && !DATE_OK.test(String(p.planStartDate))) return { error: 'planStartDate 须为 YYYY-MM-DD' }
+    if (p.planEndDate && !DATE_OK.test(String(p.planEndDate))) return { error: 'planEndDate 须为 YYYY-MM-DD' }
+    let owner = null
+    if (p.responsibleMemberId != null) {
+      owner = db.prepare(`SELECT id, name FROM members WHERE id = ? AND status = 'active'`).get(Number(p.responsibleMemberId))
+      if (!owner) return { error: '责任人不存在或已离职（先 query 查成员）' }
+    }
+    return {
+      payload: {
+        projectId: proj.id, title: title.slice(0, 200),
+        ...(owner ? { responsibleMemberId: owner.id } : {}),
+        ...(p.planStartDate ? { planStartDate: String(p.planStartDate) } : {}),
+        ...(p.planEndDate ? { planEndDate: String(p.planEndDate) } : {}),
+      },
+      summary: `项目「${proj.name}」新增任务「${title.slice(0, 200)}」（责任人 ${owner ? owner.name : '缺省牵头人'}${p.planEndDate ? `，截止 ${p.planEndDate}` : ''}）`,
+    }
+  }
+  if (kind === 'add_milestone') {
+    const proj = getProj(db, p.projectId)
+    if (!proj) return { error: 'projectId 必填且须为真实项目 id（先 query 查项目）' }
+    const name = String(p.name || '').trim()
+    if (!name) return { error: 'name 必填（里程碑名称）' }
+    if (p.planDate && !DATE_OK.test(String(p.planDate))) return { error: 'planDate 须为 YYYY-MM-DD' }
+    return {
+      payload: { projectId: proj.id, name: name.slice(0, 200), ...(p.planDate ? { planDate: String(p.planDate) } : {}) },
+      summary: `项目「${proj.name}」新增里程碑「${name.slice(0, 200)}」${p.planDate ? `（${p.planDate}）` : ''}`,
+    }
+  }
+  if (kind === 'update_project') {
+    const proj = getProj(db, p.projectId)
+    if (!proj) return { error: 'projectId 必填且须为真实项目 id（先 query 查项目）' }
+    if ('status' in p) return { error: '项目状态仅可经结项/取消变更（S29）：请走 close_project / cancel_project 提议' }
+    const KEYS = ['name', 'clientName', 'priority', 'planStartDate', 'planEndDate', 'leadMemberId']
+    const changes = []
+    const payloadOut = { projectId: proj.id }
+    for (const key of KEYS) {
+      if (p[key] === undefined) continue
+      let value = p[key]
+      if (key === 'priority') {
+        try { assertValue('priority', String(value)) } catch { return { error: `priority 非法: ${value}（high|medium|low）` } }
+      }
+      if ((key === 'planStartDate' || key === 'planEndDate') && !DATE_OK.test(String(value))) return { error: `${key} 须为 YYYY-MM-DD` }
+      if (key === 'leadMemberId') {
+        const m = db.prepare(`SELECT id, name FROM members WHERE id = ? AND status = 'active'`).get(Number(value))
+        if (!m) return { error: '新牵头人不存在或已离职（先 query 查成员）' }
+        changes.push(`牵头人→${m.name}`)
+        value = m.id
+      } else {
+        changes.push(`${key}→${value}`)
+      }
+      payloadOut[key] = value
+    }
+    if (!changes.length) return { error: '至少提供一个要变更的字段（name/clientName/priority/planStartDate/planEndDate/leadMemberId）' }
+    return { payload: payloadOut, summary: `项目「${proj.name}」变更：${changes.join('、')}` }
   }
   return { error: `未知提议类型 ${kind}` }
 }
