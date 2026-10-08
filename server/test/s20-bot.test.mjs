@@ -914,3 +914,161 @@ describe('S20 机器人指令通道 — 群讨论上下文 recent_chat（v0.34�
     expect(feedback).toContain('仅项目专题群')
   })
 })
+
+// —— v0.36（S20-19）：私聊占位反馈——慢路径先发「收到，正在处理…」，答案就绪把同一条消息原地编辑为最终答复。
+// patch 注入编辑记录器（飞书「更新应用发送的消息内容」PUT 的适配层抽象）；未注入 patch=旧契约，行为与今天一致。
+describe('S20 机器人私聊占位反馈（v0.36）', () => {
+  beforeAll(() => setSetting(ctx.db, 'im.feishu', { commandQuotaPerDay: 500 }, 1))
+
+  const patcher = (fail = false) => {
+    const patched = []
+    return {
+      patched,
+      patch: async (m) => {
+        patched.push(m)
+        if (fail) throw new Error('编辑失败')
+        return { ok: true }
+      },
+    }
+  }
+
+  // 本地记录器：把出站 messageId 一并记进出站条目（占位反馈断言要比对「同一条消息」，共享 recorder 不存 id）
+  const typedRecorder = () => {
+    const sent = []
+    let n = 0
+    return { sent, send: async (m) => { const messageId = `bot_typing_${++n}`; sent.push({ ...m, messageId }); return { messageId } } }
+  }
+
+  it('S20-19: 私聊自然语言——占位先发、答案原地编辑同一条消息、不产生第二条回复', async () => {
+    const p = await mkProject('占位甲项目', ctx.members.lead.id)
+    const { llm } = scriptedLlm(
+      JSON.stringify({ action: 'query', sql: `SELECT COUNT(*) AS n FROM tasks WHERE project_id = ${p.id}` }),
+      JSON.stringify({ action: 'reply', text: '占位甲项目一切正常。' })
+    )
+    const rec = typedRecorder()
+    const pp = patcher()
+    const evt = p2p('fs_zhang', '占位甲项目怎么样？')
+    const out = await handleBotEvent(ctx.db, evt, { llm, send: rec.send, patch: pp.patch, secret: SECRET })
+    expect(out.result).toBe('replied')
+    // 只发过一条消息：占位（最终被编辑成答案）
+    expect(rec.sent).toHaveLength(1)
+    expect(rec.sent[0].text).toContain('正在处理')
+    // 原地编辑：同一条 message_id 被替换为最终文本
+    expect(pp.patched).toHaveLength(1)
+    expect(pp.patched[0].messageId).toBe(rec.sent[0].messageId)
+    expect(pp.patched[0].chatId).toBe(evt.chatId)
+    expect(pp.patched[0].text).toContain('占位甲项目一切正常')
+    // 审计口径不变：占位消息 id 即最终答复 bot_reply 回执行的 id（S20-15 语义）
+    const replyRow = ctx.db.prepare('SELECT * FROM bot_commands WHERE message_id = ?').get(rec.sent[0].messageId)
+    expect(replyRow.kind).toBe('bot_reply')
+    expect(replyRow.raw_text).toContain('占位甲项目一切正常')
+  })
+
+  it('S20-19: 斜杠命令/门禁引导/LLM 未配置不占位（毫秒级出口单条直达）', async () => {
+    const rec1 = typedRecorder(); const pp1 = patcher()
+    await handleBotEvent(ctx.db, p2p('fs_zhang', '/help'), { send: rec1.send, patch: pp1.patch, secret: SECRET })
+    expect(rec1.sent).toHaveLength(1)
+    expect(rec1.sent[0].text).toContain('/new')
+    expect(pp1.patched).toHaveLength(0)
+
+    const rec2 = typedRecorder(); const pp2 = patcher()
+    const out2 = await handleBotEvent(ctx.db, p2p('fs_ghost19', '我的任务'), { llm: scriptedLlm().llm, send: rec2.send, patch: pp2.patch, secret: SECRET })
+    expect(out2.result).toBe('guidance')
+    expect(rec2.sent).toHaveLength(1)
+    expect(rec2.sent[0].text).toContain('/bind')
+    expect(pp2.patched).toHaveLength(0)
+
+    const rec3 = typedRecorder(); const pp3 = patcher()
+    const out3 = await handleBotEvent(ctx.db, p2p('fs_zhang', '随便问问不配置 LLM'), { send: rec3.send, patch: pp3.patch, secret: SECRET })
+    expect(out3.result).toBe('no_llm')
+    expect(rec3.sent).toHaveLength(1)
+    expect(rec3.sent[0].text).toContain('/help')
+    expect(pp3.patched).toHaveLength(0)
+  })
+
+  it('S20-19: 编辑失败降级——答案改发新消息必达（占位留在原地）', async () => {
+    const { llm } = scriptedLlm(JSON.stringify({ action: 'reply', text: '降级路径的答案。' }))
+    const rec = typedRecorder()
+    const pp = patcher(true) // 编辑必失败
+    const out = await handleBotEvent(ctx.db, p2p('fs_zhang', '再问一句'), { llm, send: rec.send, patch: pp.patch, secret: SECRET })
+    expect(out.result).toBe('replied')
+    expect(rec.sent).toHaveLength(2) // 占位 + 另发的答案
+    expect(rec.sent[0].text).toContain('正在处理')
+    expect(rec.sent[1].text).toContain('降级路径的答案')
+    expect(pp.patched).toHaveLength(1) // 尝试过编辑
+    // 降级路径审计照落（新消息 id 的 bot_reply）
+    const replyRow = ctx.db.prepare('SELECT * FROM bot_commands WHERE message_id = ?').get(rec.sent[1].messageId)
+    expect(replyRow.kind).toBe('bot_reply')
+    expect(replyRow.raw_text).toContain('降级路径的答案')
+  })
+
+  it('S20-19: 群聊不占位（一期仅私聊）；typingFeedback=false 恢复单条回复形态', async () => {
+    const { llm } = scriptedLlm(JSON.stringify({ action: 'reply', text: '群里直接答。' }))
+    const rec = typedRecorder(); const pp = patcher()
+    const out = await handleBotEvent(ctx.db, { ...group('fs_zhang', 'oc_typing_g', '@bot 在吗'), mentioned: true }, { llm, send: rec.send, patch: pp.patch, secret: SECRET })
+    expect(out.result).toBe('replied')
+    expect(rec.sent).toHaveLength(1)
+    expect(rec.sent[0].text).toContain('群里直接答')
+    expect(pp.patched).toHaveLength(0)
+
+    setSetting(ctx.db, 'im.feishu', { typingFeedback: false, commandQuotaPerDay: 500 }, 1)
+    try {
+      const rec2 = typedRecorder(); const pp2 = patcher()
+      const out2 = await handleBotEvent(ctx.db, p2p('fs_zhang', '又一句'), { llm: scriptedLlm(JSON.stringify({ action: 'reply', text: '开关关了。' })).llm, send: rec2.send, patch: pp2.patch, secret: SECRET })
+      expect(out2.result).toBe('replied')
+      expect(rec2.sent).toHaveLength(1)
+      expect(rec2.sent[0].text).toContain('开关关了')
+      expect(pp2.patched).toHaveLength(0)
+    } finally {
+      setSetting(ctx.db, 'im.feishu', { commandQuotaPerDay: 500 }, 1) // 整值替换语义：恢复默认 typingFeedback=true
+    }
+  })
+
+  it('S20-19: 卡片出口——占位编辑为合成回执文本，确认卡照发；编辑失败不阻塞卡片', async () => {
+    const p = await mkProject('占位乙项目', ctx.members.lead.id)
+    const taskId = ctx.db.prepare('SELECT id FROM tasks WHERE project_id = ? ORDER BY id').get(p.id).id
+    const { llm } = scriptedLlm(
+      JSON.stringify({ action: 'write', kind: 'suggest_event', payload: { targetTaskId: taskId, targetField: 'status', targetValue: 'done' } })
+    )
+    const rec = typedRecorder(); const pp = patcher()
+    const out = await handleBotEvent(ctx.db, p2p('fs_zhang', `把任务 #${taskId} 标为完成`), { llm, send: rec.send, patch: pp.patch, secret: SECRET })
+    expect(out.result).toBe('card_sent')
+    expect(rec.sent).toHaveLength(2) // 占位 + 卡片
+    expect(rec.sent[0].text).toContain('正在处理')
+    expect(rec.sent[1].card).toBeTruthy()
+    expect(pp.patched).toHaveLength(1) // 占位被编辑为回执文本
+    expect(pp.patched[0].messageId).toBe(rec.sent[0].messageId)
+    expect(pp.patched[0].text).toContain('待确认')
+
+    // 编辑失败：卡片仍必达（占位留在原地）
+    const rec2 = typedRecorder(); const pp2 = patcher(true)
+    const out2 = await handleBotEvent(ctx.db, p2p('fs_li', `把任务 #${taskId} 标为完成`), { llm: scriptedLlm(JSON.stringify({ action: 'write', kind: 'suggest_event', payload: { targetTaskId: taskId, targetField: 'status', targetValue: 'doing' } })).llm, send: rec2.send, patch: pp2.patch, secret: SECRET })
+    expect(out2.result).toBe('card_sent')
+    expect(rec2.sent.some((m) => m.card)).toBe(true)
+  })
+
+  it('S20-19: patchText 以 PUT /im/v1/messages/:message_id 编辑应用消息（msg_type=text，全量内容）', async () => {
+    const real = globalThis.fetch
+    const calls = []
+    globalThis.fetch = async (url, opts = {}) => {
+      const u = String(url)
+      if (u.includes('/auth/v3/tenant_access_token')) return new Response(JSON.stringify({ code: 0, tenant_access_token: 't-1' }), { status: 200 })
+      if (u.includes('/im/v1/messages/om_edit_1') && opts?.method === 'PUT') {
+        calls.push({ url: u, body: JSON.parse(opts.body) })
+        return new Response(JSON.stringify({ code: 0 }), { status: 200 })
+      }
+      throw new Error('unexpected fetch: ' + u + ' ' + String(opts?.method || ''))
+    }
+    try {
+      const { patchText } = await import('../brain/connectors/feishu.js')
+      const r = await patchText({ appId: 'cli_x', appSecret: 's' }, 'om_edit_1', '替换后的答案')
+      expect(r.ok).toBe(true)
+      expect(calls).toHaveLength(1)
+      expect(calls[0].url).toContain('/im/v1/messages/om_edit_1')
+      expect(calls[0].body.msg_type).toBe('text')
+      expect(JSON.parse(calls[0].body.content).text).toBe('替换后的答案')
+    } finally {
+      globalThis.fetch = real
+    }
+  })
+})

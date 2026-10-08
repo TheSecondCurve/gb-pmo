@@ -17,6 +17,10 @@ import { runSlash, runConversation } from './pipeline.js'
 // 绑定码签发/消费随斜杠命令移入统一管线；re-export 维持既有导入方（routes 与测试）不变
 export { issueBindCode, consumeBindCode } from './pipeline.js'
 
+// S20-19（v0.36）私聊占位反馈：确定走 LLM 循环后先发占位文本，答案就绪把同一条消息原地编辑为最终答复
+// （编辑接口见 connectors/feishu.js#patchText）。飞书无原生「正在输入」状态，此为等价形态。
+const TYPING_TEXT = '收到，正在处理…'
+
 // —— 签名与卡片 ——
 
 function hmac(secret, canonical) {
@@ -88,7 +92,8 @@ export function buildBindCard({ projectId, projectName, chatId, chatName }, secr
 
 /**
  * @param {object} evt { messageId, chatId, chatType:'p2p'|'group', senderOpenId, text, ts?, external?, chatTitle? }
- * @param {object} opts { llm(测试 fake), send({chatId,text?,card?})→{messageId}, secret(HMAC 密钥) }
+ * @param {object} opts { llm(测试 fake), send({chatId,text?,card?})→{messageId}, secret(HMAC 密钥),
+ *                       patch?({chatId,messageId,text})→{ok}(S20-19 占位消息编辑通道，注入后私聊慢路径启用占位反馈) }
  */
 export async function handleBotEvent(db, evt, opts = {}) {
   const startedAt = Date.now()
@@ -112,7 +117,23 @@ export async function handleBotEvent(db, evt, opts = {}) {
         patch.result ?? null, patch.llmCalls ?? null, Date.now() - startedAt, rowId)
     return { result: patch.result }
   }
+  // S20-19 占位消息 id：慢路径开始（onLlmStart）时落值；答案经 reply/卡片出口消费后清空。
+  // 占位消息 id 即最终答复 bot_reply 回执行的 id（编辑不换 id，审计与多轮上下文口径不变）。
+  let typingMessageId = null
   const reply = async (replyText, patch = {}) => {
+    if (typingMessageId) {
+      const mid = typingMessageId
+      typingMessageId = null
+      let edited = false
+      try {
+        edited = Boolean(await opts.patch?.({ chatId: evt.chatId, messageId: mid, text: replyText }))
+      } catch { edited = false }
+      if (edited) {
+        recordReplyRow(db, mid, evt, replyText, patch.intent)
+        return finish(patch)
+      }
+      // 编辑失败降级：占位留在原地，答案改发新消息（必达，不阻塞）
+    }
     const sent = await send({ chatId: evt.chatId, text: replyText })
     recordReplyRow(db, sent?.messageId, evt, replyText, patch.intent)
     return finish(patch)
@@ -163,23 +184,46 @@ export async function handleBotEvent(db, evt, opts = {}) {
   } catch {
     historyDegraded = true
   }
-  const out = await runConversation(db, env, {
-    llm: opts.llm, history, reply, fetchChat: opts.fetchChat,
-    systemPrompt: buildSystemPrompt(db, { member, channel, chatType: evt.chatType, hasHistory: history.length > 0 }),
-    detailExtra: historyDegraded ? { historyDegraded: true } : undefined,
-  })
+  // S20-19：仅私聊 + 开关开 + 调用方注入了编辑能力才占位（群聊一期不做；旧调用方/未注入 patch 行为与今天一致）
+  const typingEnabled = evt.chatType === 'p2p' && cfg.typingFeedback !== false && typeof opts.patch === 'function'
+  const onLlmStart = typingEnabled ? async () => {
+    const sent = await send({ chatId: evt.chatId, text: TYPING_TEXT })
+    if (sent?.messageId) typingMessageId = sent.messageId
+  } : undefined
+  let out
+  try {
+    out = await runConversation(db, env, {
+      llm: opts.llm, history, reply, fetchChat: opts.fetchChat, onLlmStart,
+      systemPrompt: buildSystemPrompt(db, { member, channel, chatType: evt.chatType, hasHistory: history.length > 0 }),
+      detailExtra: historyDegraded ? { historyDegraded: true } : undefined,
+    })
+  } catch (e) {
+    // S20-19：循环抛错时占位尽力改为失败提示（不留「正在处理」孤儿），再原样上抛（网关日志语义不变）
+    if (typingMessageId) {
+      const mid = typingMessageId
+      typingMessageId = null
+      try { await opts.patch({ chatId: evt.chatId, messageId: mid, text: `处理失败：${e.message}` }) } catch { /* 尽力而为 */ }
+    }
+    throw e
+  }
 
   // ⑦ 卡片出口：渲染为 HMAC 签名确认卡（建议/提议/群登记），回执合成文本落 bot_reply（S20-15，LLM 可指代）
   if (out?.type === 'card') {
     const w = out.writeResult
     const secret = opts.secret ?? (process.env.GB_PMO_SESSION_SECRET || '')
     const card = w.cardKind === 'bind' ? buildBindCard(w, secret) : w.cardKind === 'propose' ? buildProposalCard(w, secret) : buildSuggestCard(w, secret)
-    const sent = await send({ chatId: evt.chatId, card })
     const cardDesc = w.cardKind === 'bind'
       ? `[群登记确认卡] 将本群绑定为项目「${w.projectName}」的专题渠道，待确认`
       : w.cardKind === 'propose'
         ? `[已生成提议 #${w.proposalId}] ${w.summary}，待有权人确认`
         : `[已生成待确认事件 #${w.eventId}] ${w.summary}，待确认`
+    // S20-19：占位消息编辑为合成回执文本（尽力而为，失败不阻塞卡片发送）
+    if (typingMessageId) {
+      const mid = typingMessageId
+      typingMessageId = null
+      try { await opts.patch({ chatId: evt.chatId, messageId: mid, text: cardDesc }) } catch { /* 占位留原地 */ }
+    }
+    const sent = await send({ chatId: evt.chatId, card })
     recordReplyRow(db, sent?.messageId, evt, cardDesc, `write:${w.cardKind}`)
     return finish({ memberId: member.id, intent: `write:${w.cardKind}`, result: 'card_sent', llmCalls: out.llmCalls, detail: { ...out.detail, eventId: w.eventId ?? null } })
   }

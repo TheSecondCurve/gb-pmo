@@ -91,7 +91,7 @@ function FeishuCard() {
   const [cfg, setCfg] = useState<{
     appId: string; appSecret: string
     botEnabled?: boolean; answerUnregisteredGroups?: boolean; commandQuotaPerDay?: number
-    contextTurns?: number; contextIdleMinutes?: number
+    contextTurns?: number; contextIdleMinutes?: number; typingFeedback?: boolean
   } | null>(null)
   const [calendarId, setCalendarId] = useState<string | null>(null)
   const [calMsg, setCalMsg] = useState('')
@@ -151,6 +151,10 @@ function FeishuCard() {
             未登记群也响应问答
           </label>
           <label className="flex items-center gap-1.5">
+            <input type="checkbox" checked={cfg.typingFeedback !== false} onChange={(e) => setCfg({ ...cfg, typingFeedback: e.target.checked })} />
+            私聊「处理中」占位反馈
+          </label>
+          <label className="flex items-center gap-1.5">
             每成员每日指令限额
             <input
               type="number" min={0} className="w-20 rounded-md border border-[var(--color-line)] px-2 py-1 text-[13px] outline-none focus:border-[var(--color-brand)]"
@@ -173,7 +177,7 @@ function FeishuCard() {
           </label>
         </div>
         <p className="mb-3 text-[12px] leading-5 text-[var(--color-ink-soft)]">
-          机器人开关与限额「保存即热生效」：长连接立即建立或断开，无需重启进程（S20-12）；「多轮记忆条数」= 机器人记住的本会话最近消息数（0 = 关闭记忆，用户随时可发 /new 清空）；「空闲开新话题」= 超过该时长未说话自动遗忘此前对话。开启前需完成应用侧配置（机器人能力 + 长连接事件订阅，附录 A.1 第 7 步），可先点「测试连接」验证。
+          机器人开关与限额「保存即热生效」：长连接立即建立或断开，无需重启进程（S20-12）；「多轮记忆条数」= 机器人记住的本会话最近消息数（0 = 关闭记忆，用户随时可发 /new 清空）；「空闲开新话题」= 超过该时长未说话自动遗忘此前对话；「私聊占位反馈」= 私聊自然语言指令先回「收到，正在处理…」、答案就绪后原地替换同一条消息（需应用开通 im:message:update 权限，缺权限时自动降级为另发一条，S20-19）。开启前需完成应用侧配置（机器人能力 + 长连接事件订阅，附录 A.1 第 7 步），可先点「测试连接」验证。
         </p>
         <div className="flex items-center gap-2">
           <Btn kind="primary" onClick={async () => {
