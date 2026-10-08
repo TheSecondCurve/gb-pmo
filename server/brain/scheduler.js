@@ -1,6 +1,6 @@
-// 调度器（S18，v0.7）：三项大脑定时任务由 settings.scheduler 的 cron + 每任务 enabled 开关驱动。
-// 调度器随进程默认运行（原 ENABLE_SCHEDULER 环境变量已删除）；心跳每分钟读配置判定（改配置保存即生效，
-// 无需重启）；判定语义 =「上次运行之后到现在」窗口内存在 cron 匹配分钟（isDue）。测试不启动调度器
+// 调度器（S18，v0.7）：五项定时任务（信息更新对齐 / 预警 / 日报 / 项目日历同步 / 数据库备份）由 settings.scheduler 的
+// cron + 每任务 enabled 开关驱动。调度器随进程默认运行（原 ENABLE_SCHEDULER 环境变量已删除）；心跳每分钟读配置判定
+//（改配置保存即生效，无需重启）；判定语义 =「上次运行之后到现在」窗口内存在 cron 匹配分钟（isDue）。测试不启动调度器
 //（测试只走 buildApp；心跳行为用注入 runners 直测）。
 
 import { getSetting } from '../engine/settings.js'
@@ -13,6 +13,7 @@ export const TASKS = [
   { key: 'alerts', cronKey: 'alertCron', enabledKey: 'alertEnabled' },
   { key: 'report', cronKey: 'reportCron', enabledKey: 'reportEnabled' },
   { key: 'calendarSync', cronKey: 'calendarSyncCron', enabledKey: 'calendarSyncEnabled' }, // S22 项目日历对账
+  { key: 'backup', cronKey: 'backupCron', enabledKey: 'backupEnabled' }, // S34 数据库异地备份（存储未配全时 runner 内部跳过）
 ]
 
 const DEFAULT_RUNNERS = {
@@ -20,6 +21,7 @@ const DEFAULT_RUNNERS = {
   alerts: async (db) => (await import('./alert.js')).evaluateAlerts(db),
   report: async (db) => (await import('./report.js')).dailyReport(db, { force: false }),
   calendarSync: async (db) => (await import('./calendar.js')).syncProjectCalendar(db),
+  backup: async (db) => (await import('../engine/backup.js')).runBackup(db),
 }
 
 /** 纯判定：给定调度配置（含 cron 与 enabled）与各任务上次运行时刻，返回此刻应跑的任务 key 数组。
