@@ -16,6 +16,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    env:
+      # S19：日历日一律北京时区。测试期望值按本地时区计算（setHours），
+      # 实现按北京日锚点（bjDayStartMs），CI 必须与部署环境同为 Asia/Shanghai。
+      TZ: Asia/Shanghai
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
