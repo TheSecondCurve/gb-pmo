@@ -39,6 +39,16 @@ export const ACTIONS = {
     run: async (params, ctx) =>
       (await import('../brain/templates.js')).draftTaskList(ctx.db, params, { llm: ctx.llm ?? undefined }),
   },
+  // AI 初始分配（S39，v0.42）：draft 产批量分配草案（不落库）；apply 同事务批量落库——
+  // K21 信任边界限定例外：Agent 直写仅限 apply_init_assignments 这一个 action（逐行校验+审计）；机器人不开放
+  draft_init_assignments: {
+    run: async (params, ctx) =>
+      (await import('../brain/initAssign.js')).draftInitAssignments(ctx.db, Number(params.projectId), { llm: ctx.llm ?? undefined }),
+  },
+  apply_init_assignments: {
+    run: async (params, ctx) =>
+      tasks.applyInitAssignments(ctx.db, Number(params.projectId), params.assignments, ctx.member.id, { platform: 'agent' }),
+  },
   // 任务删除（S36，v0.40）：软删留痕，write scope 即可（与 web 同引擎同守卫，D1 全员）；机器人不开放
   delete_task: {
     run: async (params, ctx) => tasks.deleteTask(ctx.db, Number(params.id), ctx.member.id) || { ok: true },

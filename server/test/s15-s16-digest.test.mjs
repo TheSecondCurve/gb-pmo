@@ -84,8 +84,9 @@ describe('S16 by 员工梳理', () => {
   it('S16-2: 名下两项任务排期重叠 → 标出冲突并给建议', async () => {
     const p = await mkProject('项目三', ctx.members.dev.id)
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
-    await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${p.tasks[0].id}`, { planStartDate: '2026-10-01', planEndDate: '2026-10-10' })
-    await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${p.tasks[1].id}`, { planStartDate: '2026-10-05', planEndDate: '2026-10-15' })
+    // v0.42/S38：立项默认未指派——「名下」前提需显式指派给 dev
+    await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${p.tasks[0].id}`, { responsibleMemberId: ctx.members.dev.id, planStartDate: '2026-10-01', planEndDate: '2026-10-10' })
+    await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${p.tasks[1].id}`, { responsibleMemberId: ctx.members.dev.id, planStartDate: '2026-10-05', planEndDate: '2026-10-15' })
     const out = await personDigest(ctx.db, ctx.members.dev.id, { llm: null })
     expect(out.conflictCount).toBeGreaterThanOrEqual(1)
     expect(out.conflicts[0].length).toBe(2)

@@ -48,7 +48,7 @@ export function backScheduleDates({ planStartDate, planEndDate, count }) {
  * 载荷显式给 tasks（标题数组或 {title, refs} 数组，S33）→ 覆盖实例化（source=manual，允许空清单，S1-6；
  * 纯标题=不带模板参考，显式 refs 才带）；autoSchedule=true → 按 [计划开始（缺省今天）→ 交付日期]
  * 均分倒排任务计划起止（S1-7）。模板任务的参考随标题同事务拷贝进 task_refs（创建人=立项人，S23 全套接管）。
- * templateCode 为 typeCode 的兼容别名（同码解析）。牵头人必填、任务默认责任人=牵头人（D3）。
+ * templateCode 为 typeCode 的兼容别名（同码解析）。牵头人必填；任务责任人默认未指派（v0.42/S38 推翻 D3，K20）。
  * S29：立项即「进行中」，启动日=立项日自动落（不再有待启动/已暂停）。
  */
 export function createProject(db, input, by) {
@@ -81,8 +81,8 @@ export function createProject(db, input, by) {
       const win = schedule?.[i]
       const taskInfo = db.prepare(
         `INSERT INTO tasks (project_id, title, responsible_member_id, status, plan_start_date, plan_end_date, source, created_at, updated_at)
-         VALUES (?, ?, ?, 'todo', ?, ?, ?, ?, ?)`
-      ).run(projectId, item.title, leadMemberId, win ? win.planStartDate : (planStartDate || today()), win ? win.planEndDate : null, source, now, now)
+         VALUES (?, ?, NULL, 'todo', ?, ?, ?, ?, ?)`
+      ).run(projectId, item.title, win ? win.planStartDate : (planStartDate || today()), win ? win.planEndDate : null, source, now, now)
       // S33：模板/自定义任务的参考随标题拷贝进 task_refs（创建人=立项人；落表即被 S23 全套能力接管）
       item.refs.forEach((ref) => refStmt.run(Number(taskInfo.lastInsertRowid), ref.title, ref.url, ref.note, by ?? null, now))
     })

@@ -67,6 +67,9 @@ describe('S4 Agent 接入（形态 B）', () => {
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
       name: '客户M系统', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
+    // v0.42/S38：立项默认未指派——经 SQL 写通道把任务批量指派给牵头人（兼测写语句）
+    const assign = await sql(`UPDATE tasks SET responsible_member_id = ${ctx.members.lead.id}, updated_at = ${Date.now()} WHERE project_id = ${p.body.id}`)
+    expect(assign.status).toBe(200)
     // 完成一项，剩 13 项未完（v0.30：365连麦预置清单 14 条）
     await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${p.body.tasks[0].id}`, { status: 'done' })
     const res = await sql(

@@ -19,8 +19,13 @@ beforeAll(async () => {
 afterAll(() => ctx?.db.close())
 
 describe('S20 机器人指令通道 — 任务盘点 /tasks（v0.34）', () => {
+  // v0.42（S38/K20）：立项任务默认未指派——本组用例的「有主」前提需显式指派（等同旧 D3 默认）
+  const assignAll = (projectId, memberId) =>
+    ctx.db.prepare('UPDATE tasks SET responsible_member_id = ? WHERE project_id = ?').run(memberId, projectId)
+
   it('S20-17: 专题群 /tasks——本项目全部未完任务，未分配责任人置顶+计数；已完成无主任务不出现（零 LLM，别名等价）', async () => {
     const p = await mkProject(ctx, '盘点甲项目', ctx.members.lead.id)
+    assignAll(p.id, ctx.members.lead.id)
     // 两条无主未完：一条带截止日，一条无任何日期（口径宽于 S2-1「已设开始日」）
     ctx.db.prepare(`UPDATE tasks SET responsible_member_id = NULL, plan_end_date = '2026-10-08' WHERE id = (SELECT id FROM tasks WHERE project_id = ? ORDER BY id LIMIT 1)`).run(p.id)
     ctx.db.prepare(`UPDATE tasks SET responsible_member_id = NULL, plan_start_date = NULL, plan_end_date = NULL WHERE id = (SELECT id FROM tasks WHERE project_id = ? ORDER BY id LIMIT 1 OFFSET 1)`).run(p.id)
@@ -48,7 +53,9 @@ describe('S20 机器人指令通道 — 任务盘点 /tasks（v0.34）', () => {
 
   it('S20-17: 私聊 /tasks——全部在跑项目未分配任务按项目分组；全有主项目明确说明', async () => {
     const pa = await mkProject(ctx, '盘点乙项目', ctx.members.lead.id)
-    await mkProject(ctx, '盘点丙项目', ctx.members.lead.id)
+    const pc = await mkProject(ctx, '盘点丙项目', ctx.members.lead.id)
+    assignAll(pa.id, ctx.members.lead.id)
+    assignAll(pc.id, ctx.members.lead.id)
     ctx.db.prepare(`UPDATE tasks SET responsible_member_id = NULL WHERE id = (SELECT id FROM tasks WHERE project_id = ? ORDER BY id LIMIT 1)`).run(pa.id)
     // 乙项目造一条独特标题无主任务，断言分组归属
     ctx.db.prepare(`INSERT INTO tasks (project_id, title, responsible_member_id, status, source, created_at, updated_at) VALUES (?, '盘点乙独有无主任务Q7', NULL, 'todo', 'manual', ?, ?)`).run(pa.id, Date.now(), Date.now())
@@ -72,6 +79,7 @@ describe('S20 机器人指令通道 — 任务盘点 /tasks（v0.34）', () => {
     // engine 直调：无开始日的无主任务也在列（与 S2-1 listUnassigned 的兜底口径并存、语义不同）
     const { tasksInventory } = await import('../engine/tasks.js')
     const p = await mkProject(ctx, '盘点丁项目', ctx.members.lead.id)
+    assignAll(p.id, ctx.members.lead.id)
     ctx.db.prepare(`UPDATE tasks SET responsible_member_id = NULL, plan_start_date = NULL, plan_end_date = NULL WHERE id = (SELECT id FROM tasks WHERE project_id = ? ORDER BY id LIMIT 1)`).run(p.id)
     const scoped = tasksInventory(ctx.db, { projectId: p.id })
     expect(scoped.text).toContain('未分配责任人 1 条')

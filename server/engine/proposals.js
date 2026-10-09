@@ -69,12 +69,13 @@ export const PROPOSAL_KINDS = {
     apply(db, payload, by) {
       return projectTypes.createProjectType(db, {
         code: payload.code, name: payload.name, description: payload.description,
+        ...(payload.initPrompt !== undefined ? { initPrompt: payload.initPrompt } : {}), // S39：初始化提示词透传
         tasks: normTasks(payload.tasks),
       }, by)
     },
   },
   // S35（v0.39）项目维护面补全：建任务/建里程碑/项目信息变更——发起放开、确认=牵头人或管理员，
-  // 生效分发回既有引擎（终态守卫/D3 缺省责任人/审计/留痕事件全继承）。
+  // 生效分发回既有引擎（终态守卫/缺省未指派（S38/K20）/审计/留痕事件全继承）。
   add_task: {
     label: '新增任务',
     canConfirm: canConfirmProjectOp,

@@ -7,8 +7,14 @@ export interface Member {
 export interface TypeTaskRef { title: string; url: string; note?: string | null }
 export interface ProjectType {
   id: number; code: string; name: string; description?: string | null
+  initPrompt?: string | null // S39（v0.42）：初始化提示词——该类项目的任务分配/倒排日期自然语言规则，AI 初始分配读取
   tasks: { title: string; refs?: TypeTaskRef[] }[] // v0.18 任务清单内嵌于类型（立项时预填，可覆盖）；v0.33 每任务可挂参考链接（S33，立项时随标题拷贝）
   status: 'active' | 'disabled'; projectCount: number; openProjectCount: number
+}
+// S39（v0.42）：AI 初始分配草案行/应用行 = 完整目标状态（责任人/计划起止三字段全量覆盖）
+export interface InitAssignmentRow {
+  taskId: number; title?: string
+  responsibleMemberId: number | null; planStartDate: string | null; planEndDate: string | null
 }
 export interface ProjectRow {
   id: number; name: string; templateCode: string; projectTypeId?: number | null; typeName?: string | null

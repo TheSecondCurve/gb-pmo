@@ -90,9 +90,10 @@ function TypeEditor({ type, onClose, onDone }: { type: ProjectType | null; onClo
   const [form, setForm] = useState(() => type
     ? {
         code: type.code, name: type.name, description: type.description || '',
+        initPrompt: type.initPrompt || '',
         tasksText: type.tasks.map((t) => t.title).join('\n'),
       }
-    : { code: '', name: '', description: '', tasksText: '' })
+    : { code: '', name: '', description: '', initPrompt: '', tasksText: '' })
   // 参考按「顺序号-1」挂任务（与 textarea 解析后的非空行一一对应；行数变少时超出的参考保存时丢弃）
   const [refs, setRefs] = useState<DraftRef[][]>(() =>
     type ? type.tasks.map((t) => (t.refs ?? []).map((r) => ({ title: r.title, url: r.url, note: r.note || '' }))) : [])
@@ -136,6 +137,11 @@ function TypeEditor({ type, onClose, onDone }: { type: ProjectType | null; onClo
       </div>
       <Field label="默认任务清单（每行一条任务标题，按顺序；立项时预填、可增删改；无阶段、无预设依赖）">
         <textarea className={inputCls} rows={10} value={form.tasksText} onChange={(e) => setForm({ ...form, tasksText: e.target.value })} placeholder={'需求确认与范围冻结\n技术方案与排期\n开发联调\n结项复盘'} />
+      </Field>
+      {/* S39（v0.42）：初始化提示词——AI 初始分配读取的自然语言规则（任务分配逻辑 / 倒排日期逻辑） */}
+      <Field label="初始化提示词（可选，≤2000 字；立项后项目详情页「✨ AI 初始分配」按它批量分配责任人与计划起止）">
+        <textarea className={inputCls} rows={4} value={form.initPrompt} onChange={(e) => setForm({ ...form, initPrompt: e.target.value })}
+          placeholder={'例：设计/文案类任务归内容组；开发与联调归交付部；彩排安排在交付前 3 天完成；验收放在交付日当天'} />
       </Field>
       <div className="mb-2 flex items-center gap-2">
         <Btn small disabled={!form.name.trim() || drafting} onClick={async () => {
@@ -191,8 +197,8 @@ function TypeEditor({ type, onClose, onDone }: { type: ProjectType | null; onClo
           if (refErr) { setErr(refErr); return }
           try {
             const parsed = parse()
-            if (type) await api.patchProjectType(type.id, { name: form.name, description: form.description, ...parsed })
-            else await api.createProjectType({ code: form.code, name: form.name, description: form.description, ...parsed })
+            if (type) await api.patchProjectType(type.id, { name: form.name, description: form.description, initPrompt: form.initPrompt, ...parsed })
+            else await api.createProjectType({ code: form.code, name: form.name, description: form.description, initPrompt: form.initPrompt, ...parsed })
             toast(type ? '类型已保存（只影响未来立项）' : '项目类型已创建'); await onDone()
           } catch (e) { setErr((e as Error).message) }
         }}>{type ? '保存' : '创建'}</Btn>

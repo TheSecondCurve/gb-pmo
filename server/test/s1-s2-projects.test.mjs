@@ -16,7 +16,7 @@ describe('S1 立项', () => {
     expect(res.body.message).toContain('牵头人')
   })
 
-  it('S1-2: 预置类型（365连麦）立项 → 按类型内嵌清单生成扁平任务清单，任务责任人默认=牵头人（v0.6 无阶段层；v0.30 种子为四类交付类型）', async () => {
+  it('S1-2: 预置类型（365连麦）立项 → 按类型内嵌清单生成扁平任务清单，任务责任人默认未指派（v0.42/S38 推翻 D3；v0.6 无阶段层；v0.30 种子为四类交付类型）', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
       name: '客户A系统', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
@@ -29,7 +29,7 @@ describe('S1 立项', () => {
     expect(detail.stages).toBeUndefined()
     expect(detail.tasks.length).toBe(14)
     expect(detail.tasks.map((t) => t.title)).toContain('创建本场连麦记录并确定主负责人')
-    expect(detail.tasks.every((t) => t.responsibleMemberId === ctx.members.lead.id)).toBe(true)
+    expect(detail.tasks.every((t) => t.responsibleMemberId === null)).toBe(true) // v0.42/S38：默认未指派
     expect(detail.tasks.every((t) => t.source === 'template')).toBe(true)
   })
 
@@ -74,7 +74,7 @@ describe('S1 立项', () => {
     expect(res.body.projectTypeId).toBeGreaterThan(0)
     expect(res.body.typeName).toBe('365连麦')
     expect(res.body.stages).toBeUndefined()
-    expect(res.body.tasks.every((t) => t.responsibleMemberId === ctx.members.lead.id)).toBe(true)
+    expect(res.body.tasks.every((t) => t.responsibleMemberId === null)).toBe(true) // v0.42/S38：默认未指派
     // 兼容：templateCode 直给按同码类型解析（Agent/旧调用）
     const legacy = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
       name: '旧入参立项F', templateCode: 'consulting_1v1', leadMemberId: ctx.members.dev.id,
@@ -94,7 +94,7 @@ describe('S1 立项', () => {
     expect(res.status).toBe(201)
     expect(res.body.tasks.map((t) => t.title)).toEqual(['现场调研', '部署方案评审', '割接上线'])
     expect(res.body.tasks.every((t) => t.source === 'manual')).toBe(true)
-    expect(res.body.tasks.every((t) => t.responsibleMemberId === ctx.members.lead.id)).toBe(true)
+    expect(res.body.tasks.every((t) => t.responsibleMemberId === null)).toBe(true) // v0.42/S38：自定义清单同口径默认未指派
     // 空清单 → 空项目（即使类型有预填清单）
     const empty = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
       name: '空清单H', typeCode: 'lianmai_365', leadMemberId: ctx.members.dev.id, tasks: [],

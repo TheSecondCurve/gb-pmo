@@ -123,3 +123,15 @@
 - 决策：项目支持**物理删除**（DELETE 行，同事务级联抹除 tasks / task_refs / task_records / project_events / milestones / channels / calendar_sync；unrouted_messages / pushes 解除项目引用但保留行；audit_logs 落 `project.hardDelete` 快照成为唯一痕迹）。仅系统管理员（web `requireAdmin` + Agent `delete_project` adminOnly），任意状态可直接删（含在跑项目）。「取消」保留为业务终态（留痕可追史），硬删除为数据抹除手段，两者并存；飞书侧日历事件/群聊等外部资源不追回。
 - 理由：测试/演示/误建项目的数据清理是真实需求，cancelled 行保留语义满足业务终态但抹不掉数据；FK ON 下单表 DELETE 会被约束拒绝，必须显式按序级联；不可逆破坏性操作收敛 admin-only（对齐 S17-13 删类型口径）；任意状态可删由用户拍板——硬删的定位就是清理手段，不该要求先走业务终态。
 - 推翻：AGENTS.md §4「删除 = 软删」约定在本场景的唯一例外（用户 2026-10-09 拍板）；任务域维持软删不变（K18）。
+
+## K20 任务责任人默认未指派——推翻 D3（S38，v0.42）
+
+- 决策：任务责任人与项目牵头人解耦——一切建任务通道（`createTask` web 逐条/提议 add_task、`createProject` 模板实例化/自定义清单）责任人一律**默认未指派（NULL）**，不再回填 `project.leadMemberId`；创建可显式指定，传入非空责任人补在职校验（400「责任人不存在或已离职」，对齐牵头人/建议面口径，补齐原 FK-only 缺口）。列自 0001 即可空，零迁移；未指派为一等公民状态，由 `listUnassigned`（S2-1）/`unassigned_tasks` 指标/`tasksInventory` 盘点承载——立项实例化任务进未指派清单是初次分配的正常工作队列而非告警噪音。未指派任务的逾期预警**不做牵头人兜底**（按人队列天然不含未指派行）。
+- 理由：D3 让批量立项后的任务面看似有主实则未分配，「该分配给谁」的决策被默认值掩盖，未指派监控形同虚设；牵头人是项目第一负责人而非全部任务的执行人，两个概念不该由默认值混同。初次分配的效率问题由 S39（AI 初始分配）正面解决，而非靠错误的默认值。
+- 推翻：D3「模板生成任务默认责任人=项目牵头人」（用户 2026-10-09 拍板）；S1-2/S2-1/S35-1 验收标准同步修订。
+
+## K21 AI 初始分配 = LLM 信任边界的限定例外（S39，v0.42）
+
+- 决策：项目类型加初始化提示词（`project_types.init_prompt`，自然语言的任务分配与倒排日期逻辑）；AI 初始分配拆为**草案**（`draftInitAssignments`：LLM 读提示词+未完成任务+成员名册产 `{taskId, responsibleMemberId, planStartDate, planEndDate}` 全任务覆盖草案，白名单后校验+warnings，不落库）与**应用**（`applyInitAssignments`：逐行校验后单事务批量落库，一条讨论面记录+一条 `task.initAssign` 审计快照，不做逐任务 owner_change）。通道：web=草案弹窗人审后应用；**Agent action `apply_init_assignments` 可不经页面确认直接批量写入**（write scope）——这是「LLM 不直接改任务责任人/排期」（AGENTS.md §4/负面清单）的**限定例外**，仅限初始化分配这一个 action（用户 2026-10-09 拍板）；抽取/建议/提议/机器人通道边界不变，机器人面不开放此能力。LLM 产绝对日期由「人审（web）+ 严格校验（双通道）」兜底，S1-7 确定性均分倒排保持为立项默认值，两者互补不替代；不做立项后自动触发。
+- 理由：初始化分配是「人显式发起、结果立即可见可改」的低风险场景，且 PAT write scope 本身已可经 SQL 端点直接 UPDATE tasks——新 action 只是把这一能力语义化并加上逐行校验与审计，没有扩大实际攻击面；而一次配置类型提示词、每个新项目一把完成初次分配，是用户明确的效率诉求。web 侧保留人审是因为页面上「看一眼再点」成本极低、收益是拦下 LLM 的误判。
+- 推翻：无（AGENTS.md 负面清单在本场景的限定例外，负面清单原文保留并加注）。

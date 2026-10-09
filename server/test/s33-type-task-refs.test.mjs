@@ -111,6 +111,8 @@ describe('S33 类型模板任务参考资料', () => {
     expect(refs.every((r) => r.createdByName === '管理员')).toBe(true)
 
     // 日报「我的任务」自动附带模板预填参考（S23-3 同构，推送链路零改动）
+    // v0.42/S38：立项默认未指派——「牵头人名下任务」前提需显式指派
+    await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${p.body.tasks[0].id}`, { responsibleMemberId: ctx.members.lead.id })
     await dailyReport(ctx.db, { force: true })
     const push = ctx.db.prepare(`SELECT * FROM pushes WHERE push_type = 'daily_report' AND recipient_member_id = ?`).get(ctx.members.lead.id)
     expect(push.body).toContain('【参考资料】')

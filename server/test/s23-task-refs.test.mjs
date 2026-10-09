@@ -93,7 +93,9 @@ describe('S23 任务参考资料', () => {
     const SOP = { title: '部署 SOP', url: 'https://wiki.example.com/deploy-sop' }
 
     // 任务 A：牵头人名下未完任务，挂参考资料 → 日报【我的任务】与个人梳理附带
+    // （v0.42/S38：立项默认未指派，「牵头人名下」前提需显式指派）
     const taskA = p.tasks[0]
+    await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${taskA.id}`, { responsibleMemberId: ctx.members.lead.id })
     await authed(ctx.app, cookie, 'POST', `/api/v1/tasks/${taskA.id}/refs`, SOP)
     // 任务 B：改派王五并置逾期，挂参考资料 → 逾期预警附带
     const taskB = p.tasks[1]

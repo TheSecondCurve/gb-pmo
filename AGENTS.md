@@ -53,7 +53,7 @@ npm start              # 生产模式启动（NODE_ENV=production，托管 dist/
 - 删除 = 软删（`deleted_at`/状态枚举），人员离职 = 软删 + 强制转交。
 - 状态一律用中央枚举 `server/engine/enums.js`（带中文 label），不散落字符串。
 - 讨论面（project_events）append-only：只插入，不 UPDATE 已生效事件的业务内容。
-- LLM 信任边界：记录型事件可自动生效；建议型（任务状态/排期/优先级/依赖/责任人）必须人确认。
+- LLM 信任边界：记录型事件可自动生效；建议型（任务状态/排期/优先级/依赖/责任人）必须人确认。唯一限定例外：AI 初始分配的 Agent 通道 `apply_init_assignments` 可直写（design.md K21，S39）。
 - 密码 scrypt（K1）；会话 cookie HMAC 签名 httpOnly；Agent PAT 只存 hash。
 
 ## 5. 明确不要做（负面清单）
@@ -61,7 +61,7 @@ npm start              # 生产模式启动（NODE_ENV=production，托管 dist/
 - 不做 JWT；不上 Redis/消息队列/微服务；不升 PostgreSQL（大客户条款未触发）。
 - 不做收入/成本/合同/回款、发票、财务对接、工时绩效（PRD「明确不做」）。
 - 不做行级数据权限/脱敏分级（D1 全员透明；只有 admin/普通两档功能角色）。
-- 不让 LLM 直接改任务状态/排期/优先级/依赖/责任人（只产建议型事件）。
+- 不让 LLM 直接改任务状态/排期/优先级/依赖/责任人（只产建议型事件；唯一限定例外：AI 初始分配 `apply_init_assignments`，见 design.md K21/S39）。
 - 不做 LLM 以成员身份在 IM 群发言（只读抽取 + 定向推送）。
 - 不做自动重排期求解器、代码仓库/CI 集成、CRM。
 - 前端不引组件库/路由库/状态库（手写极简组件 + hash 路由 + Context store）。
