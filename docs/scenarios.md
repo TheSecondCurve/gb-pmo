@@ -414,6 +414,18 @@ S39 线上首用即命中超时（GLM 大 JSON 约 117s > 默认 60s），英文
 | S43-1 | `listProjects` 应返回 `tasksTotal/tasksDone`：软删任务不计入；无任务项目为 0/0；已结项/已取消项目同口径返回 | `server/test/s43-project-progress.test.mjs` |
 | S43-2 | 表格视图应有「进度」列（迷你条 + x/y 文案）；看板卡片应显示迷你进度条；tasksTotal=0 的项目不显示进度条 | `src/smoke.test.tsx`（前端冒烟） |
 
+## S44（P0）— 系统（大脑·AI 初始分配）— 全线 — 草案请求异步化（v0.45）
+
+Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟——同步等待模型架构性不兼容（用户 2026-10-09 拍板）。草案拆两段：启动同步校验后 202 返回 draftId，LLM 进程内后台执行；GET 轮询 running/done/error（错误也 200 载荷返回，规避网关 5xx 替换）。进程内 Map 注册表（10 分钟 TTL，不落库）。决策见 design.md K24。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S44-1 | 当启动草案时，应同步完成校验（项目不存在 404、终态 409、无 LLM 503）并立即 202 返回 `{draftId, status:'running'}` | `server/test/s44-draft-async.test.mjs` |
+| S44-2 | 当轮询时，应依次可能返回 `running`（含 elapsedMs）与终态 `done`（含 assignments/warnings）；draftId 不存在/已过期或不属于该项目应 404 | 同上 |
+| S44-3 | 当后台 LLM 失败时，轮询应返回 HTTP 200 `{status:'error', message}`（中文指引），不暴露英文原文 | 同上 |
+| S44-4 | 当 Agent 调 `draft_init_assignments` 时应返回 draftId（write scope）；经 Agent 侧 `GET /api/v1/agent/draft-init-assignments/:draftId`（read scope 即可）应能轮询到同一作业结果 | 同上 |
+| S44-5 | 前端弹窗应显示等待进度并轮询至结果或错误呈现 | `src/smoke.test.tsx`（前端冒烟） |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

@@ -283,11 +283,18 @@ describe('S38/S39 任务责任人与 AI 初始分配（v0.42）', () => {
     tasks: [{ id: 11, projectId: 1, title: '任务一', responsibleMemberId: null, responsibleName: null, status: 'todo', planStartDate: '2026-10-09', planEndDate: null, isOverdue: false, refCount: 0 }],
     milestones: [],
   }
+  let draftPollCount = 0
   const detailFetch = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input)
     if (url.startsWith('/api/v1/auth/me')) return json({ member: { id: 1, name: '甲', role: 'admin' } })
+    // v0.45（S44）异步草案：POST 启动 202 → GET 轮询（先 running 后 done）
+    if (url.includes('/draft-init-assignments/d1')) {
+      draftPollCount += 1
+      if (draftPollCount === 1) return json({ status: 'running', elapsedMs: 800 })
+      return json({ status: 'done', assignments: [{ taskId: 11, title: '任务一', responsibleMemberId: 2, planStartDate: '2026-10-10', planEndDate: '2026-10-12' }], warnings: [] })
+    }
     if (url.includes('/draft-init-assignments')) {
-      return json({ assignments: [{ taskId: 11, title: '任务一', responsibleMemberId: 2, planStartDate: '2026-10-10', planEndDate: '2026-10-12' }], warnings: [] })
+      return json({ draftId: 'd1', status: 'running' })
     }
     if (url.startsWith('/api/v1/projects/1/events')) return json({ events: [] })
     if (url.startsWith('/api/v1/projects/1')) return json(detailFixture)
@@ -304,6 +311,7 @@ describe('S38/S39 任务责任人与 AI 初始分配（v0.42）', () => {
   beforeEach(() => {
     cleanup()
     detailFetch.mockClear()
+    draftPollCount = 0
     globalThis.fetch = detailFetch as unknown as typeof fetch
   })
 
@@ -334,11 +342,14 @@ describe('S38/S39 任务责任人与 AI 初始分配（v0.42）', () => {
     expect(promptField.value).toBe('彩排安排在交付前 3 天')
 
     // 项目详情：AI 初始分配入口 → 草案弹窗（行可编辑 + 应用按钮）
+    // S44-5（v0.45）：异步作业——先显示等待进度（running），轮询到 done 后行渲染
     cleanup()
     location.hash = '#/projects/1'
     render(<StoreProvider><ProjectDetail id={1} /></StoreProvider>)
     fireEvent.click(await screen.findByRole('button', { name: /AI 初始分配/ }))
     expect(await screen.findByText('✨ AI 初始分配（S39）')).toBeTruthy()
+    expect(await screen.findByTestId('init-assign-waiting')).toBeTruthy() // S44-5：等待进度呈现
+    expect((await screen.findByLabelText('任务 任务一 责任人', {}, { timeout: 5000 })) as HTMLSelectElement)
     const rowSelect = (await screen.findByLabelText('任务 任务一 责任人')) as HTMLSelectElement
     expect(rowSelect.value).toBe('2') // 草案建议责任人预填
     expect(screen.getByRole('button', { name: '应用 1 项' })).toBeTruthy()

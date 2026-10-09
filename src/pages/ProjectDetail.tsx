@@ -394,17 +394,40 @@ function AddTask({ projectId, members, onDone }: { projectId: number; members: M
   )
 }
 
-/** S39（v0.42）：AI 初始分配弹窗——草案（不落库）逐行可编辑，「应用」单事务批量生效并留痕。 */
+/** S39（v0.42）+ S44（v0.45 异步化）：AI 初始分配弹窗——启动后 2s 轮询作业（GLM 可能要 1~2 分钟），
+ * 草案（不落库）逐行可编辑，「应用」单事务批量生效并留痕。 */
 function InitAssignModal({ projectId, members, onClose, onDone }: { projectId: number; members: Member[]; onClose: () => void; onDone: () => Promise<void> }) {
   const { toast } = useStore()
   const [rows, setRows] = useState<InitAssignmentRow[] | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
   const [err, setErr] = useState('')
+  const [waitSec, setWaitSec] = useState(0)
   const [applying, setApplying] = useState(false)
   useEffect(() => {
-    api.draftInitAssignments(projectId)
-      .then((out) => { setRows(out.assignments); setWarnings(out.warnings) })
-      .catch((e) => setErr((e as Error).message))
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | null = null
+    const t0 = Date.now()
+    void (async () => {
+      try {
+        const start = await api.draftInitAssignments(projectId) // 202 {draftId, status:'running'}
+        const poll = async () => {
+          if (stopped) return
+          try {
+            const out = await api.getDraftInitAssignment(projectId, start.draftId)
+            if (stopped) return
+            if (out.status === 'running') {
+              setWaitSec(Math.round((Date.now() - t0) / 1000))
+              timer = setTimeout(() => void poll(), 2000)
+              return
+            }
+            if (out.status === 'error') { setErr(out.message || '草案生成失败'); return }
+            setRows(out.assignments ?? []); setWarnings(out.warnings ?? [])
+          } catch (e) { if (!stopped) setErr((e as Error).message) }
+        }
+        await poll()
+      } catch (e) { if (!stopped) setErr((e as Error).message) }
+    })()
+    return () => { stopped = true; if (timer) clearTimeout(timer) }
   }, [projectId])
   const patchRow = (taskId: number, p: Partial<InitAssignmentRow>) =>
     setRows((rs) => (rs ?? []).map((r) => (r.taskId === taskId ? { ...r, ...p } : r)))
@@ -422,7 +445,11 @@ function InitAssignModal({ projectId, members, onClose, onDone }: { projectId: n
   return (
     <Modal title="✨ AI 初始分配（S39）" onClose={onClose} wide>
       {err && <div className="mb-3 rounded bg-red-50 px-2 py-1.5 text-[12px] text-[var(--color-bad)]">{err}</div>}
-      {!rows && !err && <div className="py-6 text-center text-[var(--color-ink-soft)]">大脑分配中…</div>}
+      {!rows && !err && (
+        <div className="py-6 text-center text-[var(--color-ink-soft)]" data-testid="init-assign-waiting">
+          大脑分配中（已等待 {waitSec}s；GLM 大输出可能要 1~2 分钟）…
+        </div>
+      )}
       {rows && (
         <>
           {warnings.length > 0 && (

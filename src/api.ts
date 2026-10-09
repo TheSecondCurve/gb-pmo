@@ -119,9 +119,12 @@ export const api = {
   // S1-7：倒排预览（engine 同一公式，不落库）
   previewSchedule: (body: { planStartDate?: string; planEndDate: string; count: number }) =>
     req<{ schedule: { planStartDate: string; planEndDate: string }[] }>('POST', '/api/v1/projects/preview-schedule', body),
-  // S39（v0.42）：AI 初始分配——草案（不落库、逐行可编辑）与批量应用（单事务+留痕）
+  // S39（v0.42）+ S44（v0.45 异步化）：AI 初始分配——启动（202 返回 draftId）→ 轮询 → 人审应用（单事务+留痕）
   draftInitAssignments: (projectId: number) =>
-    req<{ assignments: import('./types').InitAssignmentRow[]; warnings: string[] }>('POST', `/api/v1/projects/${projectId}/draft-init-assignments`, {}),
+    req<{ draftId: string; status: 'running' }>('POST', `/api/v1/projects/${projectId}/draft-init-assignments`, {}),
+  getDraftInitAssignment: (projectId: number, draftId: string) =>
+    req<{ status: 'running' | 'done' | 'error'; elapsedMs?: number; message?: string; assignments?: import('./types').InitAssignmentRow[]; warnings?: string[] }>(
+      'GET', `/api/v1/projects/${projectId}/draft-init-assignments/${draftId}`),
   applyInitAssignments: (projectId: number, assignments: import('./types').InitAssignmentRow[]) =>
     req<{ updated: number }>('POST', `/api/v1/projects/${projectId}/init-assignments`, { assignments }),
   adminTokens: () => req<{ tokensByMember: Record<string, { id: number; name: string; tokenPrefix: string; scope: string; expiresAt: number; revokedAt?: number | null }[]> }>('GET', '/api/v1/admin/tokens'),
