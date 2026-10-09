@@ -171,10 +171,11 @@ describe('S20 机器人多轮上下文 — 注入与指代', () => {
     const c3 = 'oc_u3'
     seedTurn(c3, { at: Date.now() - 3 * 3600_000 })
     expect(listBotHistory(ctx.db, { ...scope, chatId: c3 })).toEqual([])
-    // 水位线：窗口内新对话，/new 后 → 空
+    // 水位线：窗口内新对话，/new 后 → 空（cleared_at 确定性晚于回合 10ms：同毫秒时 bot_reply(at+1) 会大于水位线漏过过滤，coverage 插桩下实测踩中）
     const c4 = 'oc_u4'
-    seedTurn(c4, {})
-    ctx.db.prepare(`INSERT INTO bot_context_resets (platform, chat_id, member_id, message_id, cleared_at) VALUES ('feishu', ?, 1, 'om_r', ?)`).run(c4, Date.now())
+    const turnAt = Date.now()
+    seedTurn(c4, { at: turnAt })
+    ctx.db.prepare(`INSERT INTO bot_context_resets (platform, chat_id, member_id, message_id, cleared_at) VALUES ('feishu', ?, 1, 'om_r', ?)`).run(c4, turnAt + 10)
     expect(listBotHistory(ctx.db, { ...scope, chatId: c4 })).toEqual([])
     // 不可注入意图：write:/card: 可进，gate/help/bind/context 不进
     const c5 = 'oc_u5'

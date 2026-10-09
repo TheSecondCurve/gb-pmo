@@ -111,3 +111,9 @@
 - 理由：warn 级警告在扩展期会被无视成噪音；裁决后要么结构自洽要么显式标注意图，规则才有牙齿。
 - 推翻：K15 的「exhaustive-deps 降为 warn」临时降级。
 
+
+## K18 任务删除 = deleted_at 软删（S36，v0.40）
+
+- 决策：项目实例任务开放删除（web `DELETE /api/v1/tasks/:id` 全员 + Agent action `delete_task` write scope），语义=软删——`tasks` 加 `deleted_at` 列（迁移 0020），删除落值、行保留；任务参考资料同事务一并软删，更新记录与讨论面历史事件保留。读侧全仓补 `deleted_at IS NULL`（列表/详情/盘点/未指派/逾期/指标/日报/晨报/梳理/机器人查询/LLM 抽取上下文/结项 openTasks 校验）；已删任务的待确认建议确认时 409 不复活。**不引入 cancelled 状态值**；机器人指令面不开放删除；不做恢复入口。
+- 理由：v0.6 已把任务状态裁成 todo/doing/done 三档，加 cancelled 会污染结项校验（`status != 'done'`）与指标 OPEN_TASK 等大量既有口径，侵入远大于加列；deleted_at 与 task_refs/chat_sessions 既有软删范式一致，行保留满足留痕与审计可追溯；建错/录错任务无入口删除会持续污染任务面与指标，是真实痛点。
+- 推翻：v0.39 S35 负面清单「任务无删除语义」（PRD L494/L746 已修订为仅机器人面不做）。

@@ -32,7 +32,7 @@ export function projectBrief(db, projectId, { now = Date.now(), progressDays = B
        COALESCE(SUM(CASE WHEN status = 'doing' THEN 1 ELSE 0 END), 0) AS doing,
        COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) AS done,
        COALESCE(SUM(CASE WHEN status != 'done' AND plan_end_date IS NOT NULL AND plan_end_date < BJ_TODAY(?) THEN 1 ELSE 0 END), 0) AS overdue
-     FROM tasks WHERE project_id = ?`
+     FROM tasks WHERE project_id = ? AND deleted_at IS NULL`
   ).get(now, p.id)
   const tasks = {
     total: c.total, todo: c.todo, doing: c.doing, done: c.done, overdue: c.overdue,
@@ -43,7 +43,7 @@ export function projectBrief(db, projectId, { now = Date.now(), progressDays = B
   const doing = camelizeRows(db.prepare(
     `SELECT t.id, t.title, t.plan_start_date AS plan_start_date, t.plan_end_date AS plan_end_date, m.name AS responsible
      FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
-     WHERE t.project_id = ? AND t.status = 'doing'
+     WHERE t.project_id = ? AND t.status = 'doing' AND t.deleted_at IS NULL
      ORDER BY t.plan_end_date IS NULL, t.plan_end_date LIMIT ?`
   ).all(p.id, BRIEF_LIMITS.doing)).map((r) => ({
     id: r.id, title: r.title, responsible: r.responsible, planStartDate: r.planStartDate, planEndDate: r.planEndDate,
@@ -53,7 +53,7 @@ export function projectBrief(db, projectId, { now = Date.now(), progressDays = B
   const nextTask = camelizeRows(db.prepare(
     `SELECT t.id, t.title, t.plan_start_date AS plan_start_date, t.plan_end_date AS plan_end_date, m.name AS responsible
      FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
-     WHERE t.project_id = ? AND t.status = 'todo' AND COALESCE(t.plan_start_date, t.plan_end_date) IS NOT NULL
+     WHERE t.project_id = ? AND t.status = 'todo' AND t.deleted_at IS NULL AND COALESCE(t.plan_start_date, t.plan_end_date) IS NOT NULL
      ORDER BY (COALESCE(t.plan_start_date, t.plan_end_date) < BJ_TODAY(?)), COALESCE(t.plan_start_date, t.plan_end_date)
      LIMIT 1`
   ).all(p.id, now)).map((r) => ({
@@ -82,7 +82,7 @@ export function projectBrief(db, projectId, { now = Date.now(), progressDays = B
   const overdueTasks = db.prepare(
     `SELECT t.id, t.title, t.plan_end_date AS plan_end_date, m.name AS responsible FROM tasks t
      LEFT JOIN members m ON m.id = t.responsible_member_id
-     WHERE t.project_id = ? AND t.status != 'done' AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY(?)
+     WHERE t.project_id = ? AND t.status != 'done' AND t.deleted_at IS NULL AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY(?)
      ORDER BY t.plan_end_date LIMIT ?`
   ).all(p.id, now, BRIEF_LIMITS.overdue)
     .map((r) => ({ id: r.id, title: r.title, responsible: r.responsible, planEndDate: r.plan_end_date, daysOverdue: dayDiff(r.plan_end_date, todayStr) }))

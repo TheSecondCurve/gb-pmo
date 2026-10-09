@@ -116,7 +116,7 @@ export async function ingestMessages(db, channel, messages, { llm: llmOverride }
  *  且不得按同 id 任务误 JOIN 责任人——只推项目牵头人。 */
 export function pushSuggestion(db, evt) {
   const target = evt.targetTaskId && evt.targetObject !== 'milestone'
-    ? db.prepare('SELECT responsible_member_id AS rid FROM tasks WHERE id = ?').get(evt.targetTaskId)
+    ? db.prepare('SELECT responsible_member_id AS rid FROM tasks WHERE id = ? AND deleted_at IS NULL').get(evt.targetTaskId)
     : null
   const lead = db.prepare('SELECT lead_member_id AS lid FROM projects WHERE id = ?').get(evt.projectId)
   const recipients = [...new Set([target?.rid, lead?.lid].filter(Boolean))]
@@ -158,7 +158,7 @@ export async function extractEvents(llm, db, projectId, messages) {
   }
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId)
   const tasks = db
-    .prepare(`SELECT t.id, t.title, t.status, t.plan_end_date, m.name AS owner FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id WHERE t.project_id = ? AND t.status IN ('todo','doing')`)
+    .prepare(`SELECT t.id, t.title, t.status, t.plan_end_date, m.name AS owner FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id WHERE t.project_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL`)
     .all(projectId)
   const milestones = db.prepare('SELECT id, name, plan_date FROM milestones WHERE project_id = ? AND status = ?').all(projectId, 'planned')
 

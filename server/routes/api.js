@@ -172,6 +172,12 @@ export function registerApiRoutes(app) {
 
   app.patch('/api/v1/tasks/:id', async (req) => tasks.updateTask(db, Number(req.params.id), req.body, req.member.id))
 
+  // 任务删除（S36，v0.40）：软删留痕，全员可删（D1，与创建/更新同口径）；终态项目 409
+  app.delete('/api/v1/tasks/:id', async (req) => {
+    tasks.deleteTask(db, Number(req.params.id), req.member.id)
+    return { ok: true }
+  })
+
   // 任务更新记录（S2-3，v0.6）：追加式时间线
   app.get('/api/v1/tasks/:id/records', async (req) => ({ records: tasks.listTaskRecords(db, Number(req.params.id)) }))
 

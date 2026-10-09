@@ -81,7 +81,7 @@ export function offboardMember(db, id, handover = {}, by) {
   if (cur.role === 'admin') assertNotLastAdmin(db)
 
   const openTasks = db
-    .prepare(`SELECT id FROM tasks WHERE responsible_member_id = ? AND status IN ('todo','doing','blocked')`)
+    .prepare(`SELECT id FROM tasks WHERE responsible_member_id = ? AND status IN ('todo','doing','blocked') AND deleted_at IS NULL`)
     .all(id).map((r) => r.id)
   const leadingProjects = db
     .prepare(`SELECT id FROM projects WHERE lead_member_id = ? AND status = 'active'`)
