@@ -16,13 +16,13 @@ function decorate(rows) {
 }
 
 export function getTask(db, id) {
-  const row = db.prepare(`SELECT ${TASK_COLS} FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id LEFT JOIN projects p ON p.id = t.project_id WHERE t.id = ?`).get(id)
+  const row = db.prepare(`SELECT ${TASK_COLS} FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id LEFT JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.deleted_at IS NULL`).get(id)
   if (!row) throw Object.assign(new Error('任务不存在'), { statusCode: 404 })
   return { ...decorate([row])[0], refs: listTaskRefs(db, id) }
 }
 
 export function listTasks(db, { projectId, responsibleMemberId, statuses } = {}) {
-  const conds = []
+  const conds = ['t.deleted_at IS NULL']
   const params = []
   if (projectId) { conds.push('t.project_id = ?'); params.push(projectId) }
   if (responsibleMemberId) { conds.push('t.responsible_member_id = ?'); params.push(responsibleMemberId) }
@@ -38,7 +38,7 @@ export function listUnassigned(db) {
   return decorate(
     db.prepare(
       `SELECT ${TASK_COLS} FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id LEFT JOIN projects p ON p.id = t.project_id
-       WHERE t.responsible_member_id IS NULL AND t.plan_start_date IS NOT NULL AND t.status IN ('todo','doing') ORDER BY t.plan_start_date`
+       WHERE t.responsible_member_id IS NULL AND t.plan_start_date IS NOT NULL AND t.status IN ('todo','doing') AND t.deleted_at IS NULL ORDER BY t.plan_start_date`
     ).all()
   )
 }
@@ -59,7 +59,7 @@ export function tasksInventory(db, { projectId } = {}) {
     const rows = db.prepare(
       `SELECT t.id, t.title, t.status, t.plan_end_date, m.name AS responsible_name
        FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
-       WHERE t.project_id = ? AND t.status != 'done' ORDER BY t.id`
+       WHERE t.project_id = ? AND t.status != 'done' AND t.deleted_at IS NULL ORDER BY t.id`
     ).all(projectId)
     const unassigned = rows.filter((t) => !t.responsible_name)
     const owned = rows.filter((t) => t.responsible_name)
@@ -83,7 +83,7 @@ export function tasksInventory(db, { projectId } = {}) {
   const rows = db.prepare(
     `SELECT t.id, t.title, t.status, t.plan_end_date, t.project_id
      FROM tasks t JOIN projects p ON p.id = t.project_id
-     WHERE t.responsible_member_id IS NULL AND t.status != 'done' AND p.status = 'active' ORDER BY t.project_id, t.id`
+       WHERE t.responsible_member_id IS NULL AND t.status != 'done' AND t.deleted_at IS NULL AND p.status = 'active' ORDER BY t.project_id, t.id`
   ).all()
   for (const t of rows) byProject.get(t.project_id)?.rows.push(t)
   const total = rows.length
@@ -119,7 +119,7 @@ export function createTask(db, input, by) {
 
 export function updateTask(db, id, patch, by) {
   const cur = db
-    .prepare('SELECT t.*, p.status AS project_status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?')
+    .prepare('SELECT t.*, p.status AS project_status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.deleted_at IS NULL')
     .get(id)
   if (!cur) throw Object.assign(new Error('任务不存在'), { statusCode: 404 })
   if (cur.project_status === 'closed' || cur.project_status === 'cancelled') {
@@ -149,6 +149,27 @@ export function updateTask(db, id, patch, by) {
   db.prepare(`UPDATE tasks SET ${sets} WHERE id = @__id`).run({ ...fields, __id: id })
   audit(db, { memberId: by, action: 'task.update', objectType: 'task', objectId: id, detail: { fields: Object.keys(patch) } })
   return getTask(db, id)
+}
+
+/**
+ * 软删（S36，v0.40）：行保留、deleted_at 落值，同事务级联软删任务参考资料；
+ * task_records 与讨论面历史事件保留（append-only 留痕）；结项/取消后不可删（S2-3 任务面只读继承）。
+ * 全员可删（D1，web/Agent 同引擎同守卫）；留痕走 audit，不写 project_events（同 task_ref.delete 口径）。
+ */
+export function deleteTask(db, id, by) {
+  const cur = db
+    .prepare('SELECT t.*, p.status AS project_status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.deleted_at IS NULL')
+    .get(id)
+  if (!cur) throw Object.assign(new Error('任务不存在'), { statusCode: 404 })
+  if (cur.project_status === 'closed' || cur.project_status === 'cancelled') {
+    throw Object.assign(new Error('项目已结项/取消，任务面只读'), { statusCode: 409 })
+  }
+  const now = Date.now()
+  db.transaction(() => {
+    db.prepare('UPDATE tasks SET deleted_at = ?, updated_at = ? WHERE id = ?').run(now, now, id)
+    db.prepare('UPDATE task_refs SET deleted_at = ? WHERE task_id = ? AND deleted_at IS NULL').run(now, id)
+  })()
+  audit(db, { memberId: by, action: 'task.delete', objectType: 'task', objectId: id, detail: { projectId: cur.project_id, title: cur.title } })
 }
 
 // —— 里程碑 ——
@@ -186,7 +207,7 @@ export function addTaskRecord(db, { taskId, content }, by) {
     throw Object.assign(new Error('taskId/content 必填'), { statusCode: 400 })
   }
   const cur = db
-    .prepare('SELECT t.id, p.status AS project_status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?')
+    .prepare('SELECT t.id, p.status AS project_status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.deleted_at IS NULL')
     .get(taskId)
   if (!cur) throw Object.assign(new Error('任务不存在'), { statusCode: 404 })
   if (cur.project_status === 'closed' || cur.project_status === 'cancelled') {
@@ -242,7 +263,7 @@ export function formatTaskRefs(refs) {
 
 function assertRefWritable(db, taskId) {
   const cur = db
-    .prepare('SELECT t.id, p.status AS project_status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?')
+    .prepare('SELECT t.id, p.status AS project_status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.deleted_at IS NULL')
     .get(taskId)
   if (!cur) throw Object.assign(new Error('任务不存在'), { statusCode: 404 })
   if (cur.project_status === 'closed' || cur.project_status === 'cancelled') {
@@ -299,7 +320,7 @@ export function overdueTasksOf(db, memberId) {
     db.prepare(
       `SELECT t.id, t.title, t.plan_end_date, p.id AS project_id, p.name AS project_name
        FROM tasks t JOIN projects p ON p.id = t.project_id
-       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND p.status = 'active'
+       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL AND p.status = 'active'
          AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY()`
     ).all(memberId)
   )

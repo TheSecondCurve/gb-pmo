@@ -117,7 +117,7 @@ function writeSuggestEvent(db, payload, ctx) {
   if (milestoneId) return writeMilestoneSuggest(db, payload, ctx, milestoneId) // S35：里程碑改期/状态
   const taskId = Number(payload.targetTaskId)
   const task = taskId
-    ? db.prepare('SELECT t.id, t.title, t.project_id AS pid, p.status AS project_status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ?').get(taskId)
+    ? db.prepare('SELECT t.id, t.title, t.project_id AS pid, p.status AS project_status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.deleted_at IS NULL').get(taskId)
     : null
   if (!task) return refused('targetTaskId 必填且须为真实任务 id（先 query 查任务）')
   if (task.project_status === 'closed' || task.project_status === 'cancelled') return refused('项目已结项/取消，任务面只读')
@@ -254,7 +254,7 @@ function softValidateProposal(db, kind, p) {
     const summaryText = String(p.summary || '').trim()
     if (!summaryText) return { error: 'summary 必填（S29：结项必须留结项总结；可先基于事件流起草）' }
     if (proj.status !== 'active') return { error: `项目已是终态（${label('projectStatus', proj.status)}），不可再结项` }
-    const open = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND status != 'done'`).get(proj.id).n
+    const open = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND status != 'done' AND deleted_at IS NULL`).get(proj.id).n
     return {
       payload: { projectId: proj.id, summary: summaryText.slice(0, 200) },
       summary: `项目「${proj.name}」结项：${summaryText}${open ? `（还有 ${open} 个未完成任务，确认时按 S8 校验）` : '（任务已全部完成）'}`,
