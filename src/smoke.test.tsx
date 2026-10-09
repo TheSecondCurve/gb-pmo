@@ -160,7 +160,8 @@ describe('S30 项目组合页（v0.29）', () => {
     id, name: `项目${id}`, templateCode: 'custom', typeName: '软件交付',
     status: 'active', priority: 'medium', leadMemberId: 1, leadName: '张三', clientName: null,
     planStartDate: null, planEndDate: null, daysToDelivery: null,
-    overdueTasks: 0, silentDays: null, lastEventAt: null, updatedAt: 1759000000000, ...over,
+    overdueTasks: 0, silentDays: null, lastEventAt: null, updatedAt: 1759000000000,
+    tasksTotal: 0, tasksDone: 0, ...over,
   })
   // P1 双端 / P2 只有交付 / P3 只有开始（high）/ P4 全空 / P5 已结项（有日期）/ P6 已取消（全空）
   const projectsFixture = [
@@ -278,6 +279,7 @@ describe('S38/S39 任务责任人与 AI 初始分配（v0.42）', () => {
     id: 1, name: '项目甲', templateCode: 'lianmai_365', projectTypeId: 1, typeName: '365连麦',
     status: 'active', priority: 'medium', leadMemberId: 1, leadName: '张三', clientName: null,
     planStartDate: '2026-10-09', planEndDate: '2026-11-09', daysToDelivery: 31,
+    tasksTotal: 1, tasksDone: 0,
     tasks: [{ id: 11, projectId: 1, title: '任务一', responsibleMemberId: null, responsibleName: null, status: 'todo', planStartDate: '2026-10-09', planEndDate: null, isOverdue: false, refCount: 0 }],
     milestones: [],
   }
@@ -290,7 +292,7 @@ describe('S38/S39 任务责任人与 AI 初始分配（v0.42）', () => {
     if (url.startsWith('/api/v1/projects/1/events')) return json({ events: [] })
     if (url.startsWith('/api/v1/projects/1')) return json(detailFixture)
     if (url.startsWith('/api/v1/projects')) {
-      return json({ projects: [{ id: 1, name: '项目甲', templateCode: 'lianmai_365', status: 'active', priority: 'medium', leadMemberId: 1, leadName: '张三', clientName: null, planStartDate: '2026-10-09', planEndDate: '2026-11-09', daysToDelivery: 31, overdueTasks: 0, silentDays: null, lastEventAt: null, updatedAt: 1760000000000 }] })
+      return json({ projects: [{ id: 1, name: '项目甲', templateCode: 'lianmai_365', status: 'active', priority: 'medium', leadMemberId: 1, leadName: '张三', clientName: null, planStartDate: '2026-10-09', planEndDate: '2026-11-09', daysToDelivery: 31, overdueTasks: 0, silentDays: null, lastEventAt: null, updatedAt: 1760000000000, tasksTotal: 1, tasksDone: 0 }] })
     }
     if (url.startsWith('/api/v1/members')) return json({ members: [{ id: 1, name: '张三', status: 'active' }, { id: 2, name: '李四', status: 'active' }] })
     if (url.startsWith('/api/v1/channels')) return json({ channels: [] })
@@ -340,5 +342,161 @@ describe('S38/S39 任务责任人与 AI 初始分配（v0.42）', () => {
     const rowSelect = (await screen.findByLabelText('任务 任务一 责任人')) as HTMLSelectElement
     expect(rowSelect.value).toBe('2') // 草案建议责任人预填
     expect(screen.getByRole('button', { name: '应用 1 项' })).toBeTruthy()
+  })
+})
+
+// PRD S41/S42/S43（v0.44）冒烟：任务行状态色彩（行底色 + 着色下拉/徽章，逾期红优先）、
+// 项目详情「进度与排期」卡（堆叠进度条 + 任务级甘特 + 里程碑刻度 + 未排期组）、
+// 组合页任务进度条（表格列 + 看板卡）。jsdom 不量像素，断言结构契约（data-testid/data-* 锚点）；
+// 坐标正确性由 gantt.test.ts / progress.test.ts 纯函数锁定。色彩语义见 design.md K23。
+describe('S41/S42/S43 状态色彩与进度排期可视化（v0.44）', () => {
+  const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200 })
+  const T = (id: number, over: Record<string, unknown>) => ({
+    id, projectId: 1, responsibleMemberId: null, responsibleName: null,
+    status: 'todo', planStartDate: null, planEndDate: null, isOverdue: false, refCount: 0, ...over,
+  })
+  // 项目1（进行中）：五任务覆盖 todo/doing/done/逾期/只有截止/未排期 → 完成 1/5（20%）、逾期 1
+  const detailActive = {
+    id: 1, name: '项目甲', templateCode: 'lianmai_365', projectTypeId: 1, typeName: '365连麦',
+    status: 'active', priority: 'medium', leadMemberId: 1, leadName: '张三', clientName: null,
+    planStartDate: '2026-09-01', planEndDate: '2026-11-09', daysToDelivery: 31,
+    tasksTotal: 5, tasksDone: 1,
+    tasks: [
+      T(11, { title: '未排期任务' }),
+      T(12, { title: '进行中任务', status: 'doing', planStartDate: '2026-10-01', planEndDate: '2026-10-20' }),
+      T(13, { title: '已完成任务', status: 'done', planStartDate: '2026-09-01', planEndDate: '2026-09-10' }),
+      T(14, { title: '逾期任务', status: 'doing', planStartDate: '2026-08-20', planEndDate: '2026-09-01', isOverdue: true }),
+      T(15, { title: '只有截止任务', planEndDate: '2026-12-01' }),
+    ],
+    milestones: [
+      { id: 21, projectId: 1, name: '中期评审', planDate: '2026-10-15', actualDate: null, status: 'planned' },
+      { id: 22, projectId: 1, name: '交付验收', planDate: '2026-11-01', actualDate: null, status: 'missed' },
+    ],
+  }
+  // 项目2（已结项只读）：done + todo 各一（结项只读快照，冻结的 todo 保持原样）
+  const detailClosed = {
+    ...detailActive, id: 2, name: '项目乙', status: 'closed', closeoutSummary: '已交付',
+    tasks: [T(31, { title: '结项已完成任务', status: 'done' }), T(32, { title: '结项冻结任务' })],
+    milestones: [],
+  }
+  // 项目3（进行中，全部任务无日期）→ 甘特空态引导
+  const detailUndated = { ...detailActive, id: 3, name: '项目丙', tasks: [T(41, { title: '无日期任务甲' })], milestones: [] }
+
+  const visFetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.startsWith('/api/v1/auth/me')) return json({ member: { id: 1, name: '甲', role: 'admin' } })
+    if (url.startsWith('/api/v1/projects/1/events')) return json({ events: [] })
+    if (url.startsWith('/api/v1/projects/1')) return json(detailActive)
+    if (url.startsWith('/api/v1/projects/2/events')) return json({ events: [] })
+    if (url.startsWith('/api/v1/projects/2')) return json(detailClosed)
+    if (url.startsWith('/api/v1/projects/3/events')) return json({ events: [] })
+    if (url.startsWith('/api/v1/projects/3')) return json(detailUndated)
+    if (url.startsWith('/api/v1/projects')) {
+      const P = (id: number, over: Record<string, unknown>) => ({
+        id, name: `项目${id}`, templateCode: 'lianmai_365', typeName: '365连麦',
+        status: 'active', priority: 'medium', leadMemberId: 1, leadName: '张三', clientName: null,
+        planStartDate: '2026-09-01', planEndDate: '2026-11-09', daysToDelivery: 31,
+        overdueTasks: 0, silentDays: null, lastEventAt: null, updatedAt: 1760000000000, ...over,
+      })
+      return json({ projects: [P(1, { name: '项目甲', tasksTotal: 5, tasksDone: 1, overdueTasks: 1 }), P(2, { name: '空项目', tasksTotal: 0, tasksDone: 0 })] })
+    }
+    if (url.startsWith('/api/v1/members')) return json({ members: [{ id: 1, name: '张三', status: 'active' }] })
+    if (url.startsWith('/api/v1/channels')) return json({ channels: [] })
+    return json({ tasks: [] })
+  })
+  beforeEach(() => {
+    cleanup()
+    visFetch.mockClear()
+    globalThis.fetch = visFetch as unknown as typeof fetch
+  })
+
+  const renderDetail = async (id: number) => {
+    location.hash = `#/projects/${id}`
+    render(<StoreProvider><ProjectDetail id={id} /></StoreProvider>)
+    await screen.findAllByTestId('task-row')
+  }
+  const rowOf = (title: string) =>
+    Array.from(document.querySelectorAll('[data-testid="task-row"]') as NodeListOf<HTMLElement>).find((r) => r.textContent!.includes(title))!
+
+  it('S41-1: 任务行按状态整行着色（data-visual），状态下拉按当前值着色；逾期红优先于状态色', async () => {
+    await renderDetail(1)
+    expect(rowOf('未排期任务').dataset.visual).toBe('todo')
+    expect(rowOf('进行中任务').dataset.visual).toBe('doing')
+    expect(rowOf('已完成任务').dataset.visual).toBe('done')
+    expect(rowOf('逾期任务').dataset.visual).toBe('overdue') // 逾期优先于 doing
+    expect(rowOf('只有截止任务').dataset.visual).toBe('todo')
+    // 可编辑态：状态下拉按当前值着色（todo=muted / doing=info / done=ok）
+    expect(rowOf('未排期任务').querySelector('select[data-tone="muted"]')).toBeTruthy()
+    expect(rowOf('进行中任务').querySelector('select[data-tone="info"]')).toBeTruthy()
+    expect(rowOf('已完成任务').querySelector('select[data-tone="ok"]')).toBeTruthy()
+    // 逾期徽章既有口径保留
+    expect(within(rowOf('逾期任务')).getByText('逾期')).toBeTruthy()
+  })
+
+  it('S41-2: 只读（已结项）项目状态列为彩色徽章；结项弹窗未完任务表按状态着色', async () => {
+    await renderDetail(2)
+    expect(rowOf('结项已完成任务').querySelector('[data-testid="task-status-badge"][data-tone="ok"]')).toBeTruthy()
+    expect(rowOf('结项冻结任务').querySelector('[data-testid="task-status-badge"][data-tone="muted"]')).toBeTruthy()
+    expect(rowOf('结项冻结任务').querySelector('select')).toBeNull() // 只读无下拉
+
+    // 结项弹窗（在项目1上打开）：未完 4 条各带状态徽章
+    cleanup()
+    await renderDetail(1)
+    fireEvent.click(screen.getByRole('button', { name: /结项（S8）/ }))
+    const modal = await screen.findByText(/结项（S8）：所有任务标记完成后方可结项/)
+    const badges = Array.from(document.querySelectorAll('[data-testid="task-status-badge"]') as NodeListOf<HTMLElement>)
+      .filter((b) => modal.closest('.fixed')!.contains(b))
+    expect(badges.length).toBe(4)
+    expect(badges.map((b) => b.dataset.tone).sort()).toEqual(['info', 'info', 'muted', 'muted'])
+  })
+
+  it('S42-2: 进度卡渲染分段堆叠条 + 完成 x/y（z%）+ 逾期计数', async () => {
+    await renderDetail(1)
+    const strip = await screen.findByTestId('progress-strip')
+    expect(strip.textContent).toContain('完成 1/5（20%）')
+    expect(strip.textContent).toContain('逾期 1')
+    expect(strip.querySelectorAll('[data-seg="done"]').length).toBe(1)
+    expect(strip.querySelectorAll('[data-seg="doing"]').length).toBe(1)
+    expect(strip.querySelectorAll('[data-seg="todo"]').length).toBe(1)
+  })
+
+  it('S42-3: 任务甘特——今日线/状态条（逾期红）/月刻度/里程碑菱形/未排期组', async () => {
+    await renderDetail(1)
+    expect(await screen.findByTestId('task-gantt-today')).toBeTruthy()
+    const bars = Array.from(document.querySelectorAll('[data-testid="task-gantt-bar"]') as NodeListOf<HTMLElement>)
+    expect(bars.length).toBe(4) // 未排期任务不入轴
+    const visuals = bars.map((b) => b.dataset.visual)
+    expect(visuals).toContain('doing')
+    expect(visuals).toContain('done')
+    expect(visuals).toContain('todo') // 只有截止任务=截止旗形态
+    expect(visuals).toContain('overdue')
+    expect(document.querySelectorAll('[data-testid="task-gantt-tick"]').length).toBeGreaterThanOrEqual(1)
+    const ms = Array.from(document.querySelectorAll('[data-testid="milestone-marker"]') as NodeListOf<HTMLElement>)
+    expect(ms.map((m) => m.dataset.tone)).toEqual(['muted', 'bad']) // planned / missed
+    const un = document.querySelector('[data-testid="task-gantt-unscheduled"]') as HTMLElement
+    expect(un.textContent).toContain('未排期任务')
+  })
+
+  it('S42-3: 全部任务无日期 → 甘特空态引导而非空白图（未排期组仍列出）', async () => {
+    await renderDetail(3)
+    expect(await screen.findByText(/暂无可排期任务/)).toBeTruthy()
+    expect(screen.queryByTestId('task-gantt-today')).toBeNull()
+    const un = document.querySelector('[data-testid="task-gantt-unscheduled"]') as HTMLElement
+    expect(un.textContent).toContain('无日期任务甲')
+  })
+
+  it('S43-2: 组合页表格「进度」列与看板卡迷你进度条；tasksTotal=0 不显示', async () => {
+    location.hash = '#/projects'
+    render(<StoreProvider><Projects view="table" /></StoreProvider>)
+    const row = (await screen.findByText('项目甲')).closest('tr')!
+    expect(within(row).getByTestId('mini-progress').textContent).toContain('1/5')
+    const emptyRow = screen.getByText('空项目').closest('tr')!
+    expect(within(emptyRow).queryByTestId('mini-progress')).toBeNull()
+    expect(screen.getByRole('columnheader', { name: '进度' })).toBeTruthy()
+
+    cleanup()
+    render(<StoreProvider><Projects view="board" /></StoreProvider>)
+    await screen.findByText('项目甲')
+    expect(document.querySelectorAll('[data-testid="mini-progress"]').length).toBe(1) // 空项目不渲染
   })
 })
