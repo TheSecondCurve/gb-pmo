@@ -147,3 +147,9 @@
 - 决策：任务/里程碑状态的颜色语义集中在**前端 `types.ts`** 的 `TASK_STATUS_TONE` / `MILESTONE_STATUS_TONE` 两张表（映射到 Badge 既有五色语义：todo=muted 灰、doing=info 蓝、done=ok 绿；里程碑 met=绿 / missed=红 / planned·cancelled=灰），组件一律查表，不散落色值字符串；**逾期（`isOverdue`，后端 BJ_TODAY 口径）红优先于状态色**（行底色与甘特条）。任务级甘特复用 S30 `gantt.ts` 纯函数与条形四形态、「无日期不入轴收未排期组、不虚构日期」的松散排期语言。项目进度计数（`tasksTotal/tasksDone`）是 `listProjects` 的**行级派生属性**（仿 `overdueTasks` 子查询模式），不进 metrics.js 指标层；枚举层（server/engine/enums.js）不增 color 字段——色彩是展示层关注点，不进数据契约。
 - 理由：颜色是「看一眼分状态」的纯展示语义，集中一张表即可全局对齐、单点调整；逾期是比状态更紧迫的信号，视觉上必须赢（否则逾期任务淹没在同色行里）；进度计数与 `overdueTasks` 一样是行级派生属性而非跨项目聚合指标，放 `listProjects` 子查询避免为展示新开指标口径；枚举层保持 `value→label` 扁平映射不变，SKILL.md drift check 与 Agent 契约零影响。
 - 推翻：无。
+
+## K24 初始分配草案 = 202 + 轮询的异步作业（S44，v0.45）
+
+- 决策：初始分配草案拆两段——启动端点同步校验后立即 202 返回 draftId（LLM 进程内后台执行），新增轮询 GET 返回 running/done/error（错误以 200 载荷返回，规避 v0.21 已知的 PaaS 网关 5xx 响应体替换）；轮询分两路：web 会话路由 + Agent 侧 `GET /api/v1/agent/draft-init-assignments/:draftId`（PAT read scope 即可；非 agent 路由维持仅会话，不为轮询扩 Bearer 面）；作业注册表=进程内 Map（10 分钟 TTL + 200 容量，不落库、不引外部队列组件）；web 弹窗 2s 轮询显示进度。应用端点维持同步（纯 DB 事务，毫秒级）。S40 的超时重试保留在 LLM 调用内部。
+- 理由：线上实测 Zeabur 前 Cloudflare 边缘对源站响应约 120s 即 524 掐断，而 GLM 大 JSON 稳态要约 2 分钟——同步等待模型与边缘上限架构性不兼容（用户 2026-10-09 拍板异步化，否决 SSE 流式：推理阶段 chunk 行为不确定且最坏仍挂 4 分钟）；单进程部署下进程内 Map 即满足瞬态作业语义，无需引入队列/worker 组件（负面清单不变）。
+- 推翻：无（S40「不做流式改造」结论经此确认并落在另一路径上；S39 草案不落库口径不变）。

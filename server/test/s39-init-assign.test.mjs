@@ -1,17 +1,30 @@
 import { describe, it, expect, afterAll } from 'vitest'
-import { setupApp, loginCookie, authed } from './helpers.mjs'
+import { setupApp, loginCookie, authed, waitFor } from './helpers.mjs'
 import { createProposal, confirmProposal } from '../engine/proposals.js'
 import { today, addDays } from '../db/time.js'
 
 // PRD S39（v0.42）— 类型初始化提示词与 AI 初始分配：类型带 init_prompt（自然语言分配/倒排规则）；
 // LLM 产「责任人+计划起止」批量草案（不落库，白名单校验+warnings）；web 人审后应用；
 // Agent apply_init_assignments 可直写（信任边界限定例外，design.md K21）。
+// v0.45（S44/K24）：草案请求异步化——本文件取草案一律经「启动 202 + 轮询」两段。
 
 let ctx
 afterAll(() => ctx?.db.close())
 
 function fakeLlm(handler) {
   return { name: 'fake', complete: async (m) => handler(m) }
+}
+
+/** v0.45 异步草案：启动 → 轮询至终态，返回 done 载荷。 */
+async function fetchDraft(cookie, projectId) {
+  const started = await authed(ctx.app, cookie, 'POST', `/api/v1/projects/${projectId}/draft-init-assignments`, {})
+  if (started.status !== 202) return started
+  let last
+  await waitFor(async () => {
+    last = await authed(ctx.app, cookie, 'GET', `/api/v1/projects/${projectId}/draft-init-assignments/${started.body.draftId}`)
+    return last.body.status !== 'running'
+  }, { timeoutMs: 3000 })
+  return last
 }
 
 async function mkType(cookie, { code, name, initPrompt, tasks = ['需求确认', '方案设计', '交付验收'] }) {
@@ -92,8 +105,9 @@ describe('S39 类型初始化提示词与 AI 初始分配', () => {
         ],
       })
     })
-    const res = await authed(ctx.app, cookie, 'POST', `/api/v1/projects/${p.body.id}/draft-init-assignments`, {})
+    const res = await fetchDraft(cookie, p.body.id) // v0.45：202 启动 + 轮询取 done
     expect(res.status).toBe(200)
+    expect(res.body.status).toBe('done')
     // 类型提示词进了 LLM 上下文
     expect(JSON.stringify(seenMessages)).toContain('专属规则：归内容组')
     // 草案 = 全任务覆盖的完整目标状态：3 行（遗漏任务补保持现状）
@@ -171,13 +185,25 @@ describe('S39 类型初始化提示词与 AI 初始分配', () => {
     expect(denied.status).toBe(403)
     const draft = await agent({ action: 'draft_init_assignments', params: { projectId: p.body.id } }, writeToken)
     expect(draft.status).toBe(200)
-    expect(draft.body.result.assignments).toHaveLength(p.body.tasks.length)
+    // v0.45（S44）：action 返回 draftId，经 Agent 侧 GET 轮询取 done 载荷
+    const { draftId } = draft.body.result
+    let polled
+    await waitFor(async () => {
+      const res = await ctx.app.inject({
+        method: 'GET', url: `/api/v1/agent/draft-init-assignments/${draftId}?projectId=${p.body.id}`,
+        headers: { authorization: `Bearer ${readToken}` },
+      })
+      polled = res.json()
+      return polled.status !== 'running'
+    }, { timeoutMs: 3000 })
+    expect(polled.status).toBe('done')
+    expect(polled.assignments).toHaveLength(p.body.tasks.length)
 
     const deniedApply = await agent({ action: 'apply_init_assignments', params: { projectId: p.body.id, assignments: [] } }, readToken)
     expect(deniedApply.status).toBe(403)
     const applied = await agent({
       action: 'apply_init_assignments',
-      params: { projectId: p.body.id, assignments: draft.body.result.assignments },
+      params: { projectId: p.body.id, assignments: polled.assignments },
     }, writeToken)
     expect(applied.status).toBe(200)
     expect(applied.body.result.updated).toBe(p.body.tasks.length)

@@ -1,5 +1,7 @@
 # 需求初稿（PRD）— 企业项目大脑（Project Brain）
 
+> **v0.45**（2026-10-09）：**AI 初始分配草案异步化（S44）**——v0.43 上线后线上复测仍 524：Zeabur 前 Cloudflare 边缘对源站响应时限约 120s（探针实测 126.2s 被掐），而 GLM-5.3-Flash 产大 JSON 稳态要约 2 分钟，S40 的超时重试还把最坏时长推到 240s——**同步等待模型与边缘上限架构性不兼容**，调多大 timeoutMs 都没用（用户 2026-10-09 拍板走异步化，design.md K24）。草案请求拆为两段：`POST …/draft-init-assignments` 同步校验（项目 404/终态 409/无 LLM 503 不变）后**立即 202 返回 draftId**，LLM 在进程内后台执行；`GET …/draft-init-assignments/:draftId` 轮询取 `running/done/error`（错误也以 200 载荷返回——规避 v0.21 已知的 PaaS 网关 5xx 响应体替换）。作业注册表=进程内 Map（10 分钟 TTL + 容量上限，单进程架构成立，不引外部队列组件）；前端弹窗轮询并显示等待进度；Agent `draft_init_assignments` 同语义返回 draftId，经 Agent 侧 `GET /api/v1/agent/draft-init-assignments/:draftId` 轮询（PAT read scope 即可；/api/v1 非 agent 路由维持仅会话，不扩面）。S40 的超时重试保留在调用内部（对亚分钟级瞬断仍有效）。S39 的「草案不落库、人审后应用」口径不变——应用端点本就快（纯 DB 事务），维持同步。
+>
 > **v0.44**（2026-10-09）：**任务状态色彩与进度/排期可视化（S41/S42/S43）**——任务列表此前无状态色彩区分（状态列是裸文本/透明下拉），项目页也没有进度与排期的视觉呈现，进度只能逐行数。三层增量，全部沿用既有设计语义与手写 CSS 技术路线：①**任务行状态色彩（S41）**：项目详情任务面与结项弹窗的任务行按状态整行浅底色（进行中=浅蓝、完成=浅绿且标题变淡、未开始=无底色），状态列只读=彩色徽章、可编辑=着色下拉；**逾期红优先于状态色**（行浅红 + 既有日期红字/逾期徽章口径不变）。②**项目详情「进度与排期」卡（S42）**：堆叠进度条（完成/进行中/未开始分段 + 完成 x/y（z%）+ 逾期计数，由任务清单纯前端派生）+ **任务级甘特**（复用 S30 `gantt.ts` 纯函数与条形四形态语义，条色=状态、逾期红、今日线、月刻度）+ 里程碑菱形刻度行 + 无日期任务收「未排期」组（松散排期语言不变，不虚构日期）。③**组合页任务进度（S43）**：`listProjects` 增 `tasksTotal/tasksDone` 行属性（仿 `overdueTasks` 子查询模式，排除软删，属行级派生属性、不进 metrics.js 指标层），表格视图加「进度」列、看板卡片加迷你进度条。状态色语义唯一来源=前端 `types.ts` TONE 表（枚举层不增 color 字段），零新依赖、零迁移。决策见 design.md K23。
 >
 > **v0.43**（2026-10-09）：**LLM 调用超时治理（S40）**——S39 线上首用即暴露：GLM-5.3-Flash 产大 JSON（31 条任务分配）实测约 117s，默认 60s 超时（AbortController）直接掐断，用户端收到英文 DOMException 原文「This operation was aborted」。三层修复：①适配层超时**自动原样重试一次**（覆盖瞬时抖动/上游排队）；②仍超时返回 **504 + 中文指引**（含当前 timeoutMs 与调整入口），不再透出英文 abort 原文；③默认 `timeoutMs` 60s→120s（GLM 实测证据），配置台 LLM 卡片补「超时」编辑（此前只能经 `put_setting` 调整）。非超时错误（上游非 2xx）不重试，JSON 模式 400 去参重试的既有语义不变；抽取/日报/梳理/起草/初始分配等全部调用方零改动共享。明确不做：无限重试/指数退避（仍失败=上游真慢，应调超时或换类别）、流式改造（架构不变）。
@@ -620,6 +622,20 @@
 >   - S43-1 `listProjects` 应返回 `tasksTotal/tasksDone`：软删任务不计入；无任务项目为 0/0；已结项/已取消项目同口径返回。
 >   - S43-2 表格视图应有「进度」列（迷你条 + x/y 文案）；看板卡片应显示迷你进度条；tasksTotal=0 的项目不显示进度条。
 
+> **场景 S44（P0）— 系统（大脑·AI 初始分配）— 全线 — 草案请求异步化（v0.45）**
+> - 触发时机：草案 LLM 调用耗时超过部署边缘的源站响应时限——线上实测：Zeabur 前 Cloudflare 边缘约 120s 掐断（HTTP 524），GLM-5.3-Flash 产大 JSON 稳态要约 2 分钟；同步等待模型与边缘上限架构性不兼容（S40 超时治理只解决瞬断与指引，解决不了稳态慢上游，用户 2026-10-09 拍板异步化，design.md K24）。
+> - 操作内容：草案请求拆两段——启动 `POST …/draft-init-assignments` 同步校验（项目 404/终态 409/无 LLM 503 语义不变）后立即 **202 返回 `{draftId, status:'running'}`**，LLM 在进程内后台执行；web 轮询 `GET …/draft-init-assignments/:draftId`（会话）；Agent 轮询 `GET /api/v1/agent/draft-init-assignments/:draftId?projectId=`（PAT，read scope 即可——非 agent 路由仅会话，不为轮询扩 Bearer 面）。两路均返回 `running`（含已等待毫秒）/ `done`（含 assignments/warnings）/ `error`（中文 message，**HTTP 200 载荷返回**——规避 v0.21 已知的 PaaS 网关 5xx 响应体替换）；web 弹窗轮询并显示等待进度。
+> - 产生/变更的记录：进程内作业注册表（Map，10 分钟 TTL + 容量上限；不落库——草案本就是瞬态）；启动审计 `tasks.initAssignDraft` 保留。
+> - 完成标志：任意慢的 LLM 上游下，web 与 Agent 都能拿到草案或中文错误，不再 524。
+> - 审批/协作：无（信任边界不变：草案不落库，应用仍走 S39 确认/例外通道）。
+> - 明确不做：不引外部任务队列/ worker 组件（单进程 Map 成立）；不做作业持久化（进程重启=草案作废，提示重新发起）；不做长连接/SSE 推送（轮询足够，间隔 2s）；应用端点不改（纯 DB 事务，同步足够快）。
+> - 验收标准：
+>   - S44-1 当启动草案时，应同步完成校验（项目不存在 404、终态 409、无 LLM 503）并立即 202 返回 `{draftId, status:'running'}`。
+>   - S44-2 当轮询时，应依次可能返回 `running`（含 elapsedMs）与终态 `done`（含 assignments/warnings）；draftId 不存在/已过期或不属于该项目应 404。
+>   - S44-3 当后台 LLM 失败时，轮询应返回 HTTP 200 `{status:'error', message}`（中文指引，如 504 超时语义），不暴露英文原文。
+>   - S44-4 当 Agent 调 `draft_init_assignments` 时应返回 draftId（write scope）；经 Agent 侧 `GET /api/v1/agent/draft-init-assignments/:draftId`（read scope 即可）应能轮询到同一作业结果。
+>   - S44-5 前端弹窗应显示等待进度并轮询至结果或错误呈现（前端冒烟锚点）。
+
 **P1/P2 场景（编号预分配，细节在晋级时补全）：**
 
 | 编号 | 级别 | 场景 | 一句话说明 |
@@ -904,6 +920,12 @@ Interactive dashboard 是 P0 标配交付（见 analytics-design.md）。**维�
 **口径**：超时判定不变（`AbortController` + `timeoutMs`）；`ask()` 内对 AbortError **原样重试一次**（同一载荷，JSON 模式参数保持）；仍超时抛 **504** 中文指引：「LLM 响应超时（已自动重试一次，每次上限 Ns）…配置台「外部依赖 → LLM」/ `llm.timeoutMs`」。非 AbortError 一概不重试（上游 4xx/5xx 维持 `LLM HTTP <status>` 的 502 语义）；`complete()` 的 JSON 模式 400 去参重试在重试层之外、语义不变。全部大脑调用方（抽取/日报/梳理/起草/初始分配/测试连接）共享此行为，零调用方改动。
 
 **默认值与配置入口**：`DEFAULT_SETTINGS.llm.timeoutMs` 60s→120s（GLM 实测证据；已持久化 timeoutMs 的存量库以库为准——v0.43 发布当天线上已先行经 `put_setting` 调至 120s 应急）；配置台 LLM 卡片新增「超时（秒）」编辑（此前仅 Agent `put_setting` 可调）；llm 校验器补 timeoutMs 1s~600s 整数边界（防呆）。
+
+### 7.23 初始分配草案异步化（S44，v0.45）
+
+**动机与证据**：v0.43 上线后复测仍 524——Zeabur 前 Cloudflare 边缘对源站响应时限约 120s（探针实测 126.2s 被掐），GLM-5.3-Flash 产大 JSON 稳态要约 117s+，且 S40 的重试把最坏时长推到 240s。**同步等待模型与边缘上限架构性不兼容**：不是调参问题，是请求模型问题。
+
+**口径**：`POST …/draft-init-assignments` 只做同步前置校验（项目存在/非终态/LLM 已配置——404/409/503 语义与错误文案均不变），通过后立即 **202** 返回 `{draftId, status:'running'}`，LLM 调用在进程内后台继续；web 轮询 `GET …/draft-init-assignments/:draftId`（会话路由），Agent 轮询 `GET /api/v1/agent/draft-init-assignments/:draftId?projectId=`（Bearer 路由，read scope 即可；非 agent 路由维持仅会话不扩面）。两路均返回：`running`（含 `elapsedMs`）→ `done`（assignments/warnings 与 v0.42 草案形状一致）/ `error`（中文 message，HTTP 200 载荷返回——规避 v0.21 已知的 PaaS 网关 5xx 响应体替换）。作业注册表 = 进程内 `Map`（10 分钟 TTL + 200 容量上限，访问时惰性清理；**不落库**——草案本就是瞬态，进程重启即作废、提示重新发起）。web 弹窗 2s 轮询并显示等待进度。S40 超时重试保留在 LLM 调用内部；应用端点（纯 DB 事务）维持同步。
 
 ### 7.3 偏离记录（须写入项目实例文档）
 

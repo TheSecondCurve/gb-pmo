@@ -138,13 +138,19 @@ export function registerApiRoutes(app) {
     return projects.cancelProject(db, Number(req.params.id), { reason: req.body?.reason }, req.member.id)
   })
 
-  // S39（v0.42）：AI 初始分配——草案（不落库、逐行可编辑）→ 人审后应用（单事务批量生效）；
+  // S39（v0.42）+ S44（v0.45 异步化）：AI 初始分配——启动（同步校验后立即 202 返回 draftId，LLM 后台执行）
+  // → 轮询（running/done/error，错误以 200 载荷返回，规避 PaaS 网关 5xx 替换）→ 人审应用（同步纯 DB 事务）；
   // Agent 通道 apply_init_assignments 可直写（K21 信任边界限定例外）
-  app.post('/api/v1/projects/:id/draft-init-assignments', async (req) => {
-    const { draftInitAssignments } = await import('../brain/initAssign.js')
-    const out = await draftInitAssignments(db, Number(req.params.id), { llm: app.llm ?? undefined })
-    auth.audit(db, { memberId: req.member.id, action: 'tasks.initAssignDraft', objectType: 'project', objectId: Number(req.params.id), detail: { assignments: out.assignments.length, warnings: out.warnings.length } })
-    return out
+  app.post('/api/v1/projects/:id/draft-init-assignments', async (req, reply) => {
+    const { startDraftInitAssignments } = await import('../brain/initAssign.js')
+    const job = startDraftInitAssignments(db, Number(req.params.id), { llm: app.llm ?? undefined })
+    auth.audit(db, { memberId: req.member.id, action: 'tasks.initAssignDraft', objectType: 'project', objectId: Number(req.params.id), detail: { draftId: job.draftId } })
+    return reply.status(202).send(job)
+  })
+
+  app.get('/api/v1/projects/:id/draft-init-assignments/:draftId', async (req) => {
+    const { getDraftInitAssignment } = await import('../brain/initAssign.js')
+    return getDraftInitAssignment(Number(req.params.id), req.params.draftId)
   })
 
   app.post('/api/v1/projects/:id/init-assignments', async (req) =>
