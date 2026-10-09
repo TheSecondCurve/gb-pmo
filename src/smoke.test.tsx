@@ -117,6 +117,18 @@ describe('移动端响应式冒烟', () => {
     expect(screen.getByText(/30 3 \* \* \*/)).toBeTruthy() // 定时状态行回显 cron
   })
 
+  // S40-4（v0.43）：LLM 卡片可编辑超时——默认 120s（K22：GLM 大 JSON 实测约 117s），删掉即红
+  it('Admin：LLM 配置卡含超时编辑字段（S40-4，默认 120s）', async () => {
+    location.hash = '#/admin/integrations/llm'
+    const sFetch = vi.fn(async () => new Response(JSON.stringify({
+      member: { id: 1, name: '甲', role: 'admin' },
+      llm: { provider: 'deepseek', deepseek: { apiKey: '', baseUrl: '', model: '' }, 'glm-coding': { apiKey: '', baseUrl: '', model: '' }, timeoutMs: 120000 },
+    }), { status: 200 }))
+    globalThis.fetch = sFetch as unknown as typeof fetch
+    render(<StoreProvider><Admin section="integrations" tab="llm" /></StoreProvider>)
+    expect(((await screen.findByLabelText(/超时（秒/)) as HTMLInputElement).value).toBe('120')
+  })
+
   it('Chat：移动端会话选择条列出全部会话并可新建', async () => {
     location.hash = '#/chat'
     const chatFetch = vi.fn(async (input: RequestInfo | URL) => {
