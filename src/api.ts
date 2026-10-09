@@ -65,6 +65,8 @@ export const api = {
   createTask: (p: Record<string, unknown>) => req<import('./types').TaskRow>('POST', '/api/v1/tasks', p),
   // S36 任务删除：软删留痕（refs 一并软删，records/历史事件保留）；终态项目 409
   deleteTask: (id: number) => req<{ ok: boolean }>('DELETE', `/api/v1/tasks/${id}`),
+  // S37 项目硬删除：物理抹除全部数据（仅管理员，双重确认），与「取消」的业务终态留痕互补
+  deleteProject: (id: number) => req<{ ok: boolean }>('DELETE', `/api/v1/projects/${id}`),
   taskRecords: (id: number) => req<{ records: import('./types').TaskRecordRow[] }>('GET', `/api/v1/tasks/${id}/records`),
   addTaskRecord: (id: number, content: string) => req<{ record: import('./types').TaskRecordRow }>('POST', `/api/v1/tasks/${id}/records`, { content }),
   // S23 任务参考资料：SOP/知识库链接，全员可维护；推送（日报/预警/个人梳理）附带

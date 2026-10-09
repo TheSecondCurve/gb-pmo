@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 
 // 业务旅程 e2e（engineering-standards §3：Playwright 冒烟，独立 workflow 不挡合并）。
 // 覆盖 PRD 核心旅程：登录看板（S5）→ 立项（S1）→ 组合页四视图（S30）→ 建议确认闭环（S3/S20-2 同口子）
-// → 结项（S8/S29）→ 配置台权限（S17-6）→ AI 助手降级与斜杠（S24-5/S24-6）→ 任务删除（S36）。
+// → 结项（S8/S29）→ 配置台权限（S17-6）→ AI 助手降级与斜杠（S24-5/S24-6）→ 任务删除（S36）→ 项目硬删除（S37）。
 // 数据真理以 API 复核，UI 断言只锚用户可见事实。
 
 const ADMIN = { username: 'admin', password: 'e2e-admin-pass-123' }
@@ -161,4 +161,21 @@ test('J8 任务删除旅程：详情页任务面行内删除 → 软删留痕，
   const after = await (await page.request.get(`/api/v1/projects/${projectId}`)).json()
   expect(after.tasks.length).toBe(13)
   expect(after.tasks.some((t: { title: string }) => t.title === firstTitle)).toBe(false)
+})
+
+test('J9 项目硬删除旅程：详情页「彻底删除」双重确认 → 项目消失且详情 404（S37）', async ({ page }) => {
+  await login(page) // admin（硬删除仅管理员可见/可执行）
+  const name = `J9 硬删 ${Date.now()}`
+  await createProjectViaUi(page, name)
+  await page.getByRole('link', { name }).first().click()
+  const projectId = Number(page.url().match(/projects\/(\d+)/)![1])
+
+  // 双重 confirm 自动接受；删除成功跳回项目列表
+  page.on('dialog', (d) => void d.accept())
+  await page.getByRole('button', { name: '彻底删除' }).click()
+  await expect(page.getByText('项目已彻底删除')).toBeVisible()
+  await expect(page).toHaveURL(/#\/projects$/)
+  await expect(page.getByRole('link', { name })).toHaveCount(0)
+  // API 复核：物理删除后详情 404（级联抹除由 server 场景测试锚定）
+  expect((await page.request.get(`/api/v1/projects/${projectId}`)).status()).toBe(404)
 })
