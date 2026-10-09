@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { fmtDateTime } from '../fmt'
 import { api } from '../api'
 import { useStore } from '../store'
@@ -21,13 +21,13 @@ export default function ProjectDetail({ id }: { id: number }) {
   const [recordsTaskId, setRecordsTaskId] = useState<number | null>(null)
   const [refsTask, setRefsTask] = useState<{ id: number; title: string } | null>(null)
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     const [d, e, m, c] = await Promise.all([
       api.project(id), api.projectEvents(id), api.members(), api.channels(),
     ])
     setP(d); setEvents(e.events); setMembers(m.members); setChannels(c.channels.filter((ch) => ch.projectId === id))
-  }
-  useEffect(() => { void refresh() }, [id])
+  }, [id])
+  useEffect(() => { void refresh() }, [refresh])
 
   if (!p) return <Spinner />
   const readonly = p.status === 'closed' || p.status === 'cancelled'
@@ -196,6 +196,7 @@ export default function ProjectDetail({ id }: { id: number }) {
 function DigestBody({ fn }: { fn: () => Promise<Record<string, unknown>> }) {
   const [out, setOut] = useState<Record<string, unknown> | null>(null)
   const [err, setErr] = useState('')
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- 刻意仅挂载时执行一次：fn 由父组件内联新建，加入依赖会在每次父渲染时重跑梳理（多烧 LLM 调用）
   useEffect(() => { fn().then(setOut).catch((e) => setErr((e as Error).message)) }, [])
   if (err) return <div className="rounded bg-red-50 px-2 py-1.5 text-[13px] text-[var(--color-bad)]">{err}</div>
   if (!out) return <div className="py-6 text-center text-[var(--color-ink-soft)]">大脑梳理中…</div>
@@ -213,8 +214,8 @@ function TaskRecordsModal({ taskId, readonly, onClose }: { taskId: number; reado
   const { toast } = useStore()
   const [records, setRecords] = useState<TaskRecordRow[] | null>(null)
   const [draft, setDraft] = useState('')
-  const refresh = async () => { const r = await api.taskRecords(taskId); setRecords(r.records) }
-  useEffect(() => { void refresh() }, [taskId])
+  const refresh = useCallback(async () => { const r = await api.taskRecords(taskId); setRecords(r.records) }, [taskId])
+  useEffect(() => { void refresh() }, [refresh])
   return (
     <Modal title={`任务更新记录（S2-3，追加式 · ${records?.length ?? 0} 条）`} onClose={onClose}>
       {!records ? <Spinner /> : records.length === 0 ? <Empty hint="暂无记录，追加第一条更新" /> : (
@@ -254,8 +255,8 @@ function TaskRefsModal({ taskId, taskTitle, readonly, onClose }: { taskId: numbe
   const [url, setUrl] = useState('')
   const [note, setNote] = useState('')
   const [editing, setEditing] = useState<TaskRefRow | null>(null)
-  const refresh = async () => { const r = await api.taskRefs(taskId); setRefs(r.refs) }
-  useEffect(() => { void refresh() }, [taskId])
+  const refresh = useCallback(async () => { const r = await api.taskRefs(taskId); setRefs(r.refs) }, [taskId])
+  useEffect(() => { void refresh() }, [refresh])
   const add = async () => {
     try {
       await api.addTaskRef(taskId, { title: title.trim(), url: url.trim(), note: note.trim() || undefined })
