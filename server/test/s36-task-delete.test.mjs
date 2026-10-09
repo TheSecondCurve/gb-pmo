@@ -121,6 +121,8 @@ describe('S36 任务删除（软删）', () => {
     const cookie = await admin()
     const p = await mkProject('口径退出项目')
     const [a, b] = p.tasks
+    // v0.42/S38：立项默认未指派——先全部指派给牵头人，再造「A 未指派 / B 逾期」的对照
+    ctx.db.prepare('UPDATE tasks SET responsible_member_id = ? WHERE project_id = ?').run(ctx.members.lead.id, p.id)
     // A 未指派（责任人置空 + 已设计划开始，S2-1 口径）；B 逾期（截止昨天，责任人=牵头人）
     expect((await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${a.id}`, {
       responsibleMemberId: '', planStartDate: today(), planEndDate: addDays(today(), 5),

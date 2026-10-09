@@ -59,7 +59,7 @@ describe('projects 分支（S1-1 立项校验 / S29-3 终态守卫 / S29-2 结�
   })
 })
 
-describe('tasks/milestones/channels/task_records 分支（S1-2 D3 默认责任人 / S2-3 任务更新记录 / S17-12 渠道规则）', () => {
+describe('tasks/milestones/channels/task_records 分支（S1-2 实例化 / S38 缺省未指派 / S2-3 任务更新记录 / S17-12 渠道规则）', () => {
   it('任务：缺参 400、404、无字段早退；里程碑无字段早退；任务记录追加；渠道规则', () => {
     const { db } = setupDb()
     const s = seed(db)
@@ -67,7 +67,7 @@ describe('tasks/milestones/channels/task_records 分支（S1-2 D3 默认责任�
     expect(() => createTask(db, { title: 'x' }, 1)).toThrow()
     expect(() => getTask(db, 999)).toThrow()
     const t = createTask(db, { projectId: p.id, title: 'T1' }, 1)
-    expect(t.responsibleMemberId).toBe(s.lead.id) // D3 默认牵头人
+    expect(t.responsibleMemberId).toBeNull() // v0.42/S38：缺省未指派（K20 推翻 D3 默认牵头人）
     expect(updateTask(db, t.id, {}, 1).id).toBe(t.id)
     expect(() => updateTask(db, 999, {}, 1)).toThrow()
     const ms = createMilestone(db, { projectId: p.id, name: 'M1', planDate: '2026-10-01' }, 1)
@@ -181,7 +181,8 @@ describe('routing/digest/report 分支（S3-2 分拣降级 / S15-1、S16-1 梳�
     const p = mk(db, s.lead.id, 'R1')
     // S19：北京日口径——「明日」必须用 time.js 算（裸 toISOString 是 UTC，北京 00:00–08:00 窗口会错一天）
     const tomorrow = today(Date.now() + DAY_MS)
-    updateTask(db, p.tasks[0].id, { planEndDate: tomorrow }, 1)
+    // v0.42/S38：任务默认未指派——「责任人日报」前提需显式指派给 lead
+    updateTask(db, p.tasks[0].id, { responsibleMemberId: s.lead.id, planEndDate: tomorrow }, 1)
     await dailyReport(db, { force: true })
     const push = db.prepare(`SELECT * FROM pushes WHERE recipient_member_id = ? AND body LIKE '%明日到期%'`).get(s.lead.id)
     expect(push).toBeTruthy()

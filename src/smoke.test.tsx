@@ -7,6 +7,7 @@ import App from './App'
 import Admin from './pages/Admin'
 import Chat from './pages/Chat'
 import Projects from './pages/Projects'
+import ProjectDetail from './pages/ProjectDetail'
 import { StoreProvider } from './store'
 
 const loginFetch = vi.fn(async () =>
@@ -255,5 +256,77 @@ describe('S30 项目组合页（v0.29）', () => {
       const link = within(tabs).getByRole('link', { name: label })
       expect(link.getAttribute('href')).toBe(href)
     }
+  })
+})
+
+// PRD S38/S39（v0.42）冒烟：新建任务默认未指派（K20 推翻 D3）；类型初始化提示词 + AI 初始分配入口。
+describe('S38/S39 任务责任人与 AI 初始分配（v0.42）', () => {
+  const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200 })
+  const detailFixture = {
+    id: 1, name: '项目甲', templateCode: 'lianmai_365', projectTypeId: 1, typeName: '365连麦',
+    status: 'active', priority: 'medium', leadMemberId: 1, leadName: '张三', clientName: null,
+    planStartDate: '2026-10-09', planEndDate: '2026-11-09', daysToDelivery: 31,
+    tasks: [{ id: 11, projectId: 1, title: '任务一', responsibleMemberId: null, responsibleName: null, status: 'todo', planStartDate: '2026-10-09', planEndDate: null, isOverdue: false, refCount: 0 }],
+    milestones: [],
+  }
+  const detailFetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.startsWith('/api/v1/auth/me')) return json({ member: { id: 1, name: '甲', role: 'admin' } })
+    if (url.includes('/draft-init-assignments')) {
+      return json({ assignments: [{ taskId: 11, title: '任务一', responsibleMemberId: 2, planStartDate: '2026-10-10', planEndDate: '2026-10-12' }], warnings: [] })
+    }
+    if (url.startsWith('/api/v1/projects/1/events')) return json({ events: [] })
+    if (url.startsWith('/api/v1/projects/1')) return json(detailFixture)
+    if (url.startsWith('/api/v1/projects')) {
+      return json({ projects: [{ id: 1, name: '项目甲', templateCode: 'lianmai_365', status: 'active', priority: 'medium', leadMemberId: 1, leadName: '张三', clientName: null, planStartDate: '2026-10-09', planEndDate: '2026-11-09', daysToDelivery: 31, overdueTasks: 0, silentDays: null, lastEventAt: null, updatedAt: 1760000000000 }] })
+    }
+    if (url.startsWith('/api/v1/members')) return json({ members: [{ id: 1, name: '张三', status: 'active' }, { id: 2, name: '李四', status: 'active' }] })
+    if (url.startsWith('/api/v1/channels')) return json({ channels: [] })
+    if (url.startsWith('/api/v1/project-types')) {
+      return json({ types: [{ id: 1, code: 'lianmai_365', name: '365连麦', description: null, initPrompt: '彩排安排在交付前 3 天', tasks: [{ title: '任务A', refs: [] }], status: 'active', projectCount: 0, openProjectCount: 0 }] })
+    }
+    return json({ tasks: [] })
+  })
+  beforeEach(() => {
+    cleanup()
+    detailFetch.mockClear()
+    globalThis.fetch = detailFetch as unknown as typeof fetch
+  })
+
+  it('S38-6: 新建任务责任人下拉默认空（未指派）；立项弹窗牵头人不再标注「任务默认责任人」', async () => {
+    location.hash = '#/projects/1'
+    render(<StoreProvider><ProjectDetail id={1} /></StoreProvider>)
+    // 新建行：责任人下拉默认「（未指派）」，placeholder 不再写「默认牵头人」
+    expect(await screen.findByPlaceholderText(/默认未指派/)).toBeTruthy()
+    const ownerSelect = (await screen.findByLabelText('新任务责任人（默认未指派）')) as HTMLSelectElement
+    expect(ownerSelect.value).toBe('')
+    expect(within(ownerSelect).getByRole('option', { name: '（未指派）' })).toBeTruthy()
+
+    // 立项弹窗：牵头人≠任务默认责任人（S38 解耦）
+    cleanup()
+    location.hash = '#/projects'
+    render(<StoreProvider><Projects view="table" /></StoreProvider>)
+    fireEvent.click(await screen.findByRole('button', { name: '+ 立项' }))
+    expect(await screen.findByText(/牵头人 \*（必填/)).toBeTruthy()
+    expect(screen.queryByText(/任务默认责任人/)).toBeNull()
+  })
+
+  it('S39-8: 类型编辑器渲染初始化提示词字段；项目详情有 AI 初始分配入口与草案弹窗', async () => {
+    // 配置台类型编辑器：提示词字段渲染并回显既有值
+    location.hash = '#/admin/project/types'
+    render(<StoreProvider><Admin section="project" tab="types" /></StoreProvider>)
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+    const promptField = (await screen.findByLabelText(/初始化提示词/)) as HTMLTextAreaElement
+    expect(promptField.value).toBe('彩排安排在交付前 3 天')
+
+    // 项目详情：AI 初始分配入口 → 草案弹窗（行可编辑 + 应用按钮）
+    cleanup()
+    location.hash = '#/projects/1'
+    render(<StoreProvider><ProjectDetail id={1} /></StoreProvider>)
+    fireEvent.click(await screen.findByRole('button', { name: /AI 初始分配/ }))
+    expect(await screen.findByText('✨ AI 初始分配（S39）')).toBeTruthy()
+    const rowSelect = (await screen.findByLabelText('任务 任务一 责任人')) as HTMLSelectElement
+    expect(rowSelect.value).toBe('2') // 草案建议责任人预填
+    expect(screen.getByRole('button', { name: '应用 1 项' })).toBeTruthy()
   })
 })

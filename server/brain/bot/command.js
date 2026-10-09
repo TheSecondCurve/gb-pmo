@@ -379,7 +379,7 @@ ${schemaDigest(db)}
 {"action":"write","kind":"suggest_event","payload":{"targetTaskId":1,"targetField":"status|plan_start_date|plan_end_date|responsible_member_id","targetValue":"done|YYYY-MM-DD|成员id","summary":"可选，缺省自动生成"}}
 {"action":"write","kind":"suggest_event","payload":{"targetMilestoneId":1,"targetField":"plan_date|status","targetValue":"YYYY-MM-DD|met|missed|cancelled","summary":"可选，缺省自动生成"}}  里程碑改期/状态建议（met=达成）
 ${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅飞书群聊）' : '{"action":"write","kind":"bind_channel","payload":{"projectId":1,"chatName":"群名"}}   仅群聊可用，仅项目牵头人/管理员'}
-{"action":"write","kind":"propose","payload":{"kind":"add_task","projectId":1,"title":"任务标题","responsibleMemberId":1?,"planStartDate"?,"planEndDate"?}}  建任务提议（缺省责任人=项目牵头人；牵头人/管理员确认后生效）
+{"action":"write","kind":"propose","payload":{"kind":"add_task","projectId":1,"title":"任务标题","responsibleMemberId":1?,"planStartDate"?,"planEndDate"?}}  建任务提议（缺省责任人=未指派（S38）；牵头人/管理员确认后生效）
 {"action":"write","kind":"propose","payload":{"kind":"add_milestone","projectId":1,"name":"里程碑名","planDate"?}}  建里程碑提议（牵头人/管理员确认后生效）
 {"action":"write","kind":"propose","payload":{"kind":"update_project","projectId":1,"name"?,"clientName"?,"priority":"high|medium|low"?,"planStartDate"?,"planEndDate"?,"leadMemberId":1?}}  项目信息变更提议（至少一个字段；状态不可经此改，S29）
 {"action":"write","kind":"propose","payload":{"kind":"cancel_project","projectId":1,"reason":"取消原因（必填）"}}  取消项目提议（原因必填，S29）

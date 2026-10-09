@@ -135,7 +135,7 @@ describe('S32 九类业务线项目类型预置', () => {
     expect(detail.tasks[0].title).toBe(EXPECTED.content_podcast.first)
     expect(detail.tasks.every((t) => t.source === 'template')).toBe(true)
     expect(detail.tasks.every((t) => t.status === 'todo')).toBe(true)
-    expect(detail.tasks.every((t) => t.responsibleMemberId === ctx.members.lead.id)).toBe(true)
+    expect(detail.tasks.every((t) => t.responsibleMemberId === null)).toBe(true) // v0.42/S38：默认未指派（D3 已推翻）
   })
 
   it('S32-5: 当迁移重复执行（migrations_meta 重放）时，不应产生重复的类型或任务行', () => {

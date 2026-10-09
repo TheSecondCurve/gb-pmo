@@ -149,9 +149,9 @@ describe('S8-3 / S29 取消项目', () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await mkProject(ctx, cookie, '客户J系统')
-    // 制造逾期未完任务（责任人=牵头人 lead）
+    // 制造逾期未完任务（责任人=牵头人 lead；v0.42/S38：立项默认未指派，显式指派）
     const task = p.tasks[0]
-    await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${task.id}`, { planEndDate: '2020-01-01' })
+    await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${task.id}`, { responsibleMemberId: ctx.members.lead.id, planEndDate: '2020-01-01' })
     expect(overdueTasksOf(ctx.db, ctx.members.lead.id).some((t) => t.id === task.id)).toBe(true)
     await authed(ctx.app, cookie, 'POST', `/api/v1/projects/${p.id}/cancel`, { reason: '终止' })
     // 取消后不再计入逾期预警口径

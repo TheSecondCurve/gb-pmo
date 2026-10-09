@@ -2,7 +2,8 @@ import { test, expect, type Page } from '@playwright/test'
 
 // 业务旅程 e2e（engineering-standards §3：Playwright 冒烟，独立 workflow 不挡合并）。
 // 覆盖 PRD 核心旅程：登录看板（S5）→ 立项（S1）→ 组合页四视图（S30）→ 建议确认闭环（S3/S20-2 同口子）
-// → 结项（S8/S29）→ 配置台权限（S17-6）→ AI 助手降级与斜杠（S24-5/S24-6）→ 任务删除（S36）→ 项目硬删除（S37）。
+// → 结项（S8/S29）→ 配置台权限（S17-6）→ AI 助手降级与斜杠（S24-5/S24-6）→ 任务删除（S36）→ 项目硬删除（S37）
+// → 类型初始化提示词与 AI 初始分配降级（S38/S39）。
 // 数据真理以 API 复核，UI 断言只锚用户可见事实。
 
 const ADMIN = { username: 'admin', password: 'e2e-admin-pass-123' }
@@ -178,4 +179,32 @@ test('J9 项目硬删除旅程：详情页「彻底删除」双重确认 → 项
   await expect(page.getByRole('link', { name })).toHaveCount(0)
   // API 复核：物理删除后详情 404（级联抹除由 server 场景测试锚定）
   expect((await page.request.get(`/api/v1/projects/${projectId}`)).status()).toBe(404)
+})
+
+test('J10 类型初始化提示词 + AI 初始分配：提示词保存回读；任务默认未指派；无 LLM 给指引（S38/S39）', async ({ page }) => {
+  await login(page) // admin（类型编辑器仅管理员）
+
+  // 配置台类型编辑器：初始化提示词填写保存（S39-1/S39-8）——按行定位 365连麦（首行可能是停用占位类型）
+  await page.goto('/#/admin/project/types')
+  await page.getByRole('row', { name: /lianmai_365/ }).getByRole('button', { name: '编辑' }).click()
+  const prompt = `J10 规则 ${Date.now()}：彩排安排在交付前 3 天`
+  await page.getByLabel(/初始化提示词/).fill(prompt)
+  await page.getByRole('button', { name: '保存' }).click()
+  await expect(page.getByText(/类型已保存/)).toBeVisible()
+  // API 复核回读一致
+  const types = await (await page.request.get('/api/v1/project-types')).json()
+  expect(types.types.find((t: { code: string }) => t.code === 'lianmai_365').initPrompt).toBe(prompt)
+
+  // 立项 → 任务默认未指派（S38-2，与牵头人解耦）；新建行责任人默认空（S38-6）
+  const name = `J10 初始分配 ${Date.now()}`
+  await createProjectViaUi(page, name)
+  await page.getByRole('link', { name }).first().click()
+  const projectId = Number(page.url().match(/projects\/(\d+)/)![1])
+  const detail = await (await page.request.get(`/api/v1/projects/${projectId}`)).json()
+  expect(detail.tasks.every((t: { responsibleMemberId: number | null }) => t.responsibleMemberId === null)).toBe(true)
+  await expect(page.getByPlaceholder(/默认未指派/)).toBeVisible()
+
+  // AI 初始分配入口在；e2e 环境无 LLM → 草案 503 给明确指引（S39-3 降级语义，不瞎生成）
+  await page.getByRole('button', { name: /AI 初始分配/ }).click()
+  await expect(page.getByText(/LLM 未配置/)).toBeVisible()
 })

@@ -15,6 +15,8 @@ describe('API 补齐（补丁层）', () => {
       name: '补齐项目', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
     // 过滤：按项目 + 按责任人 + 按状态（365连麦预置清单 14 条）
+    // v0.42/S38：立项默认未指派——按责任人过滤的前提需显式指派（setup 直写库，同 branch-boost 惯例）
+    ctx.db.prepare('UPDATE tasks SET responsible_member_id = ? WHERE project_id = ?').run(ctx.members.lead.id, p.body.id)
     const byProject = await authed(ctx.app, cookie, 'GET', `/api/v1/tasks?projectId=${p.body.id}`)
     expect(byProject.body.tasks.length).toBe(14)
     const byOwner = await authed(ctx.app, cookie, `GET`, `/api/v1/tasks?responsibleMemberId=${ctx.members.lead.id}&status=todo`)

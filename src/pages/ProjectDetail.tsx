@@ -5,7 +5,7 @@ import { useStore } from '../store'
 import { Badge, Btn, Card, Empty, Field, InlineSelect, InlineText, Modal, Spinner, inputCls } from '../components/ui'
 import {
   EVENT_STATUS_LABEL, EVENT_TYPE_LABEL, PRIORITY_LABEL, PROJECT_STATUS_LABEL, TASK_STATUS_LABEL,
-  type ChannelRow, type EventRow, type Member, type ProjectDetail, type TaskRecordRow, type TaskRefRow,
+  type ChannelRow, type EventRow, type InitAssignmentRow, type Member, type ProjectDetail, type TaskRecordRow, type TaskRefRow,
 } from '../types'
 
 export default function ProjectDetail({ id }: { id: number }) {
@@ -20,6 +20,7 @@ export default function ProjectDetail({ id }: { id: number }) {
   const [digesting, setDigesting] = useState(false)
   const [recordsTaskId, setRecordsTaskId] = useState<number | null>(null)
   const [refsTask, setRefsTask] = useState<{ id: number; title: string } | null>(null)
+  const [initAssigning, setInitAssigning] = useState(false)
 
   const refresh = useCallback(async () => {
     const [d, e, m, c] = await Promise.all([
@@ -78,7 +79,15 @@ export default function ProjectDetail({ id }: { id: number }) {
         <Card title={`结束原因 / 复盘记录（${p.status === 'closed' ? '已结项' : '已取消'} · 只读）`}><div className="whitespace-pre-wrap text-[13px]">{p.closeoutSummary}</div></Card>
       )}
 
-      <Card title={`任务面（${p.tasks.length}）${readonly ? ' · 只读' : ''}`} actions={!readonly ? <Btn small onClick={() => void 0} title="底部添加行">在下方添加</Btn> : undefined}>
+      <Card title={`任务面（${p.tasks.length}）${readonly ? ' · 只读' : ''}`} actions={!readonly ? (
+        <div className="flex gap-2">
+          {/* S39：AI 初始分配——按类型初始化提示词批量产「责任人+排期」草案，人审后一键应用 */}
+          {p.tasks.some((t) => t.status !== 'done') && (
+            <Btn small onClick={() => setInitAssigning(true)} title="按类型初始化提示词批量分配责任人与计划起止（草案可改，应用后生效）">✨ AI 初始分配</Btn>
+          )}
+          <Btn small onClick={() => void 0} title="底部添加行">在下方添加</Btn>
+        </div>
+      ) : undefined}>
         {p.tasks.length === 0 ? <Empty hint="暂无任务（自由创建项目可手工添加）" /> : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[44rem] text-[13px]">
@@ -134,7 +143,7 @@ export default function ProjectDetail({ id }: { id: number }) {
             </table>
           </div>
         )}
-        {!readonly && <AddTask projectId={id} onDone={refresh} />}
+        {!readonly && <AddTask projectId={id} members={activeMembers} onDone={refresh} />}
       </Card>
 
       <div className="grid gap-4 md:grid-cols-2">
@@ -205,6 +214,9 @@ export default function ProjectDetail({ id }: { id: number }) {
       {closing && <CloseModal p={p} onClose={() => setClosing(false)} onDone={async () => { setClosing(false); toast('项目已结项归档'); await refresh() }} />}
       {cancelling && <CancelModal p={p} onClose={() => setCancelling(false)} onDone={async () => { setCancelling(false); toast('项目已取消归档'); await refresh() }} />}
       {binding && <BindChannelModal projectId={id} onClose={() => setBinding(false)} onDone={async () => { setBinding(false); toast('渠道已绑定'); await refresh() }} />}
+      {initAssigning && (
+        <InitAssignModal projectId={id} members={activeMembers} onClose={() => setInitAssigning(false)} onDone={async () => { setInitAssigning(false); await refresh() }} />
+      )}
       {digesting && (
         <Modal title="🧠 项目梳理（S15）" onClose={() => setDigesting(false)} wide>
           <DigestBody fn={() => api.projectDigest(id)} />
@@ -348,16 +360,96 @@ function TaskRefsModal({ taskId, taskTitle, readonly, onClose }: { taskId: numbe
   )
 }
 
-function AddTask({ projectId, onDone }: { projectId: number; onDone: () => Promise<void> }) {
+function AddTask({ projectId, members, onDone }: { projectId: number; members: Member[]; onDone: () => Promise<void> }) {
   const [title, setTitle] = useState('')
+  const [owner, setOwner] = useState('') // S38：新建默认未指派（责任人与项目牵头人解耦，K20）
+  const submit = async () => {
+    if (!title.trim()) return
+    await api.createTask({ projectId, title, ...(owner ? { responsibleMemberId: Number(owner) } : {}) })
+    setTitle(''); setOwner(''); await onDone()
+  }
   return (
     <div className="mt-3 flex gap-2">
-      <input className="cell-input" placeholder="新增任务标题（责任人默认牵头人，Enter 保存）" value={title}
+      <input className="cell-input" placeholder="新增任务标题（默认未指派，Enter 保存）" value={title}
         onChange={(e) => setTitle(e.target.value)}
-        onKeyDown={async (e) => {
-          if (e.key === 'Enter' && title.trim()) { await api.createTask({ projectId, title }); setTitle(''); await onDone() }
-        }} />
+        onKeyDown={(e) => { if (e.key === 'Enter') void submit() }} />
+      <select className="cell-input w-full sm:w-32" aria-label="新任务责任人（默认未指派）" value={owner} onChange={(e) => setOwner(e.target.value)}>
+        <option value="">（未指派）</option>
+        {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+      </select>
     </div>
+  )
+}
+
+/** S39（v0.42）：AI 初始分配弹窗——草案（不落库）逐行可编辑，「应用」单事务批量生效并留痕。 */
+function InitAssignModal({ projectId, members, onClose, onDone }: { projectId: number; members: Member[]; onClose: () => void; onDone: () => Promise<void> }) {
+  const { toast } = useStore()
+  const [rows, setRows] = useState<InitAssignmentRow[] | null>(null)
+  const [warnings, setWarnings] = useState<string[]>([])
+  const [err, setErr] = useState('')
+  const [applying, setApplying] = useState(false)
+  useEffect(() => {
+    api.draftInitAssignments(projectId)
+      .then((out) => { setRows(out.assignments); setWarnings(out.warnings) })
+      .catch((e) => setErr((e as Error).message))
+  }, [projectId])
+  const patchRow = (taskId: number, p: Partial<InitAssignmentRow>) =>
+    setRows((rs) => (rs ?? []).map((r) => (r.taskId === taskId ? { ...r, ...p } : r)))
+  const apply = async () => {
+    if (!rows?.length) return
+    setApplying(true); setErr('')
+    try {
+      const out = await api.applyInitAssignments(projectId, rows.map((r) => ({
+        taskId: r.taskId, responsibleMemberId: r.responsibleMemberId, planStartDate: r.planStartDate, planEndDate: r.planEndDate,
+      })))
+      toast(`初始分配已应用：${out.updated} 项任务（已留痕）`)
+      await onDone()
+    } catch (e) { setErr((e as Error).message); setApplying(false) }
+  }
+  return (
+    <Modal title="✨ AI 初始分配（S39）" onClose={onClose} wide>
+      {err && <div className="mb-3 rounded bg-red-50 px-2 py-1.5 text-[12px] text-[var(--color-bad)]">{err}</div>}
+      {!rows && !err && <div className="py-6 text-center text-[var(--color-ink-soft)]">大脑分配中…</div>}
+      {rows && (
+        <>
+          {warnings.length > 0 && (
+            <div className="mb-2 rounded-md border border-[var(--color-line)] px-2.5 py-2 text-[12px] text-[var(--color-ink-soft)]">
+              {warnings.map((w, i) => <div key={i}>⚠ {w}</div>)}
+            </div>
+          )}
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[36rem] text-[13px]">
+              <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
+                <tr className="border-b border-[var(--color-line)]"><th className="py-1.5">任务</th><th>责任人</th><th>计划开始</th><th>计划结束</th></tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => (
+                  <tr key={r.taskId} className="border-b border-[var(--color-line)] last:border-0">
+                    <td className="py-1 pr-2">{r.title}</td>
+                    <td>
+                      <select className="cursor-pointer rounded bg-transparent px-1 py-0.5 hover:bg-[var(--color-brand-soft)]"
+                        aria-label={`任务 ${r.title} 责任人`}
+                        value={r.responsibleMemberId ?? ''}
+                        onChange={(e) => patchRow(r.taskId, { responsibleMemberId: e.target.value === '' ? null : Number(e.target.value) })}>
+                        <option value="">（未指派）</option>
+                        {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                      </select>
+                    </td>
+                    <td><input type="date" className="cell-input !w-36" value={r.planStartDate ?? ''} onChange={(e) => patchRow(r.taskId, { planStartDate: e.target.value || null })} /></td>
+                    <td><input type="date" className="cell-input !w-36" value={r.planEndDate ?? ''} onChange={(e) => patchRow(r.taskId, { planEndDate: e.target.value || null })} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-3 flex items-center justify-end gap-2">
+            <span className="mr-auto text-[11px] text-[var(--color-ink-soft)]">草案由 AI 按类型初始化提示词生成（未落库）；应用后单事务生效，讨论面与审计留痕。</span>
+            <Btn onClick={onClose}>取消</Btn>
+            <Btn kind="primary" disabled={applying || rows.length === 0} onClick={() => void apply()}>{applying ? '应用中…' : `应用 ${rows.length} 项`}</Btn>
+          </div>
+        </>
+      )}
+    </Modal>
   )
 }
 
