@@ -81,6 +81,11 @@ export const api = {
 
   confirmEvent: (id: number) => req('POST', `/api/v1/events/${id}/confirm`, {}),
   rejectEvent: (id: number) => req('POST', `/api/v1/events/${id}/reject`, {}),
+  // S4-7（v0.46/K25）：待确认建议一键批量处理（聚合返回，单条失败计入 failed 不阻塞其余）
+  confirmEventsBatch: (ids: number[]) =>
+    req<{ confirmed: number[]; failed: { id: number; message: string }[] }>('POST', '/api/v1/events/confirm-batch', { ids }),
+  rejectEventsBatch: (ids: number[]) =>
+    req<{ rejected: number[]; failed: { id: number; message: string }[] }>('POST', '/api/v1/events/reject-batch', { ids }),
   pendingEvents: () => req<{ events: import('./types').EventRow[] }>('GET', '/api/v1/events/pending'),
 
   // S25 通用提议：确认/驳回（与飞书卡片同一口子，权限矩阵在 engine）

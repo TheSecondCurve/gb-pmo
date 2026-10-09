@@ -153,3 +153,9 @@
 - 决策：初始分配草案拆两段——启动端点同步校验后立即 202 返回 draftId（LLM 进程内后台执行），新增轮询 GET 返回 running/done/error（错误以 200 载荷返回，规避 v0.21 已知的 PaaS 网关 5xx 响应体替换）；轮询分两路：web 会话路由 + Agent 侧 `GET /api/v1/agent/draft-init-assignments/:draftId`（PAT read scope 即可；非 agent 路由维持仅会话，不为轮询扩 Bearer 面）；作业注册表=进程内 Map（10 分钟 TTL + 200 容量，不落库、不引外部队列组件）；web 弹窗 2s 轮询显示进度。应用端点维持同步（纯 DB 事务，毫秒级）。S40 的超时重试保留在 LLM 调用内部。
 - 理由：线上实测 Zeabur 前 Cloudflare 边缘对源站响应约 120s 即 524 掐断，而 GLM 大 JSON 稳态要约 2 分钟——同步等待模型与边缘上限架构性不兼容（用户 2026-10-09 拍板异步化，否决 SSE 流式：推理阶段 chunk 行为不确定且最坏仍挂 4 分钟）；单进程部署下进程内 Map 即满足瞬态作业语义，无需引入队列/worker 组件（负面清单不变）。
 - 推翻：无（S40「不做流式改造」结论经此确认并落在另一路径上；S39 草案不落库口径不变）。
+
+## K25 对话面确认卡收敛：直改为默认，确认卡只留终态操作（S20/S24/S25/S35 修订 + S4-7，v0.46）
+
+- 决策：**对话面（飞书机器人/web AI 助手，K12 统一管线）的写操作不再逐条出确认卡**（用户 2026-10-09 拍板：「只有删除动作做确认，其他直接操作并返回结果；批量操作只确认一次」）。①`suggest_event`（任务状态/日期/责任人、里程碑改期/状态）落建议型事件后立即以发令人身份走 `confirmEvent` 同一口子生效（status=effective、decided_by=发令人，终态/软删守卫与事务全继承；不再 pushSuggestion），并支持 `items[]` 批量——逐条独立事务生效、一条汇总回执单列失败原因（agent 循环「写即终止」不变，批量在一个 write 内表达）；②`propose` 分流：`cancel_project`/`close_project` 维持「提议→确认卡→confirmProposal」（HMAC/确认矩阵不变），其余 kind（add_task/add_milestone/update_project/create_project/create_project_type）不再落 proposals 表，软校验后**复用 `PROPOSAL_KINDS[kind].canConfirm` 前置为发起人执行权限校验**、通过即 `spec.apply` 直写既有 engine——权限模型不变，只少一步点按；③`bind_channel` 直写 upsertChannel（发起时牵头人/admin 校验不变）。**抽取面信任边界不动**（定时抽取/梳理的建议仍 pending 等人确认），但 web 项目详情页待确认建议新增「全部生效/全部驳回」批量端点与按钮（confirmEvents/rejectEvents 逐条同口子应用、单条 409 不阻塞、聚合回执，S4-7）。卡片回调的 suggest/bind 分支保留以兼容存量卡片点按。Agent SQL/action 通道（SKILL.md 守则）与 web 表单直改通道不变。
+- 理由：对话面的写是**人的明确指令**经 LLM 解析，确认卡只剩「人核对解析值」的纠错价值而无权限价值（v0.34 起任务面建议本就任意绑定成员可点），逐条点按是纯摩擦；且任务面变更错改可逆（状态/日期/责任人再说一句即可改回），回执明示解析值即可兜底。不可逆的终态操作（取消/结项）保留人拍板——这与「确认卡只留删除级动作」的拍板一致。批量直改用一条汇总回执取代 N 张卡。抽取面是 LLM 对群聊的**被动推断**（误抽率有采纳率告警 S3-5 在监控），人确认是防误改任务面的最后防线，维持不动；其痛点「逐条确认」由 web 一键批量解决。canConfirm 复用为执行校验使权限语义零漂移。
+- 推翻：K9「写路径唯一不变量：suggest+bind 出确认卡」的对话面部分（propose 确认卡收敛为 cancel/close 两类）；K12/K21 确立的**抽取面**边界不变。

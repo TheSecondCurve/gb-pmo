@@ -21,28 +21,10 @@ export { issueBindCode, consumeBindCode } from './pipeline.js'
 // （编辑接口见 connectors/feishu.js#patchText）。飞书无原生「正在输入」状态，此为等价形态。
 const TYPING_TEXT = '收到，正在处理…'
 
-// —— 签名与卡片 ——
+// —— 签名与卡片（v0.46/K25：确认卡仅余取消/结项提议；存量建议卡/群登记卡的点按由 handleCardAction 兼容分支承接） ——
 
 function hmac(secret, canonical) {
   return crypto.createHmac('sha256', secret).update(canonical).digest('hex').slice(0, 16)
-}
-
-export function buildSuggestCard({ eventId, summary, eventType }, secret) {
-  const value = (a) => ({ a, e: String(eventId), s: hmac(secret, `${a}:${eventId}`) })
-  return {
-    config: { wide_screen: true },
-    header: { template: 'blue', title: { tag: 'plain_text', content: `待确认：${label('eventType', eventType)}` } },
-    elements: [
-      { tag: 'div', text: { tag: 'lark_md', content: `**${summary}**\n建议事件 #${eventId} · 任意已绑定成员确认后生效（v0.34 起全员可点按）` } },
-      {
-        tag: 'action',
-        actions: [
-          { tag: 'button', text: { tag: 'plain_text', content: '确认生效' }, type: 'primary', value: value('confirm') },
-          { tag: 'button', text: { tag: 'plain_text', content: '驳回' }, type: 'danger', value: value('reject') },
-        ],
-      },
-    ],
-  }
 }
 
 export function buildProposalCard({ proposalId, summary }, secret) {
@@ -57,31 +39,6 @@ export function buildProposalCard({ proposalId, summary }, secret) {
         actions: [
           { tag: 'button', text: { tag: 'plain_text', content: '确认生效' }, type: 'primary', value: value('confirm') },
           { tag: 'button', text: { tag: 'plain_text', content: '驳回' }, type: 'danger', value: value('reject') },
-        ],
-      },
-    ],
-  }
-}
-
-export function buildBindCard({ projectId, projectName, chatId, chatName }, secret) {
-  return {
-    config: { wide_screen: true },
-    header: { template: 'green', title: { tag: 'plain_text', content: '群登记确认' } },
-    elements: [
-      {
-        tag: 'div',
-        text: {
-          tag: 'lark_md',
-          content: `将本群${chatName ? `「${chatName}」` : ''}绑定为项目**「${projectName}」**（#${projectId}）的专题渠道。\n确认后从现在开始定时抽取本群聊天归档到该项目讨论面（不回灌历史）。`,
-        },
-      },
-      {
-        tag: 'action',
-        actions: [
-          {
-            tag: 'button', text: { tag: 'plain_text', content: '确认登记' }, type: 'primary',
-            value: { a: 'bind', p: String(projectId), g: String(chatId), n: String(chatName || ''), s: hmac(secret, `bind:${chatId}:${projectId}`) },
-          },
         ],
       },
     ],
@@ -207,16 +164,12 @@ export async function handleBotEvent(db, evt, opts = {}) {
     throw e
   }
 
-  // ⑦ 卡片出口：渲染为 HMAC 签名确认卡（建议/提议/群登记），回执合成文本落 bot_reply（S20-15，LLM 可指代）
+  // ⑦ 卡片出口：渲染为 HMAC 签名确认卡（v0.46/K25 起仅取消/结项提议卡），回执合成文本落 bot_reply（S20-15，LLM 可指代）
   if (out?.type === 'card') {
     const w = out.writeResult
     const secret = opts.secret ?? (process.env.GB_PMO_SESSION_SECRET || '')
-    const card = w.cardKind === 'bind' ? buildBindCard(w, secret) : w.cardKind === 'propose' ? buildProposalCard(w, secret) : buildSuggestCard(w, secret)
-    const cardDesc = w.cardKind === 'bind'
-      ? `[群登记确认卡] 将本群绑定为项目「${w.projectName}」的专题渠道，待确认`
-      : w.cardKind === 'propose'
-        ? `[已生成提议 #${w.proposalId}] ${w.summary}，待有权人确认`
-        : `[已生成待确认事件 #${w.eventId}] ${w.summary}，待确认`
+    const card = buildProposalCard(w, secret)
+    const cardDesc = `[已生成提议 #${w.proposalId}] ${w.summary}，待有权人确认`
     // S20-19：占位消息编辑为合成回执文本（尽力而为，失败不阻塞卡片发送）
     if (typingMessageId) {
       const mid = typingMessageId
@@ -225,12 +178,14 @@ export async function handleBotEvent(db, evt, opts = {}) {
     }
     const sent = await send({ chatId: evt.chatId, card })
     recordReplyRow(db, sent?.messageId, evt, cardDesc, `write:${w.cardKind}`)
-    return finish({ memberId: member.id, intent: `write:${w.cardKind}`, result: 'card_sent', llmCalls: out.llmCalls, detail: { ...out.detail, eventId: w.eventId ?? null } })
+    return finish({ memberId: member.id, intent: `write:${w.cardKind}`, result: 'card_sent', llmCalls: out.llmCalls, detail: { ...out.detail, proposalId: w.proposalId ?? null } })
   }
   return out
 }
 
 // —— 卡片回调（确认/驳回/群登记） ——
+// v0.46/K25：对话面不再产建议卡与群登记卡（直改/直写），confirm/reject 与 bind 分支保留以兼容存量卡片点按；
+// prop 分支是在役路径（取消/结项提议卡）。
 
 /**
  * @param {object} cardEvt { operatorOpenId, value:{a,e?,s?}|{a:'bind',p,g,n,s}, chatId, messageId? }
@@ -376,24 +331,25 @@ ${schemaDigest(db)}
 {"action":"morning","projectId":1?}            今日晨报：按会话自动定域（项目专题群=本群项目；私聊/其他=全部在跑项目；可显式给 projectId 取单项目）——用户要「晨报/早报/今天的情况汇总」时优先用它
 {"action":"recent_chat","limit":20}            本群最近讨论（仅项目专题群；用户提到「刚才/上面/刚才讨论的」而对话历史不足以理解时，先读它再作答/起建议）——其余会话该动作返回不可用说明
 {"action":"write","kind":"record_event","payload":{"projectId":1,"eventType":"progress|risk|decision|blocker","summary":"一句中文"}}
-{"action":"write","kind":"suggest_event","payload":{"targetTaskId":1,"targetField":"status|plan_start_date|plan_end_date|responsible_member_id","targetValue":"done|YYYY-MM-DD|成员id","summary":"可选，缺省自动生成"}}
-{"action":"write","kind":"suggest_event","payload":{"targetMilestoneId":1,"targetField":"plan_date|status","targetValue":"YYYY-MM-DD|met|missed|cancelled","summary":"可选，缺省自动生成"}}  里程碑改期/状态建议（met=达成）
-${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅飞书群聊）' : '{"action":"write","kind":"bind_channel","payload":{"projectId":1,"chatName":"群名"}}   仅群聊可用，仅项目牵头人/管理员'}
-{"action":"write","kind":"propose","payload":{"kind":"add_task","projectId":1,"title":"任务标题","responsibleMemberId":1?,"planStartDate"?,"planEndDate"?}}  建任务提议（缺省责任人=未指派（S38）；牵头人/管理员确认后生效）
-{"action":"write","kind":"propose","payload":{"kind":"add_milestone","projectId":1,"name":"里程碑名","planDate"?}}  建里程碑提议（牵头人/管理员确认后生效）
-{"action":"write","kind":"propose","payload":{"kind":"update_project","projectId":1,"name"?,"clientName"?,"priority":"high|medium|low"?,"planStartDate"?,"planEndDate"?,"leadMemberId":1?}}  项目信息变更提议（至少一个字段；状态不可经此改，S29）
-{"action":"write","kind":"propose","payload":{"kind":"cancel_project","projectId":1,"reason":"取消原因（必填）"}}  取消项目提议（原因必填，S29）
-{"action":"write","kind":"propose","payload":{"kind":"close_project","projectId":1,"summary":"结项总结（必填）"}}   结项提议（总结必填，S29；确认时按 S8 校验：任务须全部完成）
-{"action":"write","kind":"propose","payload":{"kind":"create_project","name":"...","typeCode":"...","leadMemberId":1,"planStartDate?","planEndDate?","tasks":["标题"|{"title":"...","refs":[{"title":"SOP名","url":"https://...","note?":"备注"}]}...]?,"autoSchedule":true?}}  立项提议（tasks 缺省按类型内嵌清单实例化、含类型预设的逐步骤参考资料；纯标题覆盖=不带参考资料，refs 显式给出才带；autoSchedule=true 按「计划开始（缺省今天）→交付日期」倒排每条任务计划起止，须有 planEndDate）
-{"action":"write","kind":"propose","payload":{"kind":"create_project_type","code":"...","name":"...","tasks":["标题"|{"title":"...","refs":[{"title":"SOP名","url":"https://..."}...]}...]}}  新建项目类型提议（任务清单内嵌于类型；有标准 SOP/知识库文档的步骤可挂 refs，每步 ≤10 条，立项时随任务预填给执行人，S33）
+{"action":"write","kind":"suggest_event","payload":{"targetTaskId":1,"targetField":"status|plan_start_date|plan_end_date|responsible_member_id","targetValue":"done|YYYY-MM-DD|成员id","summary":"可选，缺省自动生成"}}  任务变更：直接生效并回执（落建议型事件留痕，发令人即生效人）
+{"action":"write","kind":"suggest_event","payload":{"items":[{"targetTaskId":1,"targetField":"status","targetValue":"done"},{"targetTaskId":2,"targetField":"plan_end_date","targetValue":"2026-12-31"}]}}  一条指令含多个变更时用 items 批量（≤20 条，逐条生效、汇总回执单列失败原因）
+{"action":"write","kind":"suggest_event","payload":{"targetMilestoneId":1,"targetField":"plan_date|status","targetValue":"YYYY-MM-DD|met|missed|cancelled","summary":"可选"}}  里程碑改期/状态：直接生效（met=达成）
+${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅飞书群聊）' : '{"action":"write","kind":"bind_channel","payload":{"projectId":1,"chatName":"群名"}}   仅群聊可用，仅项目牵头人/管理员：直接登记本群为项目专题渠道并回执（不再出确认卡）'}
+{"action":"write","kind":"propose","payload":{"kind":"add_task","projectId":1,"title":"任务标题","responsibleMemberId":1?,"planStartDate"?,"planEndDate"?}}  建任务：牵头人/管理员直接生效（缺省责任人=未指派（S38））
+{"action":"write","kind":"propose","payload":{"kind":"add_milestone","projectId":1,"name":"里程碑名","planDate"?}}  建里程碑：牵头人/管理员直接生效
+{"action":"write","kind":"propose","payload":{"kind":"update_project","projectId":1,"name"?,"clientName"?,"priority":"high|medium|low"?,"planStartDate"?,"planEndDate"?,"leadMemberId":1?}}  项目信息变更：牵头人/管理员直接生效（至少一个字段；状态不可经此改，S29）
+{"action":"write","kind":"propose","payload":{"kind":"create_project","name":"...","typeCode":"...","leadMemberId":1,"planStartDate?","planEndDate?","tasks":["标题"|{"title":"...","refs":[{"title":"SOP名","url":"https://...","note?":"备注"}]}...]?,"autoSchedule":true?}}  立项：直接生效（发起人须为管理员或拟任牵头人本人；tasks 缺省按类型内嵌清单实例化、含类型预设的逐步骤参考资料；纯标题覆盖=不带参考资料，refs 显式给出才带；autoSchedule=true 按「计划开始（缺省今天）→交付日期」倒排每条任务计划起止，须有 planEndDate）
+{"action":"write","kind":"propose","payload":{"kind":"create_project_type","code":"...","name":"...","tasks":["标题"|{"title":"...","refs":[{"title":"SOP名","url":"https://..."}...]}...]}}  新建项目类型：仅管理员直接生效（任务清单内嵌于类型；有标准 SOP/知识库文档的步骤可挂 refs，每步 ≤10 条，立项时随任务预填给执行人，S33）
+{"action":"write","kind":"propose","payload":{"kind":"cancel_project","projectId":1,"reason":"取消原因（必填）"}}  取消项目【终态·出确认卡】：原因必填（S29），牵头人/管理员点按确认后才生效
+{"action":"write","kind":"propose","payload":{"kind":"close_project","projectId":1,"summary":"结项总结（必填）"}}   结项【终态·出确认卡】：总结必填（S29；确认时按 S8 校验：任务须全部完成）
 {"action":"write","kind":"trigger","payload":{"name":"trigger_extraction|generate_project_digest|generate_person_digest|push_report","params":{}}}
 {"action":"reply","text":"最终答复"}            查够/完成后回答；需要向用户澄清时也用它提问
 
 规则：
 1. 先查后答：结论必须基于 query/metric/brief 取回的数据，取不到就明说，绝不编造项目事实；项目整体状况优先 brief（数据已含中文标签，剩余天数负数=超期）。
 2. 项目/任务/成员一律用你查到的真实 id；相对日期按今天换算成 YYYY-MM-DD。
-3. 纯进展/风险/决策/阻塞 → record_event 直接登记；任务/里程碑变更（状态/日期/责任人）→ suggest_event ${web ? '生成待确认事件（用户会在页面上确认生效），不得谎称已改' : '出确认卡，不得谎称已改'}。
-4. 项目级/配置级操作（建任务/建里程碑/项目信息变更/结项/取消/立项/项目类型）→ propose 起草提议，待有权人确认后才生效，不得谎称已生效；项目没有「暂停/启动」操作（S29：状态仅 进行中→已结项/已取消）。
+3. 纯进展/风险/决策/阻塞 → record_event 直接登记；任务/里程碑变更（状态/日期/责任人）→ suggest_event **直接生效**（多个变更用 items 批量一次办完）——回执即变更结果，不得谎称已改；变更失败（任务不存在/终态项目/非法值等）会返回失败原因，如实转告。
+4. 建任务/建里程碑/项目信息变更/立项/项目类型/群登记 → 直接生效并回执（发起人无权限会被拒，如实说明）；**仅取消项目/结项**走 propose 确认卡，待有权人点按后才生效，不得谎称已生效；项目没有「暂停/启动」操作（S29：状态仅 进行中→已结项/已取消）。
 5. 不支持的事（财务/合同/绩效/自动重排期求解等）直接说明不支持。
 6. 回复用简洁中文，短段/列表即可。群聊里用户以「刚才/上面讨论的」为据而对话历史不足以理解时，先 recent_chat 读群内最近讨论再行动（仅项目专题群可用）。${web ? '\n6. 这是多轮会话：参考对话历史理解指代（「它/这个项目」等），历史里已有的查询结果可直接引用。' : ''}${hasHistory ? '\n7. 本次附带「对话历史」：仅供理解指代（如「它/这个项目/刚才那条」，群聊历史带说话人名）；事实与最新数据一律以本轮 query/metric 取回为准，历史结论可能已过时，不得直接引用历史数字回答现状。' : ''}`
 }
