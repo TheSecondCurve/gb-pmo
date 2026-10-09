@@ -25,9 +25,13 @@ const VALIDATORS = {
     }
   },
   // S17-11（v0.14）：LLM 类别枚举校验；baseUrl/model 不强校验（归一化见 NORMALIZERS.llm）
+  // S40（v0.43）：timeoutMs 1s~600s 整数边界（防呆；GLM 大 JSON 实测需 ~120s，见 K22）
   llm(value) {
     if (value?.provider !== undefined && !LLM_PROVIDERS[value.provider]) {
       throw Object.assign(new Error(`llm.provider 须为 ${Object.keys(LLM_PROVIDERS).join(' / ')}`), { statusCode: 400 })
+    }
+    if (value?.timeoutMs !== undefined && (!Number.isInteger(value.timeoutMs) || value.timeoutMs < 1000 || value.timeoutMs > 600000)) {
+      throw Object.assign(new Error('llm.timeoutMs 须为 1000~600000 的整数（毫秒）'), { statusCode: 400 })
     }
   },
   // S24（v0.16）：AI 助手每日指令限额（正整数）

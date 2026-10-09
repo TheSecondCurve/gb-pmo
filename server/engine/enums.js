@@ -95,11 +95,12 @@ export const DEFAULT_SETTINGS = {
   calendar: { feishuCalendarId: '' },
   // v0.15（S17-11）：LLM 按类别分开存储——各类别独立 apiKey/baseUrl/model（互不覆盖），provider=当前生效类别，
   // timeoutMs 全局共用；存量扁平行由 migration 0010 迁移。
+  // v0.43（S40/K22）：默认超时 60s→120s——GLM-5.3-Flash 产大 JSON（S39 初始分配 31 条）实测约 117s。
   llm: {
     provider: 'deepseek',
     deepseek: { apiKey: '', baseUrl: LLM_PROVIDERS.deepseek.baseUrl, model: LLM_PROVIDERS.deepseek.model },
     'glm-coding': { apiKey: '', baseUrl: LLM_PROVIDERS['glm-coding'].baseUrl, model: LLM_PROVIDERS['glm-coding'].model },
-    timeoutMs: 60000,
+    timeoutMs: 120000,
   },
   'im.feishu': {
     appId: '', appSecret: '',
