@@ -333,6 +333,16 @@ describe('S38/S39 任务责任人与 AI 初始分配（v0.42）', () => {
     expect(screen.queryByText(/任务默认责任人/)).toBeNull()
   })
 
+  it('S2-4: 任务面标题旁展示稳定编号 #id（只读，不进标题编辑态；与机器人盘点/事件引用同口径）', async () => {
+    location.hash = '#/projects/1'
+    render(<StoreProvider><ProjectDetail id={1} /></StoreProvider>)
+    const row = (await screen.findAllByTestId('task-row'))[0]
+    expect(within(row).getByText('#11')).toBeTruthy() // fixture 任务一 id=11
+    // 编号只读：点击编号不应进入编辑态（标题编辑仍由标题文本触发）
+    fireEvent.click(within(row).getByText('#11'))
+    expect(within(row).queryByDisplayValue('任务一')).toBeNull()
+  })
+
   it('S39-8: 类型编辑器渲染初始化提示词字段；项目详情有 AI 初始分配入口与草案弹窗', async () => {
     // 配置台类型编辑器：提示词字段渲染并回显既有值
     location.hash = '#/admin/project/types'
