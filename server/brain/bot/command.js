@@ -13,6 +13,8 @@ import { upsertChannel } from '../../engine/tasks.js'
 import { listMetrics } from '../../engine/metrics.js'
 import { listBotHistory } from './history.js'
 import { runSlash, runConversation } from './pipeline.js'
+import { richPost } from './format.js'
+import { buildMorningCard, buildTasksInventoryCard } from './cards.js'
 
 // 绑定码签发/消费随斜杠命令移入统一管线；re-export 维持既有导入方（routes 与测试）不变
 export { issueBindCode, consumeBindCode } from './pipeline.js'
@@ -77,13 +79,34 @@ export async function handleBotEvent(db, evt, opts = {}) {
   // S20-19 占位消息 id：慢路径开始（onLlmStart）时落值；答案经 reply/卡片出口消费后清空。
   // 占位消息 id 即最终答复 bot_reply 回执行的 id（编辑不换 id，审计与多轮上下文口径不变）。
   let typingMessageId = null
+  // S45（v0.50，K28）输出分流：①patch.structured（引擎结构化结果：morning/tasks）→ 卡片出口，
+  // 审计落引擎完整纯文本，卡片发送失败降级为纯文本补发；②其余答复 richPost 判定——多行/粗体/链接
+  // 走 post 富文本，单行短回执维持 text；占位消息按最终载荷同型编辑；post 发送失败同样降级 text。
   const reply = async (replyText, patch = {}) => {
+    const { structured, ...rest } = patch
+    if (structured) {
+      const card = structured.kind === 'morning' ? buildMorningCard(structured.data) : buildTasksInventoryCard(structured.data)
+      if (typingMessageId) {
+        const mid = typingMessageId
+        typingMessageId = null
+        try { await opts.patch?.({ chatId: evt.chatId, messageId: mid, text: String(replyText).split('\n')[0] }) } catch { /* 占位留原地 */ }
+      }
+      let sent
+      try {
+        sent = await send({ chatId: evt.chatId, card })
+      } catch {
+        sent = await send({ chatId: evt.chatId, text: replyText }) // 必达兜底：卡片失败纯文本补发同内容
+      }
+      recordReplyRow(db, sent?.messageId, evt, replyText, rest.intent)
+      return finish(rest)
+    }
+    const post = richPost(replyText)
     if (typingMessageId) {
       const mid = typingMessageId
       typingMessageId = null
       let edited
       try {
-        edited = Boolean(await opts.patch?.({ chatId: evt.chatId, messageId: mid, text: replyText }))
+        edited = Boolean(await opts.patch?.({ chatId: evt.chatId, messageId: mid, text: post ? undefined : replyText, post: post ?? undefined }))
       } catch { edited = false }
       if (edited) {
         recordReplyRow(db, mid, evt, replyText, patch.intent)
@@ -91,7 +114,13 @@ export async function handleBotEvent(db, evt, opts = {}) {
       }
       // 编辑失败降级：占位留在原地，答案改发新消息（必达，不阻塞）
     }
-    const sent = await send({ chatId: evt.chatId, text: replyText })
+    let sent
+    try {
+      sent = await send({ chatId: evt.chatId, text: post ? undefined : replyText, post: post ?? undefined })
+    } catch (e) {
+      if (!post) throw e // 纯文本发送失败无更降级路径，原样上抛
+      sent = await send({ chatId: evt.chatId, text: replyText })
+    }
     recordReplyRow(db, sent?.messageId, evt, replyText, patch.intent)
     return finish(patch)
   }

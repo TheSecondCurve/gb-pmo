@@ -124,8 +124,8 @@ export default function ProjectDetail({ id }: { id: number }) {
         <Card title={`结束原因 / 复盘记录（${p.status === 'closed' ? '已结项' : '已取消'} · 只读）`}><div className="whitespace-pre-wrap text-[13px]">{p.closeoutSummary}</div></Card>
       )}
 
-      {/* S42（v0.44）：进度（堆叠条/完成率）与排期（任务级甘特+里程碑刻度）一屏总览 */}
-      <ProgressSchedule tasks={p.tasks} milestones={p.milestones} />
+      {/* S42（v0.44）：进度（堆叠条/完成率）与排期（任务级甘特+里程碑刻度）一屏总览；v0.49 起交付日期入轴（S42-5） */}
+      <ProgressSchedule tasks={p.tasks} milestones={p.milestones} projectEndDate={p.planEndDate} />
 
       <Card title={`任务面（${p.tasks.length}）${readonly ? ' · 只读' : ''}`} actions={!readonly ? (
         <div className="flex gap-2">

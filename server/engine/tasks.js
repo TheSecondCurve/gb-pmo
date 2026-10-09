@@ -44,15 +44,22 @@ export function listUnassigned(db) {
   )
 }
 
-const INV_MAX_PER_PROJECT = 40 // 盘点单项目列出的任务条数上限（模板任务 ≤30，防御性截断）
+export const INV_MAX_PER_PROJECT = 40 // 盘点单项目列出的任务条数上限（模板任务 ≤30，防御性截断；S45 卡片文本行同口径复用）
 
 const invLine = (t) => `· #${t.id} ${t.title}（${label('taskStatus', t.status)}${t.plan_end_date ? `，截止 ${t.plan_end_date}` : ''}${t.responsible_name ? `，${t.responsible_name}` : ''}）`
+
+/** S45：盘点任务行结构化（卡片模板渲染用；camelCase，statusLabel 查枚举表）。 */
+const invRow = (t) => ({
+  id: t.id, title: t.title, status: t.status, statusLabel: label('taskStatus', t.status),
+  planEndDate: t.plan_end_date ?? null, responsibleName: t.responsible_name ?? null,
+})
 
 /** S20-17 任务盘点（v0.34，/tasks 斜杠命令）：确定性组装，零 LLM。
  *  projectId 给定 → 该项目全部未完任务（未分配责任人段置顶 + 计数）；
  *  缺省 → 全部在跑项目的未分配责任人任务（按项目分组，全有主项目明确说明）。
  *  口径：未完 = status != 'done' 且 responsible_member_id IS NULL——宽于 S2-1 listUnassigned 的
- *  「已设开始日」兜底告警口径（那是异常检测，这是会议盘点视图，两者语义并存）。 */
+ *  「已设开始日」兜底告警口径（那是异常检测，这是会议盘点视图，两者语义并存）。
+ *  v0.50（S45）：返回体扩 scope/groups（卡片模板渲染用）；text 字段内容不变（web/审计消费方零影响）。 */
 export function tasksInventory(db, { projectId } = {}) {
   if (projectId) {
     const project = db.prepare('SELECT id, name FROM projects WHERE id = ?').get(projectId)
@@ -77,7 +84,14 @@ export function tasksInventory(db, { projectId } = {}) {
       if (owned.length > INV_MAX_PER_PROJECT) lines.push(`（其余 ${owned.length - INV_MAX_PER_PROJECT} 条略）`)
     }
     if (!unassigned.length && !owned.length) lines.push('（项目没有未完成任务）')
-    return { text: lines.join('\n'), unassigned: unassigned.length, total: rows.length }
+    const sections = [
+      ...(unassigned.length ? [{ key: 'unassigned', tasks: unassigned.map(invRow) }] : []),
+      ...(owned.length ? [{ key: 'owned', tasks: owned.map(invRow) }] : []),
+    ]
+    return {
+      text: lines.join('\n'), unassigned: unassigned.length, total: rows.length,
+      scope: 'project', projectName: project.name, groups: [{ name: project.name, sections }],
+    }
   }
   const projects = db.prepare(`SELECT id, name FROM projects WHERE status = 'active' ORDER BY id`).all()
   const byProject = new Map(projects.map((p) => [p.id, { name: p.name, rows: [] }]))
@@ -97,7 +111,10 @@ export function tasksInventory(db, { projectId } = {}) {
     lines.push('')
   }
   if (!total) lines.push('在跑项目任务均已分配责任人。')
-  return { text: lines.join('\n').trimEnd(), unassigned: total, totalProjects: projects.length }
+  const groups = [...byProject.values()].map((g) => ({
+    name: g.name, sections: [{ key: 'plain', tasks: g.rows.map(invRow) }],
+  }))
+  return { text: lines.join('\n').trimEnd(), unassigned: total, totalProjects: projects.length, scope: 'all', groups }
 }
 
 /** 责任人须为在职成员（S38-3，与牵头人校验同口径；null/空=未指派放行）。 */

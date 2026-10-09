@@ -506,6 +506,15 @@ describe('S41/S42/S43 状态色彩与进度排期可视化（v0.44）', () => {
     expect(un.textContent).toContain('无日期任务甲')
   })
 
+  it('S42-5: 甘特轨道弹性撑满（width 100% + minWidth 兜底横向滚动），今日线 calc 百分比定位', async () => {
+    await renderDetail(1)
+    const canvas = await screen.findByTestId('task-gantt-canvas')
+    expect(canvas.style.width).toBe('100%')
+    expect(Number.parseInt(canvas.style.minWidth, 10)).toBeGreaterThan(0)
+    const today = screen.getByTestId('task-gantt-today') as HTMLElement
+    expect(today.style.left).toContain('calc(')
+  })
+
   it('S43-2: 组合页表格「进度」列与看板卡迷你进度条；tasksTotal=0 不显示', async () => {
     location.hash = '#/projects'
     render(<StoreProvider><Projects view="table" /></StoreProvider>)
