@@ -6,7 +6,7 @@ import * as feishu from '../brain/connectors/feishu.js'
 import * as wecom from '../brain/connectors/wecom.js'
 import { safeBaseUrl } from '../agent/scripts.mjs'
 import { listPushes, notifyMember } from '../brain/push.js'
-import { label, values, assertValue, ENUMS } from '../engine/enums.js'
+import { label, values, assertValue } from '../engine/enums.js'
 import { getSetting, setSetting, getAllSettings } from '../engine/settings.js'
 import { migrate } from '../db/index.mjs'
 import { createMember } from '../engine/members.js'
@@ -26,7 +26,7 @@ describe('llm.js', () => {
   })
 
   it('deepseekAdapter：成功解析 choices；HTTP 错误带状态码', async () => {
-    globalThis.fetch = async (url, opts) => ({
+    globalThis.fetch = async () => ({
       ok: true, status: 200, json: async () => ({ choices: [{ message: { content: 'pong' } }] }),
     })
     const a = deepseekAdapter({ baseUrl: 'https://api.deepseek.com/', apiKey: 'k', model: 'm' })
@@ -260,6 +260,54 @@ describe('push / enums / settings 单元', () => {
     expect(cfg.provider).toBe('deepseek')
     expect(cfg.deepseek).toMatchObject({ apiKey: 'sk-legacy-ds', baseUrl: 'https://api.deepseek.com', model: 'deepseek-chat' })
     expect(getLlm(db).name).toBe('deepseek')
+    db.close()
+  })
+})
+
+describe('settings 校验器边界（S24-4 限额 / S20-13 上下文参数 / S26 诊断台 / 成员与提议守卫）', () => {
+  it('chat/im.feishu/debug 三类配置的非法值均 400 指明字段', () => {
+    const { db } = setupDb()
+    // S24-4：AI 助手每日限额非负整数
+    expect(() => setSetting(db, 'chat', { quotaPerDay: -1 }, 1)).toThrow(/quotaPerDay/)
+    expect(() => setSetting(db, 'chat', { quotaPerDay: 1.5 }, 1)).toThrow(/quotaPerDay/)
+    // S20-13/14：contextTurns 0~24、contextIdleMinutes 1~1440、typingFeedback 布尔
+    expect(() => setSetting(db, 'im.feishu', { contextTurns: 25 }, 1)).toThrow(/contextTurns/)
+    expect(() => setSetting(db, 'im.feishu', { contextTurns: -1 }, 1)).toThrow(/contextTurns/)
+    expect(() => setSetting(db, 'im.feishu', { contextIdleMinutes: 0 }, 1)).toThrow(/contextIdleMinutes/)
+    expect(() => setSetting(db, 'im.feishu', { contextIdleMinutes: 1441 }, 1)).toThrow(/contextIdleMinutes/)
+    expect(() => setSetting(db, 'im.feishu', { typingFeedback: 'yes' }, 1)).toThrow(/typingFeedback/)
+    // S26：诊断台开关布尔、超时 1~60s、输出 1KB~1MB
+    expect(() => setSetting(db, 'debug', { shellEnabled: 'on' }, 1)).toThrow(/shellEnabled/)
+    expect(() => setSetting(db, 'debug', { timeoutMs: 500 }, 1)).toThrow(/timeoutMs/)
+    expect(() => setSetting(db, 'debug', { timeoutMs: 70000 }, 1)).toThrow(/timeoutMs/)
+    expect(() => setSetting(db, 'debug', { maxOutputBytes: 100 }, 1)).toThrow(/maxOutputBytes/)
+    expect(() => setSetting(db, 'debug', { maxOutputBytes: 2 * 1048576 }, 1)).toThrow(/maxOutputBytes/)
+    db.close()
+  })
+
+  it('members：createMember 缺字段 400；updateMember 空补丁早退；offboardMember 404 与幂等；listMembers activeOnly（S17-2 域）', async () => {
+    const { db } = setupDb()
+    const { createMember, updateMember, offboardMember, listMembers, getMember } = await import('../engine/members.js')
+    expect(() => createMember(db, { username: 'x', password: 'p' }, 1)).toThrow(/必填/)
+    const m = createMember(db, { name: '临时', username: 'tmp', password: 'pass-123456' }, 1)
+    // 空补丁：不更新时间戳直接返回
+    expect(updateMember(db, m.id, {}, 1).id).toBe(m.id)
+    // 离职幂等：第一次成功（无名下任务），第二次原样返回
+    offboardMember(db, m.id, {}, 1)
+    expect(getMember(db, m.id).status).toBe('offboarded')
+    expect(offboardMember(db, m.id, {}, 1).status).toBe('offboarded')
+    expect(() => offboardMember(db, 999999, {}, 1)).toThrow(/不存在/)
+    // activeOnly 过滤离职
+    expect(listMembers(db, { activeOnly: true }).some((x) => x.id === m.id)).toBe(false)
+    expect(listMembers(db).some((x) => x.id === m.id)).toBe(true)
+    db.close()
+  })
+
+  it('proposals 口子守卫：未知 kind 400；summary 空白 400', async () => {
+    const { createProposal } = await import('../engine/proposals.js')
+    const { db } = setupDb()
+    expect(() => createProposal(db, { kind: 'drop_everything', summary: 'x', proposedBy: 1 })).toThrow(/未知提议类型/)
+    expect(() => createProposal(db, { kind: 'cancel_project', payload: {}, summary: '  ', proposedBy: 1 })).toThrow(/summary 必填/)
     db.close()
   })
 })

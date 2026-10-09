@@ -43,3 +43,13 @@ export async function authed(app, cookie, method, url, payload) {
   const res = await app.inject({ method, url, payload, headers: { cookie } })
   return { status: res.statusCode, body: res.json() }
 }
+
+/** 轮询等待条件成立（调度器心跳类断言用）：比固定 sleep 抗并行负载抖动。负向断言（「不触发」）仍用固定短 settle。 */
+export async function waitFor(cond, { timeoutMs = 2000, intervalMs = 5 } = {}) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await cond()) return
+    await new Promise((r) => setTimeout(r, intervalMs))
+  }
+  throw new Error('waitFor 超时：条件未在预算内成立')
+}

@@ -81,8 +81,11 @@ export default function Chat() {
   const decide = async (key: string, id: number, action: 'confirm' | 'reject') => {
     try {
       const isProposal = key.startsWith('p:')
-      if (action === 'confirm') isProposal ? await api.confirmProposal(id) : await api.confirmEvent(id)
-      else isProposal ? await api.rejectProposal(id) : await api.rejectEvent(id)
+      if (action === 'confirm') {
+        if (isProposal) await api.confirmProposal(id)
+        else await api.confirmEvent(id)
+      } else if (isProposal) await api.rejectProposal(id)
+      else await api.rejectEvent(id)
       setDecided((d) => ({ ...d, [key]: action === 'confirm' ? '已生效' : '已驳回' }))
       toast(action === 'confirm' ? `#${id} 已生效` : `#${id} 已驳回`)
     } catch (e) {

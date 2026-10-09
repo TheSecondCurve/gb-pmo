@@ -6,7 +6,7 @@ import { openDb, migrate } from '../db/index.mjs'
 
 describe('迁移', () => {
   it('幂等：重复执行不报错、不重复种子', () => {
-    const { db, dir } = setupDb()
+    const { db } = setupDb()
     const again = migrate(db)
     expect(again).toBe(0)
     // v0.18：模板对象并入项目类型——模板表已裁撤，任务清单挂在类型下

@@ -2,7 +2,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { issueToken, authenticateToken, audit, revokeToken, listTokens } from '../engine/auth.js'
+import { issueToken, audit, listTokens } from '../engine/auth.js'
 import { login } from '../engine/auth.js'
 import { queryMetric, listMetrics } from '../engine/metrics.js'
 import { safeBaseUrl, renderLoginSh, renderLoginPs1, renderInstallSh, renderInstallPs1, renderClientSh } from '../agent/scripts.mjs'
@@ -57,7 +57,7 @@ export function registerAgentRoutes(app) {
   })
 
   // PAT 签发（终端授权用；公开但需真实账密）
-  app.post('/api/v1/auth/agent-login', async (req, reply) => {
+  app.post('/api/v1/auth/agent-login', async (req, _reply) => {
     const { member } = login(db, req.body?.username, req.body?.password)
     const out = issueToken(db, member.id, { scope: 'write', name: 'agent-cli' })
     audit(db, { memberId: member.id, action: 'token.agentLogin', objectType: 'token', objectId: out.id })

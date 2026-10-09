@@ -3,7 +3,7 @@ import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { dailyReport } from '../brain/report.js'
 import { evaluateAlerts } from '../brain/alert.js'
 import { queryMetric } from '../engine/metrics.js'
-import { today } from '../db/time.js'
+import { today, addDays } from '../db/time.js'
 
 // PRD S6 / S7 — 日报分视角与「今日无更新」；关键人逾期任务与过载预警（v0.6：S7-1 改逾期任务口径）
 
@@ -48,7 +48,7 @@ describe('S6 日报', () => {
 describe('S7 预警', () => {
   it('S7-1: 关键人名下逾期未完任务 ≥1 → 推老板（管理员）与本人，列出任务与项目（v0.6 口径）', async () => {
     const p = await mkProject('客户H系统', ctx.members.key.id)
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+    const yesterday = addDays(today(), -1) // S19：北京昨日（裸 toISOString 在北京 00:00–08:00 是前天）
     // 王五（关键人）名下任务逾期：直接把模板任务责任人改给王五并设过期截止日
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const task = p.tasks[0]

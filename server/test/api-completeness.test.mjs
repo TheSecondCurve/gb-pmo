@@ -1,13 +1,14 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
 
+// 补丁型测试（engineering-standards §3 补丁层规矩：每条用例挂场景号，新增默认进场景文件）。
 // API 面补齐：任务过滤、里程碑更新、渠道删除、管理员令牌治理、指标目录、个人梳理路由、login.ps1
 
 let ctx
 afterAll(() => ctx?.db.close())
 
-describe('API 补齐', () => {
-  it('任务过滤 / 里程碑更新 / 渠道删除', async () => {
+describe('API 补齐（补丁层）', () => {
+  it('S2/S17-12：任务过滤 / 里程碑更新 / 渠道删除', async () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
@@ -30,7 +31,7 @@ describe('API 补齐', () => {
     expect((await authed(ctx.app, cookie, 'GET', '/api/v1/channels')).body.channels.length).toBe(0)
   })
 
-  it('管理员令牌治理 + 指标目录 + 个人梳理路由 + login.ps1', async () => {
+  it('S17 令牌治理 + S5 指标目录 + S16 个人梳理权限 + S4-1 login.ps1 + 登出', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     // 普通成员签发令牌，管理员可吊销任意令牌
     const zc = await loginCookie(ctx.app, 'lisi', 'pass-123456')
@@ -55,7 +56,7 @@ describe('API 补齐', () => {
     // login.ps1 纯 ASCII 且走 agent-login
     const ps1 = await ctx.app.inject({ method: 'GET', url: '/agent/login.ps1' })
     expect(ps1.statusCode).toBe(200)
-    expect(/^[\x00-\x7F]*$/.test(ps1.body)).toBe(true)
+    expect(/^[\x00-\x7F]*$/.test(ps1.body)).toBe(true) // eslint-disable-line no-control-regex -- 有意匹配控制字符：login.ps1/install.ps1 纯 ASCII 编码回归锚点
     expect(ps1.body).toContain('agent-login')
 
     // 登出后再登录恢复

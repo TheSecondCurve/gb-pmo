@@ -1,6 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { queryMetric } from '../engine/metrics.js'
+import { today, addDays } from '../db/time.js'
 
 // PRD S5 + S2-3 — dashboard 与 Agent metrics 端点同源；优先级档位排序；逾期口径
 
@@ -12,14 +13,14 @@ describe('S5 全局 dashboard（指标同源）', () => {
   it('S5-1: 按优先级档位排序展示在跑项目，含健康度要素', async () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
-    const low = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
+    await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
       name: '低优项目', templateCode: 'lianmai_365', leadMemberId: ctx.members.dev.id, priority: 'low',
     })
     const high = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
       name: '高优项目', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id, priority: 'high',
     })
     // 高优项目造一个逾期任务（S2-3 口径）+ 一条旧事件（沉默）
-    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10)
+    const yesterday = addDays(today(), -1) // S19：北京昨日（裸 toISOString 在北京 00:00–08:00 是前天）
     await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${high.body.tasks[0].id}`, { planEndDate: yesterday })
     await authed(ctx.app, cookie, 'POST', `/api/v1/projects/${high.body.id}/events`, { eventType: 'progress', summary: '早期进展' })
     ctx.db.prepare('UPDATE project_events SET business_time = ? WHERE project_id = ?').run(Date.now() - 10 * 86400000, high.body.id)

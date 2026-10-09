@@ -81,3 +81,27 @@
 - 决策：飞书机器人与 web AI 助手的编排层收敛为**统一会话管线**（`server/brain/bot/pipeline.js`：斜杠命令注册表〔按 surface 声明可用性〕/ 每日限额 / LLM 解析 / 有界循环 / 出口归一化——管线只返回结构化结果不投递），两个入口退化为薄适配器：飞书侧保留幂等去重、外部群拒答、`feishu_id` 身份映射、未绑定门禁、渠道上下文、卡片构造与投递、bot_reply 回执；web 侧保留会话持久化、消息落库、页面确认渲染。管线信封 `{ surface, platform, chatId, chatType, member, channel?, text, ts }` 承载两入口的全部差异（web 恒有身份、群上下文仅 IM 群聊），与「私聊 bot ≈ web 会话」的语义对齐。随管线统一修三处漂移：①限额口径对称（IM 面只计 `platform != 'web'`，web 面只计 `platform='web'`——此前飞书限额把 web 消息也计入）；②web 引入 `/help` `/new` 确定性斜杠命令（进 LLM 之前、零 LLM 成本，LLM 未配置/额度耗尽可用），`/new` 复用 `bot_context_resets` 水位线（platform='web'、chat_id=会话 id），web 历史装配按消息 `created_at` > 水位线过滤；③`/bind` 仍仅飞书私聊（凭据纪律不变）。
 - 理由：两入口编排层约 150 行近似复制（`execTool` 闭包逐字重复），漂移已实际发生（限额口径是接近 bug 的不一致）；「丰富交互」前不收拢管线，每个新命令/新卡片都要写两遍且漂移只增不减。`handleBotEvent`/`sendChatMessage` 对外签名不变（s20 测试 41 处直调、s24 走 HTTP inject，测试契约零改动）；后续新交互能力（命令/卡片/推送）只注册一处、两个入口同时生效。
 - 推翻：无核心决策被推翻；v0.11「限额=每成员每日指令数」的隐含口径（不区分入口）细化为按面分计，`chat.quotaPerDay` 与 `im.feishu.commandQuotaPerDay` 语义不变、互不串账。
+## K13 需求追踪门禁升级到子验收标准粒度
+
+- 决策：check-scenarios.mjs 三层比对——①PRD 顶层 P0 场景（S\d+）在测试文本中；②scenarios.md 登记的逐条子验收标准（S1-1 粒度，含「已废弃」保留编号）在测试文本中（server/test + src 测试都扫）；③PRD 场景与 scenarios.md 章节互为镜像。升级当天即抓到两处断锚（S1-9 缺锚、S4-6 未挂）并修复。
+- 理由：原门禁只查顶层编号且只扫 server/test，子条目靠 scenarios.md 手工自觉——大规模扩展时新子条目会悄悄漏测而 CI 不红。
+- 推翻：无（门禁加严，旧语义保留为第①层）。
+
+## K14 e2e 层落地：Playwright 业务旅程，独立 workflow 不挡合并
+
+- 决策：新建 e2e/（Playwright + 真 build + 生产形态单进程 + 专用临时库 data/e2e.db 每跑重置）：7 条业务旅程（登录看板/立项/组合页四视图/建议确认闭环/结项/配置台权限/AI 助手降级与斜杠），锚 S1/S5/S8/S17/S24/S30。`.github/workflows/e2e.yml` 独立于 CI（PR/push(main)/每日/手动触发），非必需检查项不挡合并；失败上传 playwright-report。落地过程本身即价值证明：抓了 1 个应用壳品牌文案重名、1 个视图 tab 与导航「全局看板」选择器碰撞、1 个交付日期未填导致时间线空态的测试盲区。
+- 理由：前端 3.5k 行此前只有 jsdom 冒烟，S30 这类纯前端特性没有真实渲染回归保障；standards §3 的「Playwright 冒烟」从未落地。
+- 推翻：K7「前端仅保留构建校验与 2 个冒烟测试」的裁剪——组件层仍不设标准层（§3 不变），e2e 旅程层补上。
+
+## K15 lint 进 CI：eslint 推荐集 + react-hooks（set-state-in-effect 关闭、exhaustive-deps 降级 warn）
+
+- 决策：eslint flat config（js.recommended + tseslint.recommended + react-hooks）；`react-hooks/set-state-in-effect` 关闭（与手写 Context store「useEffect 里 void refresh()」数据加载惯用法冲突），`exhaustive-deps` 降为 warn（6 处存量待逐个裁决）；`no-control-regex` 仅在两处纯 ASCII 校验测试用 eslint-disable-line 带理由放行。落地即收益：清掉 65 处无用转义（scripts.mjs shell 模板，渲染产物逐字节 diff 验证不变）、6 处死赋值、20+ 未用导入/变量；顺手修复 Chat.tsx 三元表达式语句。standards §5 的 `lint → typecheck → …` 顺序从此名副其实。
+- 理由：standards §5 写了 lint 但仓库没有 lint 脚本——标准与实现脱节。
+- 推翻：无。
+
+## K16 测试代码同样受 S19 北京时区规则约束
+
+- 决策：测试里算「今天/明天」一律走 `server/db/time.js`（today()/addDays()），禁止裸 `new Date().toISOString().slice(0,10)`。修复 branch-boost/s5-metrics/s6-s7-brain 三处 UTC 反解（北京 00:00–08:00 窗口必炸，本次拆分联调在北京零点窗口实测命中一次 branch-boost 日报用例红）。
+- 理由：实现侧时区纪律再严，测试侧用 UTC 语义造数据 = 定时炸弹；CI 设了 TZ=Asia/Shanghai 只能盖住 CI，盖不住其他时区的开发机。
+- 推翻：无（AGENTS.md 编码约定条款的测试侧延伸）。
+
