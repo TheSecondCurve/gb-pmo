@@ -105,3 +105,9 @@
 - 理由：实现侧时区纪律再严，测试侧用 UTC 语义造数据 = 定时炸弹；CI 设了 TZ=Asia/Shanghai 只能盖住 CI，盖不住其他时区的开发机。
 - 推翻：无（AGENTS.md 编码约定条款的测试侧延伸）。
 
+## K17 exhaustive-deps 存量裁决：4 处 useCallback 重构 + 2 处刻意挂载禁用，规则恢复 error
+
+- 决策：6 条 react-hooks/exhaustive-deps 警告逐个裁决——4 处「key 变化重取数」惯用法（ProjectDetail 主刷新/TaskRecords/TaskRefs、Chat 消息流）重构为 `useCallback(key)` + effect 依赖该回调（行为恒等、规则自洽；store 的 toast 本就 useCallback([]) 稳定）；2 处刻意「仅挂载一次」保留并显式标注：Chat 首载会话列表（读挂载时刻 activeId 闭包做首会话一次性自动选中）与 DigestBody（fn 是父组件内联新建的 prop，入依赖会每次父渲染重跑 LLM 梳理）。eslint 规则从 warn 恢复 error，新违规挡 CI。
+- 理由：warn 级警告在扩展期会被无视成噪音；裁决后要么结构自洽要么显式标注意图，规则才有牙齿。
+- 推翻：K15 的「exhaustive-deps 降为 warn」临时降级。
+
