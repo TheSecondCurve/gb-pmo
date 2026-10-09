@@ -152,6 +152,8 @@ export default function ProjectDetail({ id }: { id: number }) {
                   return (
                   <tr key={t.id} data-testid="task-row" data-visual={visual} className={`border-b border-[var(--color-line)] last:border-0 ${TASK_ROW_CLS[visual]}`}>
                     <td className={`py-1 ${t.status === 'done' ? 'text-[var(--color-ink-soft)]' : ''}`}>
+                      {/* S2-4（v0.48）：标题旁展示稳定编号 #id——群内/任意渠道按编号锁定唯一任务（与机器人盘点/事件留痕同口径）；编号只读，不进标题编辑态 */}
+                      <span className="num mr-1.5 text-[12px] text-[var(--color-ink-soft)]">#{t.id}</span>
                       {readonly ? t.title : (
                         <InlineText value={t.title} className={t.status === 'done' ? 'text-[var(--color-ink-soft)]' : undefined} onSubmit={async (v) => { await api.patchTask(t.id, { title: v }); await refresh() }} />
                       )}
