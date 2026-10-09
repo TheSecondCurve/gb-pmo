@@ -43,6 +43,12 @@ export const ACTIONS = {
   delete_task: {
     run: async (params, ctx) => tasks.deleteTask(ctx.db, Number(params.id), ctx.member.id) || { ok: true },
   },
+  // 项目硬删除（S37，v0.41）：物理抹除全部数据（软删例外，K19），仅系统管理员；机器人/LLM 不开放
+  delete_project: {
+    adminOnly: true,
+    run: async (params, ctx) =>
+      (await import('../engine/projects.js')).deleteProjectHard(ctx.db, Number(params.id), ctx.member.id) || { ok: true },
+  },
   reset_channel_cursor: {
     adminOnly: true,
     run: async (params, ctx) => tasks.resetChannelCursor(ctx.db, Number(params.channelId), { days: params.days }, ctx.member.id),

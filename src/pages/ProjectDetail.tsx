@@ -59,6 +59,18 @@ export default function ProjectDetail({ id }: { id: number }) {
           <Btn onClick={async () => setDigesting(true)} disabled={digesting}>🧠 生成梳理（S15）</Btn>
           {!readonly && <Btn kind="danger" onClick={() => setClosing(true)}>结项（S8）</Btn>}
           {!readonly && <Btn kind="ghost" onClick={() => setCancelling(true)}>取消项目</Btn>}
+          {/* S37 硬删除：物理抹除全部数据（与「取消」的留痕语义互补），仅管理员，双重确认 */}
+          {member?.role === 'admin' && (
+            <Btn kind="ghost" onClick={async () => {
+              if (!confirm(`彻底删除项目「${p.name}」？物理删除不可恢复：任务/里程碑/事件/渠道绑定等全部数据将从库中抹除（与「取消」的留痕语义不同）。`)) return
+              if (!confirm(`再次确认：删除后仅存一条审计快照，数据不可恢复。确定删除「${p.name}」？`)) return
+              try {
+                await api.deleteProject(p.id)
+                toast('项目已彻底删除')
+                location.hash = '#/projects'
+              } catch (e) { toast((e as Error).message, 'bad') }
+            }}>彻底删除</Btn>
+          )}
         </div>
       </div>
 
