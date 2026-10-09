@@ -25,12 +25,13 @@ export function projectBrief(db, projectId, { now = Date.now(), progressDays = B
   const todayStr = today(now)
 
   // 任务盘子（逾期口径与 overdue_tasks 指标同源：plan_end_date < 今日 且 未完成）
+  // SUM 在无行时返回 NULL——空项目归零（COALESCE），否则 LLM 会拿到 "todo: null" 叙述
   const c = db.prepare(
     `SELECT COUNT(*) AS total,
-       SUM(CASE WHEN status = 'todo' THEN 1 ELSE 0 END) AS todo,
-       SUM(CASE WHEN status = 'doing' THEN 1 ELSE 0 END) AS doing,
-       SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done,
-       SUM(CASE WHEN status != 'done' AND plan_end_date IS NOT NULL AND plan_end_date < BJ_TODAY(?) THEN 1 ELSE 0 END) AS overdue
+       COALESCE(SUM(CASE WHEN status = 'todo' THEN 1 ELSE 0 END), 0) AS todo,
+       COALESCE(SUM(CASE WHEN status = 'doing' THEN 1 ELSE 0 END), 0) AS doing,
+       COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) AS done,
+       COALESCE(SUM(CASE WHEN status != 'done' AND plan_end_date IS NOT NULL AND plan_end_date < BJ_TODAY(?) THEN 1 ELSE 0 END), 0) AS overdue
      FROM tasks WHERE project_id = ?`
   ).get(now, p.id)
   const tasks = {

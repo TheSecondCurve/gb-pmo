@@ -30,13 +30,11 @@ export async function dailyReport(db, { force = false } = {}) {
   const todayEvents = camelizeRows(
     db.prepare('SELECT project_id, summary FROM project_events WHERE business_time >= ? AND status = ?').all(dayStart, 'effective')
   )
-  const byProject = new Map(projects.map((p) => [p.id, p]))
   const eventsOf = (pid) => todayEvents.filter((e) => e.projectId === pid)
 
   const reports = []
   for (const m of members) {
     const isAdmin = m.role === 'admin'
-    const isLead = projects.some((p) => p.leadMemberId === m.id)
     const sections = []
 
     // 责任人视角：名下任务 + 待确认建议 + 明日到期

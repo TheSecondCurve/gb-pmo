@@ -60,7 +60,7 @@ export function parseSdkMessage(data) {
  * 转 post，此前网关只认 text，此类消息在审计前被静默丢弃（零回复零痕迹）。
  */
 export function extractMessageText(messageType, content) {
-  let parsed = {}
+  let parsed
   try { parsed = JSON.parse(content || '{}') } catch { return '' }
   if (messageType === 'text') return String(parsed.text || '')
   if (messageType !== 'post' || !Array.isArray(parsed.content)) return ''
@@ -100,7 +100,7 @@ async function connectReal(db, cfg, secret) {
   async function isExternal(chatId, chatType) {
     if (chatType !== 'group') return false
     if (externalCache.has(chatId)) return externalCache.get(chatId)
-    let external = true
+    let external
     try {
       const chat = await feishu.getChat(cfg, chatId)
       external = Boolean(chat.external)

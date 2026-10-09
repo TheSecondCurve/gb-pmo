@@ -135,7 +135,7 @@ export function pushSuggestion(db, evt) {
 }
 
 /** 发言人身份映射：飞书/企微 id → 成员（身份脊柱）。 */
-export function mapSpeaker(db, platform, speakerId, fallbackLabel) {
+export function mapSpeaker(db, platform, speakerId, _fallbackLabel) {
   if (!speakerId) return null
   const col = platform === 'feishu' ? 'feishu_id' : 'wecom_id'
   const row = db.prepare(`SELECT * FROM members WHERE ${col} = ? AND status = 'active'`).get(speakerId)

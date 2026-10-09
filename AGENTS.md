@@ -12,10 +12,12 @@ server/                    # Fastify 后端（内网单进程）
 ├── agent/                 # Agent 接入栈：login.sh/install.sh 渲染、PAT、SQL/action/metrics 端点
 ├── brain/                 # 大脑：LLM 适配（DeepSeek）、IM 连接器、抽取/分拣/梳理/日报/预警/调度、bot/（飞书指令机器人 S20）
 ├── db/                    # better-sqlite3 连接（连接层 PRAGMA）、migrations/*.sql、schema.ts（Drizzle 查询类型）
-└── test/                  # 测试与源码分层放置（*.test.mjs），按 PRD 场景组织命名
+└── test/                  # 测试与源码分层放置（*.test.mjs），按 PRD 场景组织命名；补丁型文件（branch-boost/api-completeness/perf-smoke）每条用例挂场景号或标【工程防线】
+e2e/                       # Playwright 业务旅程（真 build + 生产形态单进程，独立 workflow 不挡合并；发布前/依赖升级后必跑）
+evals/                     # LLM 离线评估夹具（scripts/llm-eval.mjs，真实模型协议遵从，非 CI）
 src/                       # Vite + React SPA（hash 路由、Context store、手写极简组件）
 skills/gb-pmo/             # Agent skill 包源（随部署分发，Dockerfile 必须 COPY）
-scripts/                   # backup.sh、check-scenarios.mjs（需求追踪门禁）、gen-skill-schema.mjs（drift check）
+scripts/                   # backup.sh、check-scenarios.mjs（需求追踪三层门禁）、gen-skill-schema.mjs（drift check）、llm-eval.mjs（LLM 协议 eval，非 CI）、feishu-ws-test.mjs（长连接三段自检）
 docs/                      # prd.md / standards/ / design.md（决策日志）/ scenarios.md（追踪锚点）
 ```
 
@@ -27,7 +29,9 @@ docs/                      # prd.md / standards/ / design.md（决策日志）/ 
 ```bash
 npm install            # 安装依赖
 npm run dev            # 后端 :8086 + 前端 Vite dev（代理 /api）
-npm test               # Vitest 全量（server 场景测试 + 安全清单 + 前端冒烟）
+npm run lint           # eslint（推荐集 + react-hooks；CI 在 typecheck 之前）
+npm test               # Vitest 全量（server 场景测试 + 安全清单 + 数据量冒烟 + 前端冒烟）
+npm run test:e2e       # Playwright 业务旅程（首次需 npx playwright install chromium；自动 build + 起 8099）
 npm run coverage       # v8 覆盖率，核心目录 ≥80% 门禁
 npm run check:scenarios# 需求追踪：PRD P0 场景编号 ↔ 测试文件比对，缺失红
 npm run check:skill    # SKILL.md schema 区块 drift check
@@ -45,7 +49,7 @@ npm start              # 生产模式启动（NODE_ENV=production，托管 dist/
 ## 4. 编码约定
 
 - JSON 一律 camelCase；时间戳 epoch 毫秒；本项目无金额字段（PRD 裁剪）。
-- 日历日一律北京时区（S19）：JS 走 `server/db/time.js`（`today()`/`bjDayStartMs()`/`bjWeekStartMs()`），SQL 走连接层注册的 `BJ_TODAY()`，禁止 `new Date().toISOString().slice(0,10)` 与裸 `date('now')`（均 UTC 语义，凌晨差一天）；前端展示走 `src/fmt.ts`（显式 Asia/Shanghai），禁止 `new Date('YYYY-MM-DD')` 反解。
+- 日历日一律北京时区（S19）：JS 走 `server/db/time.js`（`today()`/`bjDayStartMs()`/`bjWeekStartMs()`），SQL 走连接层注册的 `BJ_TODAY()`，禁止 `new Date().toISOString().slice(0,10)` 与裸 `date('now')`（均 UTC 语义，凌晨差一天）；前端展示走 `src/fmt.ts`（显式 Asia/Shanghai），禁止 `new Date('YYYY-MM-DD')` 反解；**测试代码同受此约束**（K16：算今天/明天走 `today()`/`addDays()`，UTC 反解在北京凌晨窗口必炸）。
 - 删除 = 软删（`deleted_at`/状态枚举），人员离职 = 软删 + 强制转交。
 - 状态一律用中央枚举 `server/engine/enums.js`（带中文 label），不散落字符串。
 - 讨论面（project_events）append-only：只插入，不 UPDATE 已生效事件的业务内容。

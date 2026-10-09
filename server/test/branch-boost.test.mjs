@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { setupDb } from './helpers.mjs'
+import { today, DAY_MS } from '../db/time.js'
 import { createMember } from '../engine/members.js'
 import { createProject, getProjectDetail, updateProject, closeProject, listProjects, projectsWithoutChannel } from '../engine/projects.js'
 import { createTask, updateTask, getTask, listTasks, createMilestone, updateMilestone, upsertChannel, addTaskRecord, listTaskRecords } from '../engine/tasks.js'
@@ -10,10 +11,10 @@ import { routeMessage } from '../brain/routing.js'
 import { dailyReport } from '../brain/report.js'
 import * as wecom from '../brain/connectors/wecom.js'
 import * as feishu from '../brain/connectors/feishu.js'
-import { setSetting } from '../engine/settings.js'
 import { label, values } from '../engine/enums.js'
 
-// 校验 / 回退 / 404 / 空态分支补齐（真实行为路径）
+// 补丁型测试（engineering-standards §3 补丁层规矩：每条用例挂场景号或标【工程防线】，新增默认进场景文件）。
+// 本文件 = 校验 / 回退 / 404 / 空态分支补齐（真实行为路径，直调 engine）。
 
 function seed(db) {
   const admin = createMember(db, { name: 'A', username: 'a', password: 'p-123456', role: 'admin' }, 1)
@@ -26,7 +27,7 @@ function mk(db, leadId, name = 'P') {
   return createProject(db, { name, templateCode: 'lianmai_365', leadMemberId: leadId }, 1)
 }
 
-describe('projects 分支', () => {
+describe('projects 分支（S1-1 立项校验 / S29-3 终态守卫 / S29-2 结项摘要必填）', () => {
   it('校验：缺名/缺牵头人/未知模板/离职牵头人 → 400', () => {
     const { db } = setupDb()
     const s = seed(db)
@@ -58,7 +59,7 @@ describe('projects 分支', () => {
   })
 })
 
-describe('tasks/milestones/channels/task_records 分支', () => {
+describe('tasks/milestones/channels/task_records 分支（S1-2 D3 默认责任人 / S2-3 任务更新记录 / S17-12 渠道规则）', () => {
   it('任务：缺参 400、404、无字段早退；里程碑无字段早退；任务记录追加；渠道规则', () => {
     const { db } = setupDb()
     const s = seed(db)
@@ -88,7 +89,7 @@ describe('tasks/milestones/channels/task_records 分支', () => {
   })
 })
 
-describe('events 分支', () => {
+describe('events 分支（S16-3 建议超时过期 / S35-4 里程碑建议字段守卫；缺参与枚举校验=【工程防线】）', () => {
   it('缺参/非法枚举 400；非 pending 确认驳回 409；无目标字段的确认；过期扫描；markPushedTo 合并', async () => {
     const { db } = setupDb()
     const s = seed(db)
@@ -119,7 +120,7 @@ describe('events 分支', () => {
   })
 })
 
-describe('metrics 分支', () => {
+describe('metrics 分支（S5-3 指标目录维度守卫 / S3-5 空库采纳率）', () => {
   it('非法维度 400（逐指标）；空库采纳率 null', () => {
     const { db } = setupDb()
     seed(db)
@@ -132,7 +133,7 @@ describe('metrics 分支', () => {
   })
 })
 
-describe('routing/digest/report 分支', () => {
+describe('routing/digest/report 分支（S3-2 分拣降级 / S15-1、S16-1 梳理 404 与叙事降级 / S18-4 日报不重复）', () => {
   it('routing：LLM 输出损坏/未知项目 id → null', async () => {
     const { db } = setupDb()
     const s = seed(db)
@@ -178,7 +179,8 @@ describe('routing/digest/report 分支', () => {
     const skipped = await dailyReport(db, { force: false })
     expect(skipped.skipped).toBe(true)
     const p = mk(db, s.lead.id, 'R1')
-    const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10)
+    // S19：北京日口径——「明日」必须用 time.js 算（裸 toISOString 是 UTC，北京 00:00–08:00 窗口会错一天）
+    const tomorrow = today(Date.now() + DAY_MS)
     updateTask(db, p.tasks[0].id, { planEndDate: tomorrow }, 1)
     await dailyReport(db, { force: true })
     const push = db.prepare(`SELECT * FROM pushes WHERE recipient_member_id = ? AND body LIKE '%明日到期%'`).get(s.lead.id)
@@ -187,7 +189,7 @@ describe('routing/digest/report 分支', () => {
   })
 })
 
-describe('连接器补充分支', () => {
+describe('连接器补充分支（S3 抽取通道 / S22-6 上游失败回显）', () => {
   it('wecom：SDK 代理成功拉取与 HTTP 失败；健康检查通过', async () => {
     const real = globalThis.fetch
     globalThis.fetch = async (url) => {
@@ -221,13 +223,13 @@ describe('连接器补充分支', () => {
     const out = await feishu.fetchMessages({ appId: 'a', appSecret: 's' }, { groupKey: 'g' }, '4900')
     expect(out.messages[0].text).toBe('不是JSON')
     expect(out.nextCursor).toBe('5000')
-    globalThis.fetch = async (url) => ({ ok: false, status: 500, json: async () => ({ code: 0 }) })
+    globalThis.fetch = async () => ({ ok: false, status: 500, json: async () => ({ code: 0 }) })
     await expect(feishu.fetchMessages({ appId: 'a', appSecret: 's' }, { groupKey: 'g' }, null)).rejects.toThrow('500')
     globalThis.fetch = real
   })
 })
 
-describe('enums 兜底', () => {
+describe('enums 兜底【工程防线】', () => {
   it('label 未知值原样返回；未知组抛错', () => {
     expect(label('priority', 'weird')).toBe('weird')
     expect(() => label('nope', 'x')).toThrow()

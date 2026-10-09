@@ -1,6 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { projectBrief } from '../engine/brief.js'
+import { createProject } from '../engine/projects.js'
 import { addEvent } from '../engine/events.js'
 import { handleBotEvent } from '../brain/bot/command.js'
 
@@ -92,7 +93,7 @@ async function seedProject(name) {
 describe('S27 项目 Brief', () => {
   it('S27-2: engine projectBrief——确定性组装六段结构（北京时区窗口 + S21 天数口径 + 截断附总数）', async () => {
     ctx = await setupApp()
-    const { pid, lead, dev, baseTasks } = await seedProject('客户S27甲系统')
+    const { pid, baseTasks } = await seedProject('客户S27甲系统')
 
     const brief = projectBrief(ctx.db, pid, { now: NOW })
     expect(brief.project).toMatchObject({ id: pid, name: '客户S27甲系统', lead: '张三', planEndDate: '2026-12-31', remainingDays: 90 })
@@ -184,5 +185,22 @@ describe('S27 项目 Brief', () => {
     // 工具反馈含 brief 数据（engine 同源）+ brief 计入查询数
     expect(capture[1].join(' ')).toContain('客户S27丙系统')
     expect(res.body.assistant.meta).toMatchObject({ result: 'replied', llmCalls: 2, queries: 1 })
+  })
+})
+
+describe('S27-2 分支：空盘与未排期项目（松散排期不虚构口径）', () => {
+  it('自由创建空项目：完成率 0/下一步与里程碑 null/无交付日期 remainingDays null/沉默天数自立项起算', async () => {
+    ctx = await setupApp()
+    const p = createProject(ctx.db, { name: '空盘项目', typeCode: 'lianmai_365', leadMemberId: ctx.members.lead.id, tasks: [] }, 1) // S1-6 空清单=自由创建空项目
+    const brief = projectBrief(ctx.db, p.id)
+    expect(brief.tasks).toEqual({ total: 0, todo: 0, doing: 0, done: 0, overdue: 0, completionRate: 0 })
+    expect(brief.next).toEqual({ task: null, milestone: null })
+    expect(brief.project.remainingDays).toBeNull() // 未填交付日期不派生（S21-1）
+    expect(brief.doing).toEqual([])
+    expect(brief.recentProgress).toEqual([])
+    expect(brief.risks).toEqual({ overdueTasks: [], events: [], eventsTotal: 0 })
+    // 无事件时活跃度以立项时刻为锚（lastEventAt≈created_at，允许毫秒级生成先后差）
+    expect(Math.abs(brief.activity.lastEventAt - p.createdAt)).toBeLessThan(2000)
+    expect(brief.activity.silentDays).toBe(0)
   })
 })

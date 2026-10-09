@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll } from 'vitest'
-import { setupDb, setupApp, loginCookie, authed } from './helpers.mjs'
+import { setupDb, setupApp, loginCookie, authed, waitFor } from './helpers.mjs'
 import { upsertChannel } from '../engine/tasks.js'
 import { parseCron, isDue } from '../engine/cron.js'
 import { dueTasks, initialLastRun, startScheduler } from '../brain/scheduler.js'
@@ -104,8 +104,8 @@ describe('S18 调度判定（scheduler）', () => {
       await new Promise((r) => setTimeout(r, 20))
       expect(runs.report).toBe(0) // 停用后即使冷启动窗口命中也不触发
       setSetting(db, 'scheduler', { reportEnabled: true }, 1)
-      await new Promise((r) => setTimeout(r, 20))
-      expect(runs.report).toBe(1) // 重新启用 → 窗口（今日00:00→18:01）命中补跑一次
+      await waitFor(() => runs.report === 1) // 重新启用 → 窗口（今日00:00→18:01）命中补跑一次
+      expect(runs.report).toBe(1)
     } finally {
       sched.stop()
     }
@@ -147,13 +147,13 @@ describe('S18 调度判定（scheduler）', () => {
       },
     })
     try {
-      await new Promise((r) => setTimeout(r, 20))
       // 18:01 冷启动：extraction/alerts 锚定 now 不跑；report 锚定今日 00:00 → 18:00 已过 → 补发一次
+      await waitFor(() => runs.report === 1)
       expect(runs).toEqual({ extraction: 0, alerts: 0, report: 1 })
       // 改 extractionCron 为每分钟 + 时钟走过一分钟 → 下一拍命中（S18-2 保存即生效）
       setSetting(db, 'scheduler', { extractionCron: '* * * * *' }, 1)
       NOW += 61_000
-      await new Promise((r) => setTimeout(r, 20))
+      await waitFor(() => runs.extraction >= 1)
       expect(runs.extraction).toBeGreaterThanOrEqual(1)
       // report 已跑过（锚点推进）且 18:00 已在窗口外 → 不再重复触发
       expect(runs.report).toBe(1)
@@ -175,9 +175,9 @@ describe('S18 调度判定（scheduler）', () => {
       runners: { extraction: async (_db, opts) => { gotLlm = opts.llm } },
     })
     try {
-      await new Promise((r) => setTimeout(r, 20)) // 冷启动锚定 now，不触发
+      await new Promise((r) => setTimeout(r, 20)) // 冷启动锚定 now，不触发（负向窗口用固定 settle）
       NOW += 61_000
-      await new Promise((r) => setTimeout(r, 20))
+      await waitFor(() => gotLlm !== 'unset')
       expect(gotLlm).toBeUndefined() // undefined → runner 内 getLlm(db) 按当前生效类别解析
       expect(getLlm(db).name).toBe('glm-coding') // 执行时视角：配置台切换即时生效
     } finally {
