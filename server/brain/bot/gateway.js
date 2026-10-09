@@ -119,9 +119,11 @@ async function connectReal(db, cfg, secret) {
     console.warn(`[bot] 机器人身份获取失败（群消息降级为占位前缀判定）: ${e.message}`)
   }
 
-  const send = ({ chatId, text, card }) => (card ? feishu.sendCard(cfg, chatId, card) : feishu.sendText(cfg, chatId, text))
+  // S45：send 按载荷类型分流——card=消息卡片、post=富文本、text=纯文本；patch 同型编辑（text/post）
+  const send = ({ chatId, text, post, card }) =>
+    (card ? feishu.sendCard(cfg, chatId, card) : post ? feishu.sendPost(cfg, chatId, post) : feishu.sendText(cfg, chatId, text))
   // S20-19 私聊占位反馈的编辑通道：把占位消息原地替换为最终答复（应用需 im:message:update 权限，缺权限时运行时降级另发新消息）
-  const patch = ({ messageId, text }) => feishu.patchText(cfg, messageId, text)
+  const patch = ({ messageId, text, post }) => (post ? feishu.patchPost(cfg, messageId, post) : feishu.patchText(cfg, messageId, text))
 
   const dispatcher = new sdk.EventDispatcher({}).register({
     'im.message.receive_v1': async (data) => {

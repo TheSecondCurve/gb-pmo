@@ -433,6 +433,16 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S44-4 | 当 Agent 调 `draft_init_assignments` 时应返回 draftId（write scope）；经 Agent 侧 `GET /api/v1/agent/draft-init-assignments/:draftId`（read scope 即可）应能轮询到同一作业结果 | 同上 |
 | S44-5 | 前端弹窗应显示等待进度并轮询至结果或错误呈现 | `src/smoke.test.tsx`（前端冒烟） |
 
+## S45（P0）— 全员 — 飞书群/私聊 — 机器人输出富格式化（v0.50）
+
+机器人飞书输出按类型分流：多行/含标记文本答复走 post 富文本（单行短回执维持 text），晨报/任务盘点走消息卡片（单项目域多列表格、多项目域分节文本行，元素预算护栏），卡片/post 失败降级纯文本补发；审计与多轮上下文继续落完整纯文本；LLM 只产文本，卡片结构由 IM 适配器确定性渲染；web 端契约不变。决策见 design.md K28。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S45-1 | 文本含换行/粗体标记/链接的答复应以 post 富文本发送（段落/粗体/链接结构化），单行纯文本应维持 text；私聊占位消息应按同类型原地编辑（post→post、text→text） | `server/test/s45-bot-rich-format.test.mjs` |
+| S45-2 | /morning 与 /tasks 应以消息卡片呈现：标题栏 + 分项目 section；单项目域任务清单应以多列布局呈现（任务/状态·截止/责任人）；多项目域与超长段落应退化为分节文本行；web 端同一命令仍应收纯文本 | `server/test/s45-bot-rich-format.test.mjs`（含 web 契约用例） |
+| S45-3 | 卡片/post 发送失败应降级为纯文本补发；`bot_reply` 审计行应落完整纯文本（与卡片/富文本同内容），多轮上下文口径不变 | `server/test/s45-bot-rich-format.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

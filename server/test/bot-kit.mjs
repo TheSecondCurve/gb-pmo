@@ -48,3 +48,24 @@ export async function mkProject(ctx, name, leadId) {
 }
 
 export const botRow = (ctx, messageId) => ctx.db.prepare('SELECT * FROM bot_commands WHERE message_id = ?').get(messageId)
+
+/** S45：post 富文本拍平为纯文本（段落按行连接，run 一律取 text；断言内容用，与渲染无关）。 */
+export function flattenPost(content) {
+  const paras = content?.zh_cn?.content || []
+  return paras.map((p) => (Array.isArray(p) ? p : []).map((r) => r?.text || '').join('')).join('\n')
+}
+
+/** S45：消息卡片拍平为纯文本（标题 + div 的 lark_md/plain_text + column_set 列内文本递归收集）。 */
+export function flattenCard(card) {
+  const out = []
+  const walk = (node) => {
+    if (!node || typeof node !== 'object') return
+    if ((node.tag === 'lark_md' || node.tag === 'plain_text') && node.content) out.push(node.content)
+    for (const v of Object.values(node)) {
+      if (Array.isArray(v)) v.forEach(walk)
+      else if (v && typeof v === 'object') walk(v)
+    }
+  }
+  walk(card)
+  return out.join('\n')
+}

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { setupApp } from './helpers.mjs'
-import { BOT_SECRET as SECRET, scriptedLlm, makeRecorder, makeMsgFactory, mkProject } from './bot-kit.mjs'
+import { BOT_SECRET as SECRET, scriptedLlm, makeRecorder, makeMsgFactory, mkProject, flattenCard, flattenPost } from './bot-kit.mjs'
 import { handleBotEvent } from '../brain/bot/command.js'
 import { upsertChannel } from '../engine/tasks.js'
 import { setSetting } from '../engine/settings.js'
@@ -34,10 +34,11 @@ describe('S20 机器人指令通道 — 任务盘点 /tasks（v0.34）', () => {
     upsertChannel(ctx.db, { platform: 'feishu', groupKey: 'oc_inv', name: '盘点群', channelType: 'dedicated', projectId: p.id }, ctx.members.admin.id)
 
     // 零 LLM：不传 llm 也能回（确定性命令，进 LLM 之前）
+    // v0.50（S45）：盘点出口为消息卡片，内容口径不变——断言拍平卡片文本
     const rec = recorder()
     const out = await handleBotEvent(ctx.db, { ...group('fs_zhang', 'oc_inv', '/tasks'), mentioned: true }, { send: rec.send, secret: SECRET })
     expect(out.result).toBe('replied')
-    const text = rec.sent[0].text
+    const text = flattenCard(rec.sent[0].card)
     expect(text).toContain('盘点甲项目')
     expect(text).toContain('未分配责任人 2 条')
     expect(text).toContain('2026-10-08')
@@ -48,7 +49,7 @@ describe('S20 机器人指令通道 — 任务盘点 /tasks（v0.34）', () => {
     const rec2 = recorder()
     const out2 = await handleBotEvent(ctx.db, { ...group('fs_li', 'oc_inv', '/盘点'), mentioned: true }, { send: rec2.send, secret: SECRET })
     expect(out2.result).toBe('replied')
-    expect(rec2.sent[0].text).toContain('盘点甲项目')
+    expect(flattenCard(rec2.sent[0].card)).toContain('盘点甲项目')
   })
 
   it('S20-17: 私聊 /tasks——全部在跑项目未分配任务按项目分组；全有主项目明确说明', async () => {
@@ -63,7 +64,7 @@ describe('S20 机器人指令通道 — 任务盘点 /tasks（v0.34）', () => {
     const rec = recorder()
     const out = await handleBotEvent(ctx.db, p2p('fs_zhang', '/tasks'), { send: rec.send, secret: SECRET })
     expect(out.result).toBe('replied')
-    const text = rec.sent[0].text
+    const text = flattenCard(rec.sent[0].card) // v0.50（S45）：卡片出口，口径不变
     expect(text).toContain('盘点乙项目')
     expect(text).toContain('盘点乙独有无主任务Q7')
     expect(text).toContain('盘点丙项目')
@@ -202,7 +203,7 @@ describe('S20 机器人私聊占位反馈（v0.36）', () => {
     const rec1 = typedRecorder(); const pp1 = patcher()
     await handleBotEvent(ctx.db, p2p('fs_zhang', '/help'), { send: rec1.send, patch: pp1.patch, secret: SECRET })
     expect(rec1.sent).toHaveLength(1)
-    expect(rec1.sent[0].text).toContain('/new')
+    expect(flattenPost(rec1.sent[0].post)).toContain('/new') // v0.50（S45-1）：多行帮助文本走 post 富文本
     expect(pp1.patched).toHaveLength(0)
 
     const rec2 = typedRecorder(); const pp2 = patcher()
