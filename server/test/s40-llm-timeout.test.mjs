@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { buildLlmAdapter } from '../brain/llm.js'
-import { setupApp, loginCookie, authed } from './helpers.mjs'
+import { setupApp, loginCookie, authed, waitFor } from './helpers.mjs'
 import { setSetting } from '../engine/settings.js'
 import { DEFAULT_SETTINGS } from '../engine/enums.js'
 
@@ -80,16 +80,24 @@ describe('S40 LLM 调用超时治理', () => {
       const ok = setSetting(ctx.db, 'llm', { provider: 'deepseek', apiKey: 'fake-key', timeoutMs: 1000 }, ctx.members.admin.id)
       expect(ok.timeoutMs).toBe(1000)
 
-      // 全链路：配置经 getLlm 生效——真实适配器 + 挂起 fetch，web 草案端点应 504 中文指引
+      // 全链路：配置经 getLlm 生效——真实适配器 + 挂起 fetch；
+      // v0.45（S44）草案异步化：启动 202 → 轮询以 200 载荷返回 error（504 超时语义在 job error 内，中文指引透出）
       const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
       const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
         name: '超时项目', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
       })
       globalThis.fetch = hangFetch([])
-      const res = await authed(ctx.app, cookie, 'POST', `/api/v1/projects/${p.body.id}/draft-init-assignments`, {})
-      expect(res.status).toBe(504)
-      expect(res.body.message).toContain('超时')
-      expect(res.body.message).not.toContain('This operation was aborted')
+      const started = await authed(ctx.app, cookie, 'POST', `/api/v1/projects/${p.body.id}/draft-init-assignments`, {})
+      expect(started.status).toBe(202)
+      let out
+      await waitFor(async () => {
+        out = await authed(ctx.app, cookie, 'GET', `/api/v1/projects/${p.body.id}/draft-init-assignments/${started.body.draftId}`)
+        return out.body.status !== 'running'
+      }, { timeoutMs: 8000 })
+      expect(out.status).toBe(200)
+      expect(out.body.status).toBe('error')
+      expect(out.body.message).toContain('超时')
+      expect(out.body.message).not.toContain('This operation was aborted')
     } finally {
       ctx.db.close()
     }

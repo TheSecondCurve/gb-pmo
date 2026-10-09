@@ -157,5 +157,11 @@ export function registerAgentRoutes(app) {
     return { ok: true, action, result }
   })
 
+  // S44（v0.45）：初始分配草案作业轮询（PAT read scope 即可；与 web 会话路由同构，Bearer 面不扩到非 agent 路由）
+  app.get('/api/v1/agent/draft-init-assignments/:draftId', async (req) => {
+    const { getDraftInitAssignment } = await import('../brain/initAssign.js')
+    return getDraftInitAssignment(Number(req.query.projectId), req.params.draftId)
+  })
+
   return app
 }

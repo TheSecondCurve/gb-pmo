@@ -39,11 +39,12 @@ export const ACTIONS = {
     run: async (params, ctx) =>
       (await import('../brain/templates.js')).draftTaskList(ctx.db, params, { llm: ctx.llm ?? undefined }),
   },
-  // AI 初始分配（S39，v0.42）：draft 产批量分配草案（不落库）；apply 同事务批量落库——
+  // AI 初始分配（S39，v0.42；S44，v0.45 异步化）：draft 启动草案作业返回 draftId（不落库），
+  // 经 GET /api/v1/agent/draft-init-assignments/:draftId 轮询；apply 同事务批量落库——
   // K21 信任边界限定例外：Agent 直写仅限 apply_init_assignments 这一个 action（逐行校验+审计）；机器人不开放
   draft_init_assignments: {
     run: async (params, ctx) =>
-      (await import('../brain/initAssign.js')).draftInitAssignments(ctx.db, Number(params.projectId), { llm: ctx.llm ?? undefined }),
+      (await import('../brain/initAssign.js')).startDraftInitAssignments(ctx.db, Number(params.projectId), { llm: ctx.llm ?? undefined }),
   },
   apply_init_assignments: {
     run: async (params, ctx) =>
