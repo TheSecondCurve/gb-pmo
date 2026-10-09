@@ -98,7 +98,7 @@ client.sh action generate_person_digest '{}'
 | 指标 | \`GET /api/v1/agent/metrics\` | 指标目录（定义卡） |
 | 指标取数 | \`POST /api/v1/agent/metrics/query\` \`{"metric":"<id>","params":{}}\` | **指标类问题优先走这里**；自算 SQL 与端点不一致时以端点为准 |
 | 触发 | \`POST /api/v1/agent/actions\` | 白名单（触发类）：trigger_extraction / generate_project_digest / generate_person_digest / push_report |
-| 配置（S17-10） | \`POST /api/v1/agent/actions\` | 白名单（配置类，**仅系统管理员 PAT**，成员 403）：upsert_channel / delete_channel / put_setting / reset_channel_cursor |
+| 配置（S17-10） | \`POST /api/v1/agent/actions\` | 白名单（配置类，**仅系统管理员 PAT**，成员 403）：upsert_channel / delete_channel / put_setting / reset_channel_cursor / delete_project |
 | 任务清单起草（S17-9，v0.18） | \`POST /api/v1/agent/actions\` | \`draft_task_list\`（write scope 即可，成员可用）：LLM 产任务清单草稿，**不落库**，供立项/类型编辑参考 |
 | 任务删除（S36，v0.40） | \`POST /api/v1/agent/actions\` | \`delete_task\`（write scope 即可，成员可用）：任务软删留痕；**删任务一律走此 action，不要手写 UPDATE/DELETE tasks** |
 
@@ -110,6 +110,7 @@ client.sh action generate_person_digest '{}'
 - \`draft_task_list\` \`{name, description?}\` → \`{tasks: [...]}\`（LLM 按名称+说明产任务清单草稿，**不落库**；v0.18 起成员 write scope 可用。原 create_template / draft_template_tasks 已随任务模板对象裁撤移除——项目类型内嵌任务清单（project_type_tasks），类型创建走提议确认、配置台维护）
 - \`reset_channel_cursor\` \`{channelId, days?}\`（默认 7，1~90；重置后下次抽取回看 N 天，重放会追加新事件流）
 - \`delete_task\` \`{id}\`（S36，v0.40：任务软删——行保留、\`deleted_at\` 落值、落 \`task.delete\` 审计；任务参考资料一并软删，更新记录与讨论面历史事件保留；已删任务从列表/盘点/未指派/逾期/指标等一切读侧退出，结项校验不计；任务不存在/已删 404，项目结项/取消 409）
+- \`delete_project\` \`{id}\`（S37，v0.41：**项目硬删除**——物理抹除项目及任务/事件/里程碑/参考资料/渠道绑定/日历映射全部数据，**不可恢复**；仅系统管理员 PAT；任意状态可直接删；唯一痕迹=\`project.hardDelete\` 审计快照。与「取消」的业务终态留痕语义不同，抹数据才用；不要经 SQL 端点手写 DELETE projects——FK 约束会拒绝且绕开审计）
 
 ## 工作守则（必须遵守）
 

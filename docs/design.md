@@ -117,3 +117,9 @@
 - 决策：项目实例任务开放删除（web `DELETE /api/v1/tasks/:id` 全员 + Agent action `delete_task` write scope），语义=软删——`tasks` 加 `deleted_at` 列（迁移 0020），删除落值、行保留；任务参考资料同事务一并软删，更新记录与讨论面历史事件保留。读侧全仓补 `deleted_at IS NULL`（列表/详情/盘点/未指派/逾期/指标/日报/晨报/梳理/机器人查询/LLM 抽取上下文/结项 openTasks 校验）；已删任务的待确认建议确认时 409 不复活。**不引入 cancelled 状态值**；机器人指令面不开放删除；不做恢复入口。
 - 理由：v0.6 已把任务状态裁成 todo/doing/done 三档，加 cancelled 会污染结项校验（`status != 'done'`）与指标 OPEN_TASK 等大量既有口径，侵入远大于加列；deleted_at 与 task_refs/chat_sessions 既有软删范式一致，行保留满足留痕与审计可追溯；建错/录错任务无入口删除会持续污染任务面与指标，是真实痛点。
 - 推翻：v0.39 S35 负面清单「任务无删除语义」（PRD L494/L746 已修订为仅机器人面不做）。
+
+## K19 项目硬删除 = 软删约定的唯一例外（S37，v0.41）
+
+- 决策：项目支持**物理删除**（DELETE 行，同事务级联抹除 tasks / task_refs / task_records / project_events / milestones / channels / calendar_sync；unrouted_messages / pushes 解除项目引用但保留行；audit_logs 落 `project.hardDelete` 快照成为唯一痕迹）。仅系统管理员（web `requireAdmin` + Agent `delete_project` adminOnly），任意状态可直接删（含在跑项目）。「取消」保留为业务终态（留痕可追史），硬删除为数据抹除手段，两者并存；飞书侧日历事件/群聊等外部资源不追回。
+- 理由：测试/演示/误建项目的数据清理是真实需求，cancelled 行保留语义满足业务终态但抹不掉数据；FK ON 下单表 DELETE 会被约束拒绝，必须显式按序级联；不可逆破坏性操作收敛 admin-only（对齐 S17-13 删类型口径）；任意状态可删由用户拍板——硬删的定位就是清理手段，不该要求先走业务终态。
+- 推翻：AGENTS.md §4「删除 = 软删」约定在本场景的唯一例外（用户 2026-10-09 拍板）；任务域维持软删不变（K18）。

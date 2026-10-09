@@ -138,6 +138,13 @@ export function registerApiRoutes(app) {
     return projects.cancelProject(db, Number(req.params.id), { reason: req.body?.reason }, req.member.id)
   })
 
+  // S37（v0.41）：项目硬删除——物理抹除（与「取消」的业务终态留痕互补），仅系统管理员
+  app.delete('/api/v1/projects/:id', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    projects.deleteProjectHard(db, Number(req.params.id), req.member.id)
+    return { ok: true }
+  })
+
   app.get('/api/v1/projects/:id/events', async (req) =>
     ({ events: events.listEvents(db, { projectId: Number(req.params.id), status: req.query.status }) })
   )

@@ -273,6 +273,39 @@ export function cancelProject(db, id, { reason } = {}, by) {
   return getProjectDetail(db, id)
 }
 
+/**
+ * 硬删除（S37，v0.41 / K19：软删约定的唯一例外）：物理抹除项目及其任务面/讨论面全部数据。
+ * 与「取消」互补——取消是业务终态留痕，硬删是数据清理手段（测试/演示/误建）。
+ * FK ON 下同事务按序级联；分拣暂存/推送历史行保留、引用置 NULL（审计语义）；
+ * 飞书侧日历事件/群聊不追回（外部资源）。唯一痕迹 = project.hardDelete 审计快照。
+ * 权限在路由层收敛 admin-only（web requireAdmin / Agent adminOnly）；任意状态可直接删。
+ */
+export function deleteProjectHard(db, id, by) {
+  const cur = db.prepare('SELECT * FROM projects WHERE id = ?').get(id)
+  if (!cur) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
+  const counts = {
+    tasks: db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE project_id = ?').get(id).n,
+    events: db.prepare('SELECT COUNT(*) AS n FROM project_events WHERE project_id = ?').get(id).n,
+  }
+  db.transaction(() => {
+    // events.target_task_id 引用 tasks——先删讨论面，再删任务面
+    db.prepare('DELETE FROM project_events WHERE project_id = ?').run(id)
+    db.prepare('DELETE FROM task_refs WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)').run(id)
+    db.prepare('DELETE FROM task_records WHERE task_id IN (SELECT id FROM tasks WHERE project_id = ?)').run(id)
+    db.prepare('DELETE FROM tasks WHERE project_id = ?').run(id)
+    db.prepare('DELETE FROM milestones WHERE project_id = ?').run(id)
+    db.prepare('DELETE FROM channels WHERE project_id = ?').run(id)
+    db.prepare('DELETE FROM calendar_sync WHERE project_id = ?').run(id)
+    db.prepare('UPDATE unrouted_messages SET routed_project_id = NULL WHERE routed_project_id = ?').run(id)
+    db.prepare('UPDATE pushes SET related_project_id = NULL WHERE related_project_id = ?').run(id)
+    db.prepare('DELETE FROM projects WHERE id = ?').run(id)
+  })()
+  audit(db, {
+    memberId: by, action: 'project.hardDelete', objectType: 'project', objectId: id,
+    detail: { name: cur.name, status: cur.status, ...counts },
+  })
+}
+
 /** S1-3 管理员待办：未绑定任何专题渠道的在跑项目。 */
 export function projectsWithoutChannel(db) {
   return camelizeRows(
