@@ -274,6 +274,9 @@ export function registerApiRoutes(app) {
 
   app.post('/api/v1/events/:id/confirm', async (req) => events.confirmEvent(db, Number(req.params.id), req.member.id))
   app.post('/api/v1/events/:id/reject', async (req) => events.rejectEvent(db, Number(req.params.id), req.member.id))
+  // S4-7（v0.46/K25）：待确认建议一键批量处理（聚合回执，单条失败不阻塞其余）
+  app.post('/api/v1/events/confirm-batch', async (req) => events.confirmEvents(db, req.body?.ids, req.member.id))
+  app.post('/api/v1/events/reject-batch', async (req) => events.rejectEvents(db, req.body?.ids, req.member.id))
 
   // —— S25 通用提议：确认/驳回（权限矩阵在 engine/proposals.js；与飞书卡片同一口子） ——
   app.post('/api/v1/proposals/:id/confirm', async (req) => proposalsEngine.confirmProposal(db, Number(req.params.id), req.member.id))

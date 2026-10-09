@@ -1,6 +1,5 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
-import { confirmProposal } from '../engine/proposals.js'
 import { runWriteTool } from '../brain/bot/tools.js'
 import { buildSystemPrompt } from '../brain/bot/command.js'
 import { queryMetric } from '../engine/metrics.js'
@@ -87,20 +86,21 @@ describe('S38 任务责任人可空·默认未指派', () => {
     expect(clear.body.responsibleMemberId).toBeNull()
   })
 
-  it('S38-4: 机器人 add_task 提议未给责任人 → 确认生效默认未指派；摘要与协议提示词不再写「缺省=牵头人」', async () => {
+  it('S38-4: 机器人 add_task 未给责任人 → 直改生效默认未指派（v0.46/K25）；回执与协议提示词不再写「缺省=牵头人」', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await mkProject(cookie, '客户S38戊系统')
 
     const out = await runWriteTool(ctx.db, {
       kind: 'propose', payload: { kind: 'add_task', projectId: p.body.id, title: '口述无责任人任务' },
     }, { member: ctx.members.lead, evt: { ts: Date.now(), text: '建立任务：口述无责任人任务' } })
-    expect(out.type).toBe('card')
-    expect(out.summary).toContain('未指派')
-    expect(out.summary).not.toContain('缺省牵头人')
+    expect(out.type).toBe('receipt')
+    expect(out.text).toContain('已生效')
+    expect(out.text).toContain('未指派')
+    expect(out.text).not.toContain('缺省牵头人')
 
-    const conf = await confirmProposal(ctx.db, out.proposalId, ctx.members.lead.id)
-    expect(conf.result.status).toBe('todo')
-    expect(conf.result.responsibleMemberId).toBeNull()
+    const task = ctx.db.prepare('SELECT * FROM tasks WHERE project_id = ? AND title = ?').get(p.body.id, '口述无责任人任务')
+    expect(task.status).toBe('todo')
+    expect(task.responsible_member_id).toBeNull()
 
     const sys = buildSystemPrompt(ctx.db, {
       member: ctx.members.lead, channel: { channel_type: 'dedicated', project_id: p.body.id }, chatType: 'group', surface: 'im',

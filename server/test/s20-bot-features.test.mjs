@@ -258,25 +258,24 @@ describe('S20 机器人私聊占位反馈（v0.36）', () => {
     }
   })
 
-  it('S20-19: 卡片出口——占位编辑为合成回执文本，确认卡照发；编辑失败不阻塞卡片', async () => {
+  it('S20-19: 卡片出口——占位编辑为合成回执文本，确认卡照发；编辑失败不阻塞卡片（v0.46 起卡仅余取消/结项提议）', async () => {
     const p = await mkProject(ctx, '占位乙项目', ctx.members.lead.id)
-    const taskId = ctx.db.prepare('SELECT id FROM tasks WHERE project_id = ? ORDER BY id').get(p.id).id
     const { llm } = scriptedLlm(
-      JSON.stringify({ action: 'write', kind: 'suggest_event', payload: { targetTaskId: taskId, targetField: 'status', targetValue: 'done' } })
+      JSON.stringify({ action: 'write', kind: 'propose', payload: { kind: 'cancel_project', projectId: p.id, reason: '客户战略调整不做了' } })
     )
     const rec = typedRecorder(); const pp = patcher()
-    const out = await handleBotEvent(ctx.db, p2p('fs_zhang', `把任务 #${taskId} 标为完成`), { llm, send: rec.send, patch: pp.patch, secret: SECRET })
+    const out = await handleBotEvent(ctx.db, p2p('fs_zhang', '取消这个项目'), { llm, send: rec.send, patch: pp.patch, secret: SECRET })
     expect(out.result).toBe('card_sent')
     expect(rec.sent).toHaveLength(2) // 占位 + 卡片
     expect(rec.sent[0].text).toContain('正在处理')
     expect(rec.sent[1].card).toBeTruthy()
     expect(pp.patched).toHaveLength(1) // 占位被编辑为回执文本
     expect(pp.patched[0].messageId).toBe(rec.sent[0].messageId)
-    expect(pp.patched[0].text).toContain('待确认')
+    expect(pp.patched[0].text).toContain('待有权人确认')
 
     // 编辑失败：卡片仍必达（占位留在原地）
     const rec2 = typedRecorder(); const pp2 = patcher(true)
-    const out2 = await handleBotEvent(ctx.db, p2p('fs_li', `把任务 #${taskId} 标为完成`), { llm: scriptedLlm(JSON.stringify({ action: 'write', kind: 'suggest_event', payload: { targetTaskId: taskId, targetField: 'status', targetValue: 'doing' } })).llm, send: rec2.send, patch: pp2.patch, secret: SECRET })
+    const out2 = await handleBotEvent(ctx.db, p2p('fs_li', '取消这个项目'), { llm: scriptedLlm(JSON.stringify({ action: 'write', kind: 'propose', payload: { kind: 'cancel_project', projectId: p.id, reason: '客户战略调整不做了' } })).llm, send: rec2.send, patch: pp2.patch, secret: SECRET })
     expect(out2.result).toBe('card_sent')
     expect(rec2.sent.some((m) => m.card)).toBe(true)
   })

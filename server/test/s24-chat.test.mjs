@@ -95,7 +95,7 @@ describe('S24 Web AI 助手会话', () => {
     expect(rows[0].raw_text).toBe('现在有几个项目？')
   })
 
-  it('S24-3: 写信任边界——记录型自动生效（source_platform=web）；建议型出确认入口走既有口子；bind_channel 拒绝', async () => {
+  it('S24-3: 写信任边界（v0.46/K25）——记录型自动生效；任务面变更直改回执（落建议型事件立即生效）；bind_channel 拒绝', async () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await mkProject(ctx.app, cookie, ctx.members.lead.id, '客户C系统')
@@ -115,19 +115,18 @@ describe('S24 Web AI 助手会话', () => {
     expect(recEvt.generated_by).toBe('agent')
     expect(recEvt.speaker_member_id).toBe(1)
 
-    // 建议型：不谎称已改、附事件号与生效/驳回入口；确认走既有口子后任务状态变更
+    // 任务面变更：直改生效并回执（落建议型事件，status=effective、decided_by=发令人；v0.46 起不再生成待确认事件与确认入口）
     ctx.app.llm = fakeLlm([
       { action: 'write', kind: 'suggest_event', payload: { targetTaskId: taskId, targetField: 'status', targetValue: 'done', summary: '联调完成' } },
     ])
     const sug = await authed(ctx.app, cookie, 'POST', `/api/v1/chat/sessions/${sid}/messages`, { text: `${taskId} 号任务做完了` })
-    const sugMeta = sug.body.assistant.meta
-    expect(sug.body.assistant.content).not.toMatch(/已(完成|改)/)
-    expect(sug.body.assistant.content).toMatch(/待确认|确认/)
-    expect(sugMeta.eventId).toBeTruthy()
-    const sugEvt = ctx.db.prepare('SELECT * FROM project_events WHERE id = ?').get(sugMeta.eventId)
-    expect(sugEvt.status).toBe('pending')
-    expect((await authed(ctx.app, cookie, 'POST', `/api/v1/events/${sugMeta.eventId}/confirm`)).status).toBe(200)
+    expect(sug.body.assistant.content).toContain('已生效')
+    expect(sug.body.assistant.meta?.eventId).toBeFalsy() // 直改不再出确认入口
     expect(ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId).status).toBe('done')
+    const sugEvt = ctx.db.prepare(`SELECT * FROM project_events WHERE nature = 'suggestion' AND target_task_id = ? ORDER BY id DESC`).get(taskId)
+    expect(sugEvt.status).toBe('effective')
+    expect(sugEvt.decided_by).toBe(ctx.members.admin.id)
+    expect(sugEvt.source_platform).toBe('web')
 
     // bind_channel：web 场景不可用，refused 文案
     ctx.app.llm = fakeLlm([{ action: 'write', kind: 'bind_channel', payload: { projectId: p.id } }])

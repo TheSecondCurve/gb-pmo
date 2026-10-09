@@ -1,28 +1,29 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import crypto from 'node:crypto'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { BOT_SECRET as SECRET, scriptedLlm, makeRecorder, makeMsgFactory, mkProject } from './bot-kit.mjs'
 import { upsertChannel, updateTask } from '../engine/tasks.js'
 import { closeProject } from '../engine/projects.js'
 import { ingestMessages } from '../brain/extract.js'
-import { handleBotEvent, handleCardAction, buildBindCard } from '../brain/bot/command.js'
+import { handleBotEvent, handleCardAction } from '../brain/bot/command.js'
 import { runReadOnlyQuery } from '../agent/sqlGuard.js'
 import { runWriteTool } from '../brain/bot/tools.js'
 import { runAgentLoop } from '../brain/bot/agent.js'
 import { getSetting, setSetting } from '../engine/settings.js'
 
-// PRD S20 — 机器人指令通道·写路径面：确认卡 / 记录型生效 / 护栏与有界循环对抗 / 审计·限额·去重。
+// PRD S20 — 机器人指令通道·写路径面：直改回执（v0.46/K25）/ 记录型生效 / 护栏与有界循环对抗 / 审计·限额·去重。
 
 let ctx
 const recorder = makeRecorder()
-const { nextMsgId, p2p, group } = makeMsgFactory()
+const { p2p, group } = makeMsgFactory()
 
 beforeAll(async () => {
   ctx = await setupApp()
 })
 afterAll(() => ctx?.db.close())
 
-describe('S20 机器人指令通道 — 写路径（确认卡）', () => {
-  it('S20-2: 口述变更 → pending 建议 + 确认卡；任意绑定成员确认生效留痕；未绑定/伪造签名被拒（v0.34）', async () => {
+describe('S20 机器人指令通道 — 写路径（直改回执，v0.46/K25）', () => {
+  it('S20-2: 口述变更直改生效并回执——落建议型事件立即以发令人身份生效，不再出确认卡', async () => {
     const p = await mkProject(ctx, '客户B系统', ctx.members.lead.id)
     const taskId = ctx.db.prepare('SELECT id FROM tasks WHERE project_id = ? ORDER BY id').get(p.id).id
     const { llm } = scriptedLlm(
@@ -30,38 +31,48 @@ describe('S20 机器人指令通道 — 写路径（确认卡）', () => {
     )
     const rec = recorder()
     const out = await handleBotEvent(ctx.db, p2p('fs_zhang', `把任务 #${taskId} 标为完成`), { llm, send: rec.send, secret: SECRET })
-    expect(out.result).toBe('card_sent')
+    expect(out.result).toBe('replied')
+    expect(rec.sent[0].text).toContain('已生效')
+    expect(rec.sent[0].card).toBeUndefined()
     const evtRow = ctx.db.prepare('SELECT * FROM project_events WHERE target_task_id = ? ORDER BY id DESC').get(taskId)
     expect(evtRow.nature).toBe('suggestion')
-    expect(evtRow.status).toBe('pending')
+    expect(evtRow.status).toBe('effective')
+    expect(evtRow.decided_by).toBe(ctx.members.lead.id) // 发令人即生效人
     expect(evtRow.generated_by).toBe('agent')
     expect(evtRow.source_platform).toBe('feishu')
     expect(evtRow.speaker_member_id).toBe(ctx.members.lead.id)
-    // 推送目标任务责任人 + 牵头人（都是牵头人 → 去重 1 条）
-    expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM pushes WHERE related_project_id = ?').get(p.id).n).toBe(1)
-    // 卡片按钮
-    const card = rec.sent[0].card
-    const confirmBtn = card.elements.find((e) => e.tag === 'action').actions[0]
-    expect(confirmBtn.value.a).toBe('confirm')
-
-    // 未绑定操作者点确认 → 拒，事件仍 pending（身份门禁保留）
-    const unbound = await handleCardAction(ctx.db, { operatorOpenId: 'fs_nobody', value: confirmBtn.value, chatId: 'oc_p2p', messageId: nextMsgId() }, { send: recorder().send, secret: SECRET })
-    expect(unbound.result).toBe('refused_permission')
-    expect(ctx.db.prepare('SELECT status FROM project_events WHERE id = ?').get(evtRow.id).status).toBe('pending')
-
-    // 伪造签名 → 拒
-    const forged = await handleCardAction(ctx.db, { operatorOpenId: 'fs_zhang', value: { ...confirmBtn.value, s: 'deadbeef' }, chatId: 'oc_p2p', messageId: nextMsgId() }, { send: recorder().send, secret: SECRET })
-    expect(forged.result).toBe('error')
-
-    // 普通成员（李四：非责任人/非牵头人/非管理员）确认 → 生效、留痕（v0.34 全员可确认，与 web 端点口径一致）
-    const okRec = recorder()
-    const ok = await handleCardAction(ctx.db, { operatorOpenId: 'fs_li', value: confirmBtn.value, chatId: 'oc_p2p', messageId: nextMsgId() }, { send: okRec.send, secret: SECRET })
-    expect(ok.result).toBe('confirmed')
-    expect(okRec.sent[0].text).toContain('已生效')
-    const after = ctx.db.prepare('SELECT status, decided_by FROM project_events WHERE id = ?').get(evtRow.id)
-    expect(after.status).toBe('effective')
-    expect(after.decided_by).toBe(ctx.members.dev.id)
     expect(ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(taskId).status).toBe('done')
+    // 直改后无待确认事项 → 不再推送
+    expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM pushes WHERE related_project_id = ?').get(p.id).n).toBe(0)
+  })
+
+  it('S20-2: 一条指令多个变更走 items 批量——逐条独立生效，汇总回执单列失败原因', async () => {
+    const p = await mkProject(ctx, '客户B2系统', ctx.members.lead.id)
+    const [t1, t2] = ctx.db.prepare('SELECT id FROM tasks WHERE project_id = ? ORDER BY id LIMIT 2').all(p.id).map((r) => r.id)
+    const { llm } = scriptedLlm(
+      JSON.stringify({
+        action: 'write', kind: 'suggest_event',
+        payload: {
+          items: [
+            { targetTaskId: t1, targetField: 'status', targetValue: 'done' },
+            { targetTaskId: t2, targetField: 'status', targetValue: 'doing' },
+            { targetTaskId: 999999, targetField: 'status', targetValue: 'done' },
+          ],
+        },
+      })
+    )
+    const rec = recorder()
+    const out = await handleBotEvent(ctx.db, p2p('fs_zhang', '把前两个任务一个标完成一个标进行中'), { llm, send: rec.send, secret: SECRET })
+    expect(out.result).toBe('replied')
+    const text = rec.sent[0].text
+    expect(text).toContain('已生效 2 项')
+    expect(text).toContain('失败 1 项')
+    expect(ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(t1).status).toBe('done')
+    expect(ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(t2).status).toBe('doing')
+    // 两条生效留痕（decided_by=发令人）；坏 id 不落事件不阻塞其余
+    const evts = ctx.db.prepare(`SELECT * FROM project_events WHERE project_id = ? AND nature = 'suggestion' ORDER BY id`).all(p.id)
+    expect(evts).toHaveLength(2)
+    expect(evts.every((e) => e.status === 'effective' && e.decided_by === ctx.members.lead.id)).toBe(true)
   })
 
   it('S20-3: 口述登记记录型事件自动生效，归因发令人', async () => {
@@ -228,15 +239,16 @@ describe('S20 机器人指令通道 — 对抗与边界（护栏/循环/写校�
     expect(r.text).toContain('generate_person_digest')
   })
 
-  it('卡片回调边界：未知动作 / 无密钥 / 项目已删', async () => {
+  it('卡片回调边界：未知动作 / 无密钥 / 存量群登记卡项目已删（v0.46 兼容保留）', async () => {
     const unknown = await handleCardAction(ctx.db, { operatorOpenId: 'fs_zhang', value: { a: 'magic' }, chatId: 'c' }, { send: recorder().send, secret: SECRET })
     expect(unknown.result).toBe('error')
     const noSecret = await handleCardAction(ctx.db, { operatorOpenId: 'fs_zhang', value: { a: 'confirm', e: '1', s: 'x' }, chatId: 'c' }, { send: recorder().send, secret: '' })
     expect(noSecret.text).toContain('签名密钥')
-    const goneCard = buildBindCard({ projectId: 999999, projectName: '幽灵项目', chatId: 'oc_x', chatName: '' }, SECRET)
+    // 存量 bind 卡（v0.46 前发出）点按仍走兼容分支：项目已删 → 明确提示
+    const bindValue = { a: 'bind', p: '999999', g: 'oc_x', n: '', s: crypto.createHmac('sha256', SECRET).update('bind:oc_x:999999').digest('hex').slice(0, 16) }
     const gone = await handleCardAction(ctx.db, {
       operatorOpenId: 'fs_zhang',
-      value: goneCard.elements.find((e) => e.tag === 'action').actions[0].value,
+      value: bindValue,
       chatId: 'c',
     }, { send: recorder().send, secret: SECRET })
     expect(gone.text).toContain('项目已不存在')
@@ -304,22 +316,27 @@ describe('S20 机器人指令通道 — 审计、限额与去重', () => {
   })
 })
 
-describe('S20-2/S20-3 写路径分支（工具层：日期/责任人建议出卡、终态只读、快照降级）', () => {
-  it('日期与责任人建议校验通过出卡并带中文摘要；终态项目任务建议拒绝；无原始消息时快照为 null', async () => {
+describe('S20-2/S20-3 写路径分支（工具层：日期/责任人建议直改、终态只读、快照降级）', () => {
+  it('日期与责任人建议直改生效并回执中文摘要；终态项目任务建议拒绝；无原始消息时快照为 null', async () => {
     const p = await mkProject(ctx, '分支项目', ctx.members.lead.id)
     const taskId = ctx.db.prepare('SELECT id FROM tasks WHERE project_id = ? ORDER BY id').get(p.id).id
     const member = { id: ctx.members.lead.id, name: '张三', role: 'member' }
     const evt = { chatType: 'p2p', messageId: 'om_branch', text: '口述', ts: Date.now() }
 
-    // 日期建议：合法 YYYY-MM-DD → 出卡，摘要带日期
+    // 日期建议：合法 YYYY-MM-DD → 直改生效，回执带日期，事件 effective（decided_by=发令人）
     const d = await runWriteTool(ctx.db, { kind: 'suggest_event', payload: { targetTaskId: taskId, targetField: 'plan_end_date', targetValue: '2026-12-31' } }, { member, evt })
-    expect(d.type).toBe('card')
-    expect(d.summary).toContain('2026-12-31')
+    expect(d.type).toBe('receipt')
+    expect(d.text).toContain('2026-12-31')
+    expect(ctx.db.prepare('SELECT plan_end_date FROM tasks WHERE id = ?').get(taskId).plan_end_date).toBe('2026-12-31')
+    const dEvt = ctx.db.prepare('SELECT status, decided_by FROM project_events WHERE target_task_id = ? ORDER BY id DESC').get(taskId)
+    expect(dEvt.status).toBe('effective')
+    expect(dEvt.decided_by).toBe(member.id)
 
-    // 责任人建议：在职成员 id → 出卡，摘要带人名
+    // 责任人建议：在职成员 id → 直改生效，回执带人名
     const o = await runWriteTool(ctx.db, { kind: 'suggest_event', payload: { targetTaskId: taskId, targetField: 'responsible_member_id', targetValue: ctx.members.dev.id } }, { member, evt })
-    expect(o.type).toBe('card')
-    expect(o.summary).toContain('李四')
+    expect(o.type).toBe('receipt')
+    expect(o.text).toContain('李四')
+    expect(ctx.db.prepare('SELECT responsible_member_id FROM tasks WHERE id = ?').get(taskId).responsible_member_id).toBe(ctx.members.dev.id)
 
     // 非法枚举值被引擎 400 接住 → refused（非 403 走「操作被拒绝」）
     const bad = await runWriteTool(ctx.db, { kind: 'suggest_event', payload: { targetTaskId: taskId, targetField: 'status', targetValue: '完成后' } }, { member, evt })

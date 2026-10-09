@@ -126,21 +126,21 @@ describe('S20 机器人多轮上下文 — 注入与指代', () => {
     expect(replyRows.some((r) => r.raw_text.includes('客户O系统一切正常'))).toBe(true)
   })
 
-  it('S20-15: 确认卡合成回执与卡片点按结果落 bot_reply 文本，可被同会话后续追问指代', async () => {
+  it('S20-15: 确认卡合成回执与卡片点按结果落 bot_reply 文本，可被同会话后续追问指代（v0.46 起卡仅余取消/结项提议）', async () => {
     const p = await mkProject(ctx, '客户P系统', ctx.members.lead.id)
-    const taskId = ctx.db.prepare('SELECT id FROM tasks WHERE project_id = ? ORDER BY id').get(p.id).id
     const cid = 'oc_ctx_card'
-    const { llm } = scriptedLlm(JSON.stringify({ action: 'write', kind: 'suggest_event', payload: { targetTaskId: taskId, targetField: 'status', targetValue: 'done' } }))
+    const { llm } = scriptedLlm(JSON.stringify({ action: 'write', kind: 'propose', payload: { kind: 'cancel_project', projectId: p.id, reason: '客户战略调整不做了' } }))
     const cardRec = recorder()
-    await handleBotEvent(ctx.db, chat(cid, 'fs_zhang', `把任务 #${taskId} 标为完成`), { llm, send: cardRec.send, secret: SECRET })
-    // 卡片发送 → bot_reply 落合成回执（含事件号与摘要）
+    await handleBotEvent(ctx.db, chat(cid, 'fs_zhang', '取消客户P系统项目'), { llm, send: cardRec.send, secret: SECRET })
+    // 卡片发送 → bot_reply 落合成回执（含提议号与摘要）
+    const proposalId = ctx.db.prepare(`SELECT id FROM proposals WHERE kind = 'cancel_project' ORDER BY id DESC`).get().id
     const cardRow = ctx.db.prepare(`SELECT raw_text FROM bot_commands WHERE chat_id = ? AND kind = 'bot_reply'`).get(cid)
-    expect(cardRow.raw_text).toContain(`#${ctx.db.prepare('SELECT id FROM project_events WHERE target_task_id = ? ORDER BY id DESC').get(taskId).id}`)
-    expect(cardRow.raw_text).toContain('待确认')
+    expect(cardRow.raw_text).toContain(`#${proposalId}`)
+    expect(cardRow.raw_text).toContain('待有权人确认')
     // 追问「确认一下」之前，历史里已能指代该卡
     const q1 = scriptedLlm(JSON.stringify({ action: 'reply', text: '在等你点确认卡。' }))
     await handleBotEvent(ctx.db, chat(cid, 'fs_zhang', '确认一下'), { llm: q1.llm, send: recorder().send, secret: SECRET })
-    expect(q1.calls[0].some((m) => m.role === 'assistant' && m.content.includes('待确认'))).toBe(true)
+    expect(q1.calls[0].some((m) => m.role === 'assistant' && m.content.includes('待有权人确认'))).toBe(true)
     // 点按生效 → 结果回复也落文本 → 下一轮历史含「已生效」
     const btn = cardRec.sent[0].card.elements.find((e) => e.tag === 'action').actions[0]
     const okRec = recorder()
