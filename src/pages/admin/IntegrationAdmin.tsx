@@ -67,11 +67,16 @@ function LlmCard() {
         <Field label="Base URL（留空=类别默认）"><input className={inputCls} value={shown.baseUrl} onChange={(e) => setSub({ baseUrl: e.target.value })} /></Field>
         <Field label="API Key"><input className={inputCls} type="password" value={shown.apiKey} onChange={(e) => setSub({ apiKey: e.target.value })} /></Field>
         <Field label="模型"><input className={inputCls} value={shown.model} onChange={(e) => setSub({ model: e.target.value })} /></Field>
+        {/* S40（v0.43）：超时可直接在配置台编辑（此前仅 Agent put_setting 可调）；GLM 大 JSON 场景建议 ≥120s */}
+        <Field label="超时（秒，1~600；大 JSON 输出建议 ≥120）">
+          <input className={inputCls} type="number" min={1} max={600} value={Math.round((cfg.timeoutMs ?? 120000) / 1000)}
+            onChange={(e) => setCfg({ ...cfg, timeoutMs: Number(e.target.value) * 1000 })} />
+        </Field>
       </div>
       {provider.note && <p className="mb-3 text-[12px] text-[var(--color-ink-soft)]">{provider.note}</p>}
       <div className="flex items-center gap-2">
         <Btn kind="primary" onClick={async () => {
-          await api.putSetting('llm', { provider: provider.key, ...shown })
+          await api.putSetting('llm', { provider: provider.key, ...shown, timeoutMs: cfg.timeoutMs })
           toast(`已保存并切换生效类别：${provider.label}`)
           const s = await api.settings(); setCfg(s.llm as LlmCfg); setActive((s.llm as LlmCfg).provider)
         }}>保存（含切换生效类别）</Btn>

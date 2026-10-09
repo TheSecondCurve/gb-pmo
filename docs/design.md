@@ -135,3 +135,9 @@
 - 决策：项目类型加初始化提示词（`project_types.init_prompt`，自然语言的任务分配与倒排日期逻辑）；AI 初始分配拆为**草案**（`draftInitAssignments`：LLM 读提示词+未完成任务+成员名册产 `{taskId, responsibleMemberId, planStartDate, planEndDate}` 全任务覆盖草案，白名单后校验+warnings，不落库）与**应用**（`applyInitAssignments`：逐行校验后单事务批量落库，一条讨论面记录+一条 `task.initAssign` 审计快照，不做逐任务 owner_change）。通道：web=草案弹窗人审后应用；**Agent action `apply_init_assignments` 可不经页面确认直接批量写入**（write scope）——这是「LLM 不直接改任务责任人/排期」（AGENTS.md §4/负面清单）的**限定例外**，仅限初始化分配这一个 action（用户 2026-10-09 拍板）；抽取/建议/提议/机器人通道边界不变，机器人面不开放此能力。LLM 产绝对日期由「人审（web）+ 严格校验（双通道）」兜底，S1-7 确定性均分倒排保持为立项默认值，两者互补不替代；不做立项后自动触发。
 - 理由：初始化分配是「人显式发起、结果立即可见可改」的低风险场景，且 PAT write scope 本身已可经 SQL 端点直接 UPDATE tasks——新 action 只是把这一能力语义化并加上逐行校验与审计，没有扩大实际攻击面；而一次配置类型提示词、每个新项目一把完成初次分配，是用户明确的效率诉求。web 侧保留人审是因为页面上「看一眼再点」成本极低、收益是拦下 LLM 的误判。
 - 推翻：无（AGENTS.md 负面清单在本场景的限定例外，负面清单原文保留并加注）。
+
+## K22 LLM 超时 = 一次重试 + 504 中文指引 + 默认 120s（S40，v0.43）
+
+- 决策：LLM 适配层超时（AbortController 掐断）自动原样重试一次，仍超时抛 504 中文指引（含当前 timeoutMs 与调整入口，不透出英文 DOMException 原文）；默认 `timeoutMs` 60s→120s（GLM-5.3-Flash 大 JSON 实测约 117s 的证据）；配置台 LLM 卡片补超时编辑（1s~600s 整数校验）。非超时错误（上游非 2xx）不重试；JSON 模式 400 去参重试的既有行为不变。
+- 理由：S39 的大 JSON 输出把「非流式一次性等待」的 wall-clock 推过 60s，默认值对 GLM 类别必超；一次重试覆盖瞬时排队/抖动，持续超时是配置/上游问题——给人可执行的指引比死等或英文原文有用；超时旋钮此前只能经 `put_setting` 调，配置台补字段让管理员自助。
+- 推翻：无（v0.14 适配层默认超时值按线上实测证据调整）。
