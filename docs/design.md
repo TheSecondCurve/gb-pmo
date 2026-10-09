@@ -141,3 +141,9 @@
 - 决策：LLM 适配层超时（AbortController 掐断）自动原样重试一次，仍超时抛 504 中文指引（含当前 timeoutMs 与调整入口，不透出英文 DOMException 原文）；默认 `timeoutMs` 60s→120s（GLM-5.3-Flash 大 JSON 实测约 117s 的证据）；配置台 LLM 卡片补超时编辑（1s~600s 整数校验）。非超时错误（上游非 2xx）不重试；JSON 模式 400 去参重试的既有行为不变。
 - 理由：S39 的大 JSON 输出把「非流式一次性等待」的 wall-clock 推过 60s，默认值对 GLM 类别必超；一次重试覆盖瞬时排队/抖动，持续超时是配置/上游问题——给人可执行的指引比死等或英文原文有用；超时旋钮此前只能经 `put_setting` 调，配置台补字段让管理员自助。
 - 推翻：无（v0.14 适配层默认超时值按线上实测证据调整）。
+
+## K23 状态色语义唯一来源 = 前端 TONE 表；逾期红优先于状态色（S41/S42/S43，v0.44）
+
+- 决策：任务/里程碑状态的颜色语义集中在**前端 `types.ts`** 的 `TASK_STATUS_TONE` / `MILESTONE_STATUS_TONE` 两张表（映射到 Badge 既有五色语义：todo=muted 灰、doing=info 蓝、done=ok 绿；里程碑 met=绿 / missed=红 / planned·cancelled=灰），组件一律查表，不散落色值字符串；**逾期（`isOverdue`，后端 BJ_TODAY 口径）红优先于状态色**（行底色与甘特条）。任务级甘特复用 S30 `gantt.ts` 纯函数与条形四形态、「无日期不入轴收未排期组、不虚构日期」的松散排期语言。项目进度计数（`tasksTotal/tasksDone`）是 `listProjects` 的**行级派生属性**（仿 `overdueTasks` 子查询模式），不进 metrics.js 指标层；枚举层（server/engine/enums.js）不增 color 字段——色彩是展示层关注点，不进数据契约。
+- 理由：颜色是「看一眼分状态」的纯展示语义，集中一张表即可全局对齐、单点调整；逾期是比状态更紧迫的信号，视觉上必须赢（否则逾期任务淹没在同色行里）；进度计数与 `overdueTasks` 一样是行级派生属性而非跨项目聚合指标，放 `listProjects` 子查询避免为展示新开指标口径；枚举层保持 `value→label` 扁平映射不变，SKILL.md drift check 与 Agent 契约零影响。
+- 推翻：无。

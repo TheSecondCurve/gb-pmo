@@ -1,4 +1,6 @@
 // 与后端 JSON 契约对齐（camelCase，AGENTS.md §4）
+// S41/K23（v0.44）：色彩语义唯一来源——Tone 与 *_TONE 表集中在此，组件查表不散落色值。
+export type Tone = 'ok' | 'warn' | 'bad' | 'info' | 'muted'
 export interface Member {
   id: number; name: string; username: string; feishuId?: string | null; wecomId?: string | null
   team?: string | null; isKeyPerson: boolean; maxParallelProjects: number; role: 'admin' | 'member'
@@ -23,6 +25,7 @@ export interface ProjectRow {
   planStartDate?: string | null; planEndDate?: string | null
   daysToDelivery?: number | null // S21：剩余/超期天数（未来为正、已过为负；结项/取消或未填为 null）
   overdueTasks: number; silentDays: number | null; lastEventAt?: number | null; updatedAt: number
+  tasksTotal: number; tasksDone: number // S43（v0.44）：任务进度行属性（排除软删；非指标口径，K23）
 }
 export interface TaskRow {
   id: number; projectId: number; title: string; responsibleMemberId: number | null; responsibleName?: string | null
@@ -59,6 +62,10 @@ export const PRIORITY_LABEL: Record<string, string> = { high: '高', medium: '�
 export const ROLE_LABEL: Record<string, string> = { admin: '系统管理员', member: '成员' }
 export const PROJECT_STATUS_LABEL: Record<string, string> = { active: '进行中', closed: '已结项', cancelled: '已取消' } // S29 三态
 export const TASK_STATUS_LABEL: Record<string, string> = { todo: '未开始', doing: '进行中', done: '完成' } // v0.6 固定三档
+// S41/S42（v0.44，K23）：状态→色彩语义唯一来源；逾期红不进表——由 isOverdue 在渲染层优先覆盖
+export const TASK_STATUS_TONE: Record<string, Tone> = { todo: 'muted', doing: 'info', done: 'ok' }
+export const MILESTONE_STATUS_LABEL: Record<string, string> = { planned: '计划中', met: '已达成', missed: '已延误', cancelled: '已取消' }
+export const MILESTONE_STATUS_TONE: Record<string, Tone> = { planned: 'muted', met: 'ok', missed: 'bad', cancelled: 'muted' }
 export const EVENT_TYPE_LABEL: Record<string, string> = {
   progress: '进展', risk: '风险', decision: '决策', blocker: '阻塞', schedule_change: '排期变更',
   status_change: '状态变更', suggestion: '建议', owner_change: '责任人变更', priority_change: '优先级变更',

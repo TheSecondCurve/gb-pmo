@@ -70,6 +70,12 @@ export interface Tick {
   leftPct: number
 }
 
+/** S42-4 单日期定位（里程碑刻度）：轴外日期钳制到端点（不飞出轨道）。 */
+export function pointPct(date: string, axis: AxisWindow): number {
+  const pct = ((dayNum(date) - axis.start) / axis.totalDays) * 100
+  return Math.max(0, Math.min(100, pct))
+}
+
 /** 月刻度：轴内每个月边界一格；跨度超 540 天降为季度刻度（防密集）。 */
 export function monthTicks(axis: AxisWindow): Tick[] {
   const quarterly = axis.totalDays > 540
