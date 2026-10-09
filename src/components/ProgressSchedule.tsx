@@ -1,9 +1,12 @@
 // S42（v0.44）项目详情「进度与排期」卡：堆叠进度条（progressStats 纯前端派生）+ 任务级甘特。
-// 甘特复用 S30 gantt.ts 纯函数与条形四形态语义（区间条/截止旗/开放条/未排期组），
+// 甘特复用 S30 gantt.ts 纯函数与条形形态语义（区间条/截止旗/开放条/未排期组），
 // 条色=状态、逾期红优先（K23），今日锚点走 bjToday()（S19）；不虚构日期、单层条形、无拖拽。
+// v0.49（K27，S42-5/S42-6）：轴右端以项目交付日期/任务计划结束日期的最大值（不早于今天）为锚、
+// 右端 1 天呼吸边；轨道弹性撑满卡片宽度（跨度长横向滚动，最小日宽 2px）；只有开始日的开放任务
+// 按同项目任务中位时长估算名义结束日（无样本 14 天），开放条按估算时长渐隐收尾，估算不落数据。
 import { useMemo, type CSSProperties } from 'react'
 import { bjToday, dateRangeForm, fmtDateRange } from '../fmt'
-import { barLayout, computeAxis, dayNum, monthTicks, pointPct } from '../gantt'
+import { barLayout, computeAxis, dayNum, medianDurationDays, monthTicks, pointPct } from '../gantt'
 import { progressStats, taskVisual, type TaskVisual } from '../progress'
 import { Badge, Card, Empty } from './ui'
 import {
@@ -12,6 +15,7 @@ import {
 } from '../types'
 
 const LABEL_W = 176
+const MIN_DAY_PX = 2 // 轨道最小日宽：跨度长时撑出 min-width 触发横向滚动，跨度短由 flex-1 拉满卡片
 
 const SEGS: { key: 'done' | 'doing' | 'todo'; label: string; cls: string }[] = [
   { key: 'done', label: '完成', cls: 'bg-[var(--color-ok)]' },
@@ -27,11 +31,19 @@ const MILESTONE_TEXT: Record<Tone, string> = {
   info: 'text-[var(--color-brand)]', muted: 'text-[var(--color-ink-soft)]',
 }
 
-export default function ProgressSchedule({ tasks, milestones }: { tasks: TaskRow[]; milestones: MilestoneRow[] }) {
+export default function ProgressSchedule({ tasks, milestones, projectEndDate }: {
+  tasks: TaskRow[]; milestones: MilestoneRow[]; projectEndDate?: string | null
+}) {
   const s = progressStats(tasks)
   const today = bjToday()
   const undated = useMemo(() => tasks.filter((t) => dateRangeForm(t.planStartDate, t.planEndDate) === 'none'), [tasks])
-  const axis = useMemo(() => computeAxis(tasks, today), [tasks, today])
+  // S42-6：开放任务名义时长 = 同项目起止齐全任务的中位时长（无样本回退 14 天）
+  const est = useMemo(() => medianDurationDays(tasks), [tasks])
+  // S42-5：轴右端锚 = max(项目交付日期, 任务计划结束日期, 今天) + 1 天呼吸边
+  const axis = useMemo(
+    () => computeAxis(tasks, today, { endAnchor: projectEndDate ?? null, padEnd: 1, estimateDuration: est }),
+    [tasks, today, projectEndDate, est],
+  )
 
   return (
     <Card title={`进度与排期${s.total > 0 ? `（完成 ${s.done}/${s.total}）` : ''}`}>
@@ -56,16 +68,16 @@ export default function ProgressSchedule({ tasks, milestones }: { tasks: TaskRow
               ))}
             </div>
           </div>
-          <TaskGantt tasks={tasks} milestones={milestones} axis={axis} today={today} undated={undated} />
+          <TaskGantt tasks={tasks} milestones={milestones} axis={axis} today={today} undated={undated} est={est} />
         </>
       )}
     </Card>
   )
 }
 
-function TaskGantt({ tasks, milestones, axis, today, undated }: {
+function TaskGantt({ tasks, milestones, axis, today, undated, est }: {
   tasks: TaskRow[]; milestones: MilestoneRow[]
-  axis: ReturnType<typeof computeAxis>; today: string; undated: TaskRow[]
+  axis: ReturnType<typeof computeAxis>; today: string; undated: TaskRow[]; est: number
 }) {
   const datedMilestones = milestones.filter((m) => m.planDate)
   if (!axis) {
@@ -79,9 +91,8 @@ function TaskGantt({ tasks, milestones, axis, today, undated }: {
     )
   }
 
-  const dayPx = Math.max(2, Math.min(12, 640 / axis.totalDays)) // 跨度越长日宽越窄，轨道约 640px 封顶
-  const trackW = Math.ceil(axis.totalDays * dayPx)
-  const todayLeftPx = LABEL_W + (trackW * ((dayNum(today) - axis.start) / axis.totalDays))
+  const minW = LABEL_W + axis.totalDays * MIN_DAY_PX // 兜底横向滚动；容器更宽时由 width:100% + flex-1 拉满
+  const todayFrac = (dayNum(today) - axis.start) / axis.totalDays
   const ticks = monthTicks(axis)
   const dated = tasks.filter((t) => dateRangeForm(t.planStartDate, t.planEndDate) !== 'none')
   const sorted = [...dated].sort((a, b) => dayNum(a.planStartDate || a.planEndDate!) - dayNum(b.planStartDate || b.planEndDate!))
@@ -89,11 +100,11 @@ function TaskGantt({ tasks, milestones, axis, today, undated }: {
   return (
     <div className="mt-3 border-t border-[var(--color-line)] pt-3">
       <div className="overflow-x-auto">
-        <div style={{ width: LABEL_W + trackW }}>
+        <div data-testid="task-gantt-canvas" style={{ width: '100%', minWidth: minW }}>
           {/* 月刻度行 */}
           <div className="flex border-b border-[var(--color-line)]">
             <div className="shrink-0 px-2 py-1 text-[11px] text-[var(--color-ink-soft)]" style={{ width: LABEL_W }}>任务（{dated.length}）</div>
-            <div className="relative h-6 shrink-0" style={{ width: trackW }}>
+            <div className="relative h-6 flex-1">
               {ticks.map((t) => (
                 <span key={t.label} data-testid="task-gantt-tick" className="absolute top-0 h-full border-l border-[var(--color-line)] pl-1 text-[10px] text-[var(--color-ink-soft)]" style={{ left: `${t.leftPct}%` }}>{t.label}</span>
               ))}
@@ -103,7 +114,7 @@ function TaskGantt({ tasks, milestones, axis, today, undated }: {
           {datedMilestones.length > 0 && (
             <div className="flex border-b border-[var(--color-line)]">
               <div className="shrink-0 px-2 py-0.5 text-[11px] text-[var(--color-ink-soft)]" style={{ width: LABEL_W }}>里程碑</div>
-              <div className="relative h-5 shrink-0" style={{ width: trackW }}>
+              <div className="relative h-5 flex-1">
                 {datedMilestones.map((m) => {
                   const tone = MILESTONE_STATUS_TONE[m.status] || 'muted'
                   return (
@@ -121,24 +132,26 @@ function TaskGantt({ tasks, milestones, axis, today, undated }: {
           {/* 任务条（今日线贯穿） */}
           <div className="relative">
             {sorted.map((t) => {
-              const b = barLayout(t, axis)!
+              const b = barLayout(t, axis, est)!
               return (
                 <div key={t.id} className="flex border-b border-[var(--color-line)] last:border-0">
                   <div className="flex shrink-0 items-center overflow-hidden px-2 text-[12px]" style={{ width: LABEL_W }}>
                     <span className="truncate" title={t.title}>{t.title}</span>
                   </div>
-                  <div className="relative shrink-0" style={{ width: trackW, height: 26 }}>
+                  <div className="relative flex-1" style={{ height: 26 }}>
                     <TaskBarCell t={t} b={b} />
                   </div>
                 </div>
               )
             })}
-            <div data-testid="task-gantt-today" className="pointer-events-none absolute inset-y-0 z-10 w-px bg-[var(--color-brand)]" style={{ left: todayLeftPx }} />
+            {/* 今日线：calc 百分比定位（左=标签列宽 + 轨道弹性宽 × 今日进度），随轨道伸缩不变形 */}
+            <div data-testid="task-gantt-today" className="pointer-events-none absolute inset-y-0 z-10 w-px bg-[var(--color-brand)]"
+              style={{ left: `calc(${LABEL_W}px + (100% - ${LABEL_W}px) * ${todayFrac})` }} />
           </div>
         </div>
       </div>
       <div className="mt-1 text-[11px] text-[var(--color-ink-soft)]">
-        条色=状态（蓝=进行中 · 绿=完成 · 灰=未开始 · 红=逾期）；形态沿用项目时间线（旗标=只有截止日 · 渐隐=只有开始日）；今日 {today}
+        条色=状态（蓝=进行中 · 绿=完成 · 灰=未开始 · 红=逾期）；旗标=只有截止日；渐隐=只有开始日，长度按同项目任务中位时长估算（无样本 14 天）；轴右端=项目交付日期与任务结束日期的最大值；今日 {today}
       </div>
       {undated.length > 0 && <UndatedGroup undated={undated} />}
     </div>
