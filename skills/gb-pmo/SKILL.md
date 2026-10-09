@@ -394,7 +394,7 @@ client.sh action generate_person_digest '{}'
 - **channelPlatform**: feishu=飞书、wecom=企业微信
 - **channelType**: dedicated=专题渠道、general=通用群
 - **eventNature**: record=记录型、suggestion=建议型
-- **eventType**: progress=进展、risk=风险、decision=决策、blocker=阻塞、schedule_change=排期变更、status_change=状态变更、suggestion=建议、owner_change=责任人变更、priority_change=优先级变更
+- **eventType**: progress=进展、risk=风险、decision=决策、blocker=阻塞、finance=财务记录、schedule_change=排期变更、status_change=状态变更、suggestion=建议、owner_change=责任人变更、priority_change=优先级变更
 - **eventStatus**: pending=待确认、effective=已生效、rejected=已驳回、expired=已超时
 - **eventGenerator**: extraction=IM 抽取、digest=梳理建议、agent=Agent 口述、web=页面操作、system=系统
 - **pushType**: daily_report=日报、digest=梳理、alert=预警、test=测试

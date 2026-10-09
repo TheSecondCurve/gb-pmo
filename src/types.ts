@@ -67,7 +67,13 @@ export const TASK_STATUS_TONE: Record<string, Tone> = { todo: 'muted', doing: 'i
 export const MILESTONE_STATUS_LABEL: Record<string, string> = { planned: '计划中', met: '已达成', missed: '已延误', cancelled: '已取消' }
 export const MILESTONE_STATUS_TONE: Record<string, Tone> = { planned: 'muted', met: 'ok', missed: 'bad', cancelled: 'muted' }
 export const EVENT_TYPE_LABEL: Record<string, string> = {
-  progress: '进展', risk: '风险', decision: '决策', blocker: '阻塞', schedule_change: '排期变更',
-  status_change: '状态变更', suggestion: '建议', owner_change: '责任人变更', priority_change: '优先级变更',
+  progress: '进展', risk: '风险', decision: '决策', blocker: '阻塞', finance: '财务记录',
+  schedule_change: '排期变更', status_change: '状态变更', suggestion: '建议', owner_change: '责任人变更', priority_change: '优先级变更',
 }
+// S4-8（v0.47）：讨论面分栏的固定栏类型——其余类型（含未识别类型）一律落「其他」栏
+export const EVENT_PINNED_COLS: { key: string; title: string; types: string[] }[] = [
+  { key: 'progress', title: '进展', types: ['progress'] },
+  { key: 'risk', title: '风险 · 阻塞', types: ['risk', 'blocker'] },
+  { key: 'finance', title: '财务记录', types: ['finance'] },
+]
 export const EVENT_STATUS_LABEL: Record<string, string> = { pending: '待确认', effective: '已生效', rejected: '已驳回', expired: '已超时' }

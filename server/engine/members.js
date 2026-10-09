@@ -19,6 +19,13 @@ export function getMember(db, id) {
   return publicMember(camelizeRow(db.prepare(`SELECT ${COLS} FROM members WHERE id = ?`).get(id)))
 }
 
+/** S4-10（v0.47）：留痕摘要的成员姓名快照——事件 append-only 历史不回改，写时落定姓名；null=未指派，查不到防御性回退编号。 */
+export function memberName(db, id) {
+  if (id == null) return '未指派'
+  const row = db.prepare('SELECT name FROM members WHERE id = ?').get(id)
+  return row?.name || `成员#${id}`
+}
+
 export function listMembers(db, { activeOnly = false } = {}) {
   const sql = activeOnly
     ? `SELECT ${COLS} FROM members WHERE status = 'active' ORDER BY id`

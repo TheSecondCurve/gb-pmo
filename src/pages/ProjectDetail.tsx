@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { fmtDateTime } from '../fmt'
 import { api } from '../api'
 import { useStore } from '../store'
@@ -6,7 +6,7 @@ import { Badge, Btn, Card, Empty, Field, InlineSelect, InlineText, Modal, Spinne
 import ProgressSchedule from '../components/ProgressSchedule'
 import { TASK_ROW_CLS, taskVisual } from '../progress'
 import {
-  EVENT_STATUS_LABEL, EVENT_TYPE_LABEL, MILESTONE_STATUS_LABEL, MILESTONE_STATUS_TONE,
+  EVENT_PINNED_COLS, EVENT_STATUS_LABEL, EVENT_TYPE_LABEL, MILESTONE_STATUS_LABEL, MILESTONE_STATUS_TONE,
   PRIORITY_LABEL, PROJECT_STATUS_LABEL, TASK_STATUS_LABEL, TASK_STATUS_TONE,
   type ChannelRow, type EventRow, type InitAssignmentRow, type Member, type ProjectDetail, type TaskRecordRow, type TaskRefRow,
 } from '../types'
@@ -24,6 +24,7 @@ export default function ProjectDetail({ id }: { id: number }) {
   const [recordsTaskId, setRecordsTaskId] = useState<number | null>(null)
   const [refsTask, setRefsTask] = useState<{ id: number; title: string } | null>(null)
   const [initAssigning, setInitAssigning] = useState(false)
+  const [hiddenEventTypes, setHiddenEventTypes] = useState<string[]>([]) // S4-8 其他栏筛选：被隐藏的类型（默认空=全显）
 
   const refresh = useCallback(async () => {
     const [d, e, m, c] = await Promise.all([
@@ -51,6 +52,35 @@ export default function ProjectDetail({ id }: { id: number }) {
     toast(`${action === 'confirm' ? '已生效' : '已驳回'} ${done} 条${failText}`)
     await refresh()
   }
+
+  // S4-8（v0.47）：讨论面分栏——固定三栏（进展/风险·阻塞/财务记录）+「其他」栏（类型筛选，默认全显；
+  // 未识别类型自动落其他栏不丢失）；各栏保持业务时间倒序（listEvents 返回序）
+  const pinnedTypes = new Set(EVENT_PINNED_COLS.flatMap((c) => c.types))
+  const otherEvents = events.filter((e) => !pinnedTypes.has(e.eventType))
+  const otherTypes = [
+    ...Object.keys(EVENT_TYPE_LABEL).filter((t) => !pinnedTypes.has(t)),
+    ...[...new Set(otherEvents.map((e) => e.eventType))].filter((t) => !(t in EVENT_TYPE_LABEL) && !pinnedTypes.has(t)),
+  ]
+  const shownOther = otherEvents.filter((e) => !hiddenEventTypes.includes(e.eventType))
+  const renderEvent = (e: EventRow) => (
+    <li key={e.id} className="rounded-md border border-[var(--color-line)] bg-[var(--color-card)] p-2.5 text-[13px]">
+      <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] text-[var(--color-ink-soft)]">
+        <Badge tone={e.status === 'pending' ? 'warn' : e.status === 'effective' ? 'ok' : 'muted'}>{EVENT_STATUS_LABEL[e.status]}</Badge>
+        <Badge tone="muted">{EVENT_TYPE_LABEL[e.eventType] || e.eventType}</Badge>
+        <Badge tone={e.nature === 'suggestion' ? 'info' : 'muted'}>{e.nature === 'suggestion' ? '建议型' : '记录型'}</Badge>
+        {e.generatedBy === 'extraction' && <Badge tone="muted">IM 抽取</Badge>}
+        <span className="num">{fmtDateTime(e.businessTime)}</span>
+        {e.speakerLabel && <span>{e.speakerLabel}</span>}
+      </div>
+      <div>{e.summary}</div>
+      {e.status === 'pending' && (
+        <div className="mt-2 flex gap-2">
+          <Btn small kind="primary" onClick={async () => { await api.confirmEvent(e.id); toast('建议已确认生效'); await refresh() }}>确认生效</Btn>
+          <Btn small onClick={async () => { await api.rejectEvent(e.id); toast('已驳回'); await refresh() }}>驳回</Btn>
+        </div>
+      )}
+    </li>
+  )
 
   return (
     <div className="space-y-4">
@@ -213,27 +243,38 @@ export default function ProjectDetail({ id }: { id: number }) {
           </div>
         )}
         {events.length === 0 ? <Empty hint="暂无事件：绑定渠道后由大脑自动抽取，或手动添加" /> : (
-          <ul className="space-y-2">
-            {events.map((e) => (
-              <li key={e.id} className="rounded-md border border-[var(--color-line)] p-2.5 text-[13px]">
-                <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] text-[var(--color-ink-soft)]">
-                  <Badge tone={e.status === 'pending' ? 'warn' : e.status === 'effective' ? 'ok' : 'muted'}>{EVENT_STATUS_LABEL[e.status]}</Badge>
-                  <Badge tone="muted">{EVENT_TYPE_LABEL[e.eventType] || e.eventType}</Badge>
-                  <Badge tone={e.nature === 'suggestion' ? 'info' : 'muted'}>{e.nature === 'suggestion' ? '建议型' : '记录型'}</Badge>
-                  {e.generatedBy === 'extraction' && <Badge tone="muted">IM 抽取</Badge>}
-                  <span className="num">{fmtDateTime(e.businessTime)}</span>
-                  {e.speakerLabel && <span>{e.speakerLabel}</span>}
-                </div>
-                <div>{e.summary}</div>
-                {e.status === 'pending' && (
-                  <div className="mt-2 flex gap-2">
-                    <Btn small kind="primary" onClick={async () => { await api.confirmEvent(e.id); toast('建议已确认生效'); await refresh() }}>确认生效</Btn>
-                    <Btn small onClick={async () => { await api.rejectEvent(e.id); toast('已驳回'); await refresh() }}>驳回</Btn>
-                  </div>
-                )}
-              </li>
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            {EVENT_PINNED_COLS.map((col) => (
+              <EventColumn
+                key={col.key} title={col.title} testid={`event-col-${col.key}`}
+                events={events.filter((e) => col.types.includes(e.eventType))}
+                emptyHint={{ progress: '暂无进展', risk: '暂无风险/阻塞', finance: '暂无财务记录' }[col.key] ?? '暂无事件'}
+                renderItem={renderEvent} />
             ))}
-          </ul>
+            <EventColumn
+              title="其他" testid="event-col-other" events={shownOther}
+              emptyHint={otherEvents.length ? '筛选已隐藏全部其他事件' : '暂无其他事件'}
+              toolbar={(
+                <div className="flex flex-wrap gap-1 border-b border-[var(--color-line)] px-2 py-1.5" aria-label="其他栏类型筛选器">
+                  {otherTypes.map((t) => {
+                    const shown = !hiddenEventTypes.includes(t)
+                    return (
+                      <button
+                        key={t} type="button" aria-pressed={shown}
+                        onClick={() => setHiddenEventTypes((cur) => (shown ? [...cur, t] : cur.filter((x) => x !== t)))}
+                        className={`rounded border px-1.5 py-0.5 text-[11px] ${
+                          shown
+                            ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)] text-[var(--color-brand)]'
+                            : 'border-[var(--color-line)] text-[var(--color-ink-soft)] opacity-60'
+                        }`}>
+                        {EVENT_TYPE_LABEL[t] || t}
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              renderItem={renderEvent} />
+          </div>
         )}
         {!readonly && <AddEvent projectId={id} onDone={refresh} />}
       </Card>
@@ -259,8 +300,26 @@ export default function ProjectDetail({ id }: { id: number }) {
   )
 }
 
-function DigestBody({ fn }: { fn: () => Promise<Record<string, unknown>> }) {
-  const [out, setOut] = useState<Record<string, unknown> | null>(null)
+/** S4-8（v0.47）：讨论面分栏栏位——栏头（名称+计数）+ 可滚动时序列表；toolbar 槽给其他栏放类型筛选器。 */
+function EventColumn({ title, testid, events, emptyHint, toolbar, renderItem }: {
+  title: string; testid: string; events: EventRow[]; emptyHint: string
+  toolbar?: ReactNode; renderItem: (e: EventRow) => ReactNode
+}) {
+  return (
+    <section data-testid={testid} className="flex flex-col rounded-md border border-[var(--color-line)]">
+      <header className="flex items-center gap-2 border-b border-[var(--color-line)] px-2.5 py-1.5 text-[12px] font-semibold">
+        {title}
+        <Badge tone="muted">{events.length}</Badge>
+      </header>
+      {toolbar}
+      {events.length === 0 ? <div className="p-2"><Empty hint={emptyHint} /></div> : (
+        <ul className="max-h-[28rem] space-y-2 overflow-y-auto p-2">{events.map(renderItem)}</ul>
+      )}
+    </section>
+  )
+}
+
+function DigestBody({ fn }: { fn: () => Promise<Record<string, unknown>> }) {  const [out, setOut] = useState<Record<string, unknown> | null>(null)
   const [err, setErr] = useState('')
   // eslint-disable-next-line react-hooks/exhaustive-deps -- 刻意仅挂载时执行一次：fn 由父组件内联新建，加入依赖会在每次父渲染时重跑梳理（多烧 LLM 调用）
   useEffect(() => { fn().then(setOut).catch((e) => setErr((e as Error).message)) }, [])

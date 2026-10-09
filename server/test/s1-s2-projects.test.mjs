@@ -231,7 +231,7 @@ describe('S2 排期与任务维护', () => {
     expect(list2.body.records).toHaveLength(2)
   })
 
-  it('S5-2: 优先级调整立即生效并留事件痕迹', async () => {
+  it('S5-2: 优先级调整立即生效并留事件痕迹（v0.47/S4-10：摘要写中文档位与操作人姓名）', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
       name: '客户E咨询', templateCode: 'consulting_1v1', leadMemberId: ctx.members.lead.id, priority: 'low',
@@ -241,6 +241,7 @@ describe('S2 排期与任务维护', () => {
     const events = await authed(ctx.app, cookie, 'GET', `/api/v1/projects/${p.body.id}/events`)
     const trace = events.body.events.find((e) => e.eventType === 'priority_change')
     expect(trace).toBeTruthy()
-    expect(trace.summary).toContain('low → high')
+    expect(trace.summary).toContain('低 → 高')
+    expect(trace.summary).toContain('（管理员）') // 谁、何时、调了什么——可读化后仍是同一条留痕
   })
 })

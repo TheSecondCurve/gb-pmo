@@ -171,9 +171,9 @@ export async function extractEvents(llm, db, projectId, messages) {
       {
         role: 'system',
         content: `你是企业项目大脑的抽取器。从群聊消息中抽取项目事件，输出 JSON {"events":[...]}。
-每条事件：{"nature":"record"|"suggestion","eventType":"progress|risk|decision|blocker|schedule_change|status_change|owner_change","summary":"一句中文摘要","confidence":0~1,
+每条事件：{"nature":"record"|"suggestion","eventType":"progress|risk|decision|blocker|finance|schedule_change|status_change|owner_change","summary":"一句中文摘要","confidence":0~1,
 "suggestion 时必填":"targetTaskId(上面任务清单里的#id)","targetField":"status|plan_end_date|plan_start_date","targetValue":"对应值(日期用YYYY-MM-DD)"}。
-规则：纯进展/风险/决策描述 → record；明确的任务完成/日期变化信号 → suggestion（如"已上线/完成了" → status=done，"推迟到X" → plan_end_date）；与项目无关的寒暄不要产出；没有把握不要编 targetTaskId。只输出 JSON。`,
+规则：纯进展/风险/决策/财务事实描述 → record（财务类消息如回款/开票/费用沟通 eventType=finance，仅记录、不含金额字段）；明确的任务完成/日期变化信号 → suggestion（如"已上线/完成了" → status=done，"推迟到X" → plan_end_date）；与项目无关的寒暄不要产出；没有把握不要编 targetTaskId。只输出 JSON。`,
       },
       {
         role: 'user',
