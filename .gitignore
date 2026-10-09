@@ -9,3 +9,7 @@ backups/
 .DS_Store
 .video_agent/
 .zcode/
+
+# e2e（Playwright）
+test-results/
+playwright-report/

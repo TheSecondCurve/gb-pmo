@@ -1,5 +1,6 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
+import { runReadOnlyQuery } from '../agent/sqlGuard.js'
 
 // PRD S4 + engineering-standards §4 SQL 端点对抗用例表 — 形态 B 接入与安全判定
 
@@ -12,7 +13,7 @@ async function agent(method, url, payload, token = writeToken, headers = {}) {
   const res = await ctx.app.inject({
     method, url, payload, headers: { authorization: `Bearer ${token}`, ...headers },
   })
-  let body = null
+  let body
   try { body = res.json() } catch { body = res.body }
   return { status: res.statusCode, body }
 }
@@ -45,7 +46,7 @@ describe('S4 Agent 接入（形态 B）', () => {
     // install.ps1 纯 ASCII
     const ps1 = await ctx.app.inject({ method: 'GET', url: '/agent/skill/gb-pmo/install.ps1' })
     expect(ps1.statusCode).toBe(200)
-    expect(/^[\x00-\x7F]*$/.test(ps1.body)).toBe(true)
+    expect(/^[\x00-\x7F]*$/.test(ps1.body)).toBe(true) // eslint-disable-line no-control-regex -- 有意匹配控制字符：login.ps1/install.ps1 纯 ASCII 编码回归锚点
   })
 
   it('S4-1: 终端授权换 PAT（agent-login）', async () => {
@@ -137,7 +138,7 @@ describe('S4 Agent 接入（形态 B）', () => {
   })
 })
 
-describe('SQL 端点对抗用例表（engineering-standards §4）', () => {
+describe('SQL 端点对抗用例表（S4-6：写操作 403 不被换字段重试绕过 + engineering-standards §4）', () => {
   it('注释前缀绕过：/* */ SELECT 视为读；-- 注释头同理', async () => {
     const res = await sql('/* just a comment */ SELECT COUNT(*) AS n FROM projects')
     expect(res.status).toBe(200)
@@ -305,5 +306,26 @@ describe('S17-10 Agent 配置类 action', () => {
       action: 'draft_template_tasks', params: { name: '硬件部署交付' },
     }, adminToken)
     expect(gone2.status).toBe(400)
+  })
+})
+
+describe('SQL 护栏引擎级边界（S4-6 续：prepare/执行失败与双条件校验）', () => {
+  it('空 sql 400；语法错误预编译 400；WITH...DELETE 骗过读头被 readonly 双条件拦下；执行期错误 400', async () => {
+    const rejects = (sql, word) => {
+      try {
+        runReadOnlyQuery(ctx.db, sql)
+        throw new Error(`应当被拒: ${sql}`)
+      } catch (e) {
+        expect(e.statusCode).toBeDefined()
+        expect(e.message).toContain(word)
+      }
+    }
+    rejects('', 'sql 必填')
+    rejects('   ', 'sql 必填')
+    rejects('SELECT', '预编译失败') // 语法错误：SELECT 无选择项
+    // WITH 开头读头判定放行，但 better-sqlite3 readonly=false → 双条件兜底 403
+    rejects('WITH x AS (SELECT 1) DELETE FROM tasks', '只读查询')
+    // 预编译通过、执行期才炸（非法 JSON 进 json_extract）
+    rejects(`SELECT json_extract('not json', '$.a')`, '执行失败')
   })
 })

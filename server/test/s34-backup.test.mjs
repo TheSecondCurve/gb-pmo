@@ -5,10 +5,10 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import zlib from 'node:zlib'
-import { setupDb, setupApp, loginCookie, authed } from './helpers.mjs'
+import { setupDb, setupApp, loginCookie, authed, waitFor } from './helpers.mjs'
 import { getSetting, setSetting } from '../engine/settings.js'
-import { signAwsV4 } from '../engine/s3.js'
-import { runBackup, testBackupConnection, listBackupHistory } from '../engine/backup.js'
+import { signAwsV4, resolveRegion, s3Client } from '../engine/s3.js'
+import { runBackup, testBackupConnection, backupConfigError } from '../engine/backup.js'
 import { dueTasks, startScheduler } from '../brain/scheduler.js'
 
 const CFG = {
@@ -232,11 +232,107 @@ describe('S34 备份执行语义（engine 直调）', () => {
       tickMs: 5,
       now: () => clock,
     })
-    await new Promise((r) => setTimeout(r, 15))
+    await new Promise((r) => setTimeout(r, 15)) // 负向窗口：先让心跳拍过（不触发）
     clock += 26 * 3600 * 1000 // 越过每日时点
-    await new Promise((r) => setTimeout(r, 30))
+    await waitFor(() => ran.length >= 1) // 正向断言轮询，抗并行负载抖动
     sched.stop()
     expect(ran.length).toBeGreaterThanOrEqual(1)
     ctx.db.close()
   })
 })
+
+describe('S34 S3 客户端边界与备份错误面（分支补齐，真签名路径）', () => {
+  it('endpoint 解析：非法 URL / 非 http(s) 协议 400；region 推断四类（显式/R2/OSS/默认）', () => {
+    expect(() => s3Client({ ...CFG, endpoint: 'not-a-url' })).toThrow(/合法 URL/)
+    expect(() => s3Client({ ...CFG, endpoint: 'ftp://oss.example.com' })).toThrow(/仅支持 http/)
+    expect(resolveRegion({ region: 'cn-hangzhou' }, 'oss-cn-shanghai.aliyuncs.com')).toBe('cn-hangzhou')
+    expect(resolveRegion({}, 'abc.r2.cloudflarestorage.com')).toBe('auto')
+    expect(resolveRegion({}, 'oss-cn-beijing.aliyuncs.com')).toBe('oss-cn-beijing')
+    expect(resolveRegion({}, 'minio.internal')).toBe('us-east-1')
+  })
+
+  it('URL 形态：virtual-hosted 桶进子域名、pathStyle 桶进路径首段；list query 排序编码', async () => {
+    const seen = []
+    const fetchImpl = async (url, init = {}) => {
+      seen.push({ url: String(url), method: init.method || 'GET' })
+      return new Response('<ListBucketResult></ListBucketResult>', { status: 200 })
+    }
+    const vhost = s3Client({ ...CFG }, { fetchImpl })
+    await vhost.list('backups/')
+    expect(seen[0].url).toMatch(/^https:\/\/gb-pmo-test\.oss-cn-hangzhou\.aliyuncs\.com\//)
+    expect(seen[0].url).toContain('list-type=2&max-keys=1000&prefix=') // query 按键名排序
+
+    seen.length = 0
+    const pathStyle = s3Client({ ...CFG, pathStyle: true, endpoint: 'http://minio.internal:9000' }, { fetchImpl })
+    await pathStyle.put('a/b c.txt', Buffer.from('x'))
+    const put = seen[0]
+    expect(put.url).toMatch(/^http:\/\/minio\.internal:9000\/gb-pmo-test\/a\/b%20c\.txt$/) // 段内编码、'/' 不二次编码
+  })
+
+  it('错误折叠：网络异常 → ok:false+status 0；XML 错误体解码 Code/Message（含实体）；无响应体仅回 HTTP 状态', async () => {
+    const down = s3Client({ ...CFG }, { fetchImpl: async () => { throw new Error('ECONNREFUSED') } })
+    const r1 = await down.headBucket()
+    expect(r1.ok).toBe(false)
+    expect(r1.status).toBe(0)
+    expect(r1.error).toContain('网络不通')
+
+    const denied = s3Client({ ...CFG }, {
+      fetchImpl: async () => new Response('<Error><Code>AccessDenied</Code><Message>a &amp; b</Message></Error>', { status: 403 }),
+    })
+    const r2 = await denied.headBucket()
+    expect(r2.error).toBe('AccessDenied a & b')
+
+    const noBody = s3Client({ ...CFG }, { fetchImpl: async () => ({ ok: false, status: 404, text: async () => { throw new Error('no body') } }) })
+    const r3 = await noBody.headBucket()
+    expect(r3.error).toBe('HTTP 404')
+
+    const r4 = await denied.list('backups/')
+    expect(r4.ok).toBe(false) // list 失败原样透出（不包装）
+  })
+
+  it('backupConfigError 缺项报名 / 全配全回 null；testBackupConnection 失败逐步映射明确原因', async () => {
+    expect(backupConfigError({})).toBe('endpoint / bucket / accessKeyId / secretAccessKey')
+    expect(backupConfigError(CFG)).toBeNull()
+
+    expect((await testBackupConnection({ endpoint: 'https://x.com' })).reason).toContain('未配置 bucket')
+
+    const heads = { 404: 'bucket 不存在', 403: 'AccessKey', 500: 'endpoint/网络问题' }
+    for (const [status, word] of Object.entries(heads)) {
+      const r = await testBackupConnection(CFG, { fetchImpl: async () => new Response('', { status: Number(status) }) })
+      expect(r.ok).toBe(false)
+      expect(r.reason).toContain(word)
+    }
+    const netDown = await testBackupConnection(CFG, { fetchImpl: async () => { throw new Error('timeout') } })
+    expect(netDown.reason).toContain('endpoint/网络问题')
+
+    const { fetchImpl } = fakeS3({ putStatus: 403 })
+    const putDenied = await testBackupConnection(CFG, { fetchImpl })
+    expect(putDenied.reason).toContain('无写入权限')
+  })
+
+  it('runBackup：上传失败抛 502 且落失败审计；list 失败不影响备份成功（删除计数 0）', async () => {
+    const { db } = setupDb()
+    const denied = s3FailPut()
+    await expect(runBackup(db, { cfg: CFG, fetchImpl: denied })).rejects.toThrow(/备份上传失败/)
+    const errRow = db.prepare(`SELECT detail FROM audit_logs WHERE action = 'backup.run'`).get()
+    expect(JSON.parse(errRow.detail).ok).toBe(false)
+
+    // PUT 成功但 GET(list) 失败：备份仍成功、无滚动删除
+    const fetchImpl = async (url, init = {}) => {
+      if (init.method === 'PUT') return new Response('', { status: 200 })
+      return new Response('<Error><Code>AccessDenied</Code><Message>x</Message></Error>', { status: 403 })
+    }
+    const out = await runBackup(db, { cfg: CFG, fetchImpl })
+    expect(out.ok).toBe(true)
+    expect(out.deleted).toBe(0)
+    db.close()
+  })
+})
+
+/** PUT 一律 403 的最小桩（runBackup 上传失败路径用）。 */
+function s3FailPut() {
+  return async (url, init = {}) => {
+    if (init.method === 'PUT') return new Response('<Error><Code>SignatureDoesNotMatch</Code><Message>x</Message></Error>', { status: 403 })
+    return new Response('', { status: 200 })
+  }
+}

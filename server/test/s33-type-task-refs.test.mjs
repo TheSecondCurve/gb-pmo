@@ -90,7 +90,7 @@ describe('S33 类型模板任务参考资料', () => {
     expect(left.n).toBe(1)
   })
 
-  it('S33-2: 立项未自定义 → 模板参考逐字段拷贝为任务参考资料（创建人=立项人，顺序一致）；日报推送附带', async () => {
+  it('S33-2: 立项未自定义 → 模板参考逐字段拷贝为任务参考资料（创建人=立项人，顺序一致）；日报推送附带（=S1-9 类型立项参考拷贝）', async () => {
     ctx = await setupApp()
     const cookie = await admin()
     await mkType('s33b')

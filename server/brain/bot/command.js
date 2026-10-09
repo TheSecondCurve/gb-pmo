@@ -124,7 +124,7 @@ export async function handleBotEvent(db, evt, opts = {}) {
     if (typingMessageId) {
       const mid = typingMessageId
       typingMessageId = null
-      let edited = false
+      let edited
       try {
         edited = Boolean(await opts.patch?.({ chatId: evt.chatId, messageId: mid, text: replyText }))
       } catch { edited = false }
@@ -249,7 +249,7 @@ export async function handleCardAction(db, cardEvt, opts = {}) {
 
   const member = mapSpeaker(db, 'feishu', cardEvt?.operatorOpenId)
   let result = 'error'
-  let replyText = ''
+  let replyText
   try {
     if (!secret) {
       replyText = '系统未配置签名密钥，无法处理卡片回调'

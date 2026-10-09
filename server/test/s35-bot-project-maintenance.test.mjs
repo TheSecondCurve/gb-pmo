@@ -140,9 +140,9 @@ describe('S35 机器人项目维护面补全', () => {
 
   it('S35-3: update_project 换牵头人——web PATCH 同通道生效并落 owner_change；不在职牵头人起草即拒', async () => {
     const p = await mkProject('客户S35C系统', ctx.members.lead.id)
+    const adminCookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
 
     // web PATCH 直改（引擎补全：此前任何通道都改不了牵头人）
-    const adminCookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const patched = await authed(ctx.app, adminCookie, 'PATCH', `/api/v1/projects/${p.id}`, { leadMemberId: ctx.members.dev.id })
     expect(patched.status).toBe(200)
     expect(ctx.db.prepare('SELECT lead_member_id FROM projects WHERE id = ?').get(p.id).lead_member_id).toBe(ctx.members.dev.id)
@@ -162,7 +162,6 @@ describe('S35 机器人项目维护面补全', () => {
 
   it('S35-4: 里程碑建议——改期/状态待确认事件，确认生效、met 落实际日期；假 id 拒绝；推送不误通知同 id 任务责任人', async () => {
     const p = await mkProject('客户S35D系统', ctx.members.lead.id)
-    const adminCookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     // 里程碑 id 将与既有任务 id 重叠（都从小整数起算）——把任务 #1 责任人改成李四，
     // 旧 pushSuggestion 会误通知李四；修复后只推项目牵头人
     ctx.db.prepare('UPDATE tasks SET responsible_member_id = ? WHERE id = (SELECT MIN(id) FROM tasks WHERE project_id = ?)').run(ctx.members.dev.id, p.id)
@@ -243,5 +242,49 @@ describe('S35 机器人项目维护面补全', () => {
     expect(done.result).toBe('confirmed')
     expect(okRec.sent[0].text).toContain('已生效')
     expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND title = '口述建的任务'").get(p.id).n).toBe(1)
+  })
+})
+
+describe('S35 软校验拒绝分支（工具层：不真实 id / 非法值一律 refused 中文理由，不落库）', () => {
+  it('里程碑建议：假 id / 终态项目 / 项目不符 / 非法字段 / 非法日期 / 非法状态值', async () => {
+    const lead = { id: ctx.members.lead.id, name: '张三', role: 'member' }
+    const p = await mkProject('校验项目', ctx.members.lead.id)
+    const ms = createMilestone(ctx.db, { projectId: p.id, name: '验收', planDate: '2026-11-01' }, 1)
+    const other = await mkProject('另一个项目', ctx.members.lead.id)
+
+    const refuse = async (payload, word) => {
+      const r = await write(lead, 'suggest_event', payload)
+      expect(r.type).toBe('refused')
+      expect(r.text).toContain(word)
+    }
+    await refuse({ targetMilestoneId: 999999, targetField: 'plan_date', targetValue: '2026-11-05' }, '真实里程碑')
+    await refuse({ targetMilestoneId: ms.id, projectId: other.id, targetField: 'plan_date', targetValue: '2026-11-05' }, '里程碑不属于')
+    await refuse({ targetMilestoneId: ms.id, targetField: 'name', targetValue: '改名' }, '仅支持 plan_date / status')
+    await refuse({ targetMilestoneId: ms.id, targetField: 'plan_date', targetValue: '下周' }, 'YYYY-MM-DD')
+    await refuse({ targetMilestoneId: ms.id, targetField: 'status', targetValue: 'done' }, 'planned / met / missed / cancelled')
+
+    // 终态项目：任务清空后结项，里程碑建议拒绝（任务面只读）
+    ctx.db.prepare(`DELETE FROM tasks WHERE project_id = ?`).run(p.id)
+    const { closeProject } = await import('../engine/projects.js')
+    closeProject(ctx.db, p.id, { summary: '提前收尾' }, 1)
+    await refuse({ targetMilestoneId: ms.id, targetField: 'plan_date', targetValue: '2026-11-05' }, '只读')
+  })
+
+  it('提议：create_project 类型码不存在 / add_task 责任人不存在 / 任务 refs 链接非 http(s) 提前拦截', async () => {
+    const lead = { id: ctx.members.lead.id, name: '张三', role: 'member' }
+    const p = await mkProject('提议校验项目', ctx.members.lead.id)
+
+    const t1 = await write(lead, 'propose', { kind: 'create_project', name: 'X', leadMemberId: ctx.members.lead.id, typeCode: 'nope' })
+    expect(t1.type).toBe('refused')
+    expect(t1.text).toContain('不存在或已停用')
+
+    const t2 = await write(lead, 'propose', { kind: 'add_task', projectId: p.id, title: '带人任务', responsibleMemberId: 999999 })
+    expect(t2.type).toBe('refused')
+    expect(t2.text).toContain('不存在或已离职')
+
+    // S33：载荷任务 refs 链接非 http(s) —— 提议提前校验（引擎确认时兜底再校验一次）
+    const t3 = await write(lead, 'propose', { kind: 'create_project', name: 'Y', leadMemberId: ctx.members.lead.id, typeCode: 'lianmai_365', tasks: [{ title: 'T', refs: [{ title: 'R', url: 'ftp://x' }] }] })
+    expect(t3.type).toBe('refused')
+    expect(t3.text).toMatch(/http/)
   })
 })

@@ -23,13 +23,13 @@ export function renderLoginSh(baseUrl, version) {
 set -e
 BASE_URL="\${GB_PMO_BASE_URL:-${baseUrl}}"
 CRED_DIR="\${HOME}/.gb-pmo"
-CRED_FILE="\$CRED_DIR/credentials.json"
-if [ "\${X_SKIP_LOGIN:-0}" = "1" ] && [ -f "\$CRED_FILE" ]; then
+CRED_FILE="$CRED_DIR/credentials.json"
+if [ "\${X_SKIP_LOGIN:-0}" = "1" ] && [ -f "$CRED_FILE" ]; then
   echo "已存在凭证，跳过授权（X_FORCE_LOGIN=1 可强制重签）"
   exit 0
 fi
-if [ "\${X_FORCE_LOGIN:-0}" = "1" ]; then rm -f "\$CRED_FILE"; fi
-if [ -f "\$CRED_FILE" ]; then echo "已存在凭证（\$(stat -f %Sp "\$CRED_FILE" 2>/dev/null || stat -c %a "\$CRED_FILE")），跳过授权；重签请 X_FORCE_LOGIN=1"; exit 0; fi
+if [ "\${X_FORCE_LOGIN:-0}" = "1" ]; then rm -f "$CRED_FILE"; fi
+if [ -f "$CRED_FILE" ]; then echo "已存在凭证（$(stat -f %Sp "$CRED_FILE" 2>/dev/null || stat -c %a "$CRED_FILE")），跳过授权；重签请 X_FORCE_LOGIN=1"; exit 0; fi
 printf "gb-pmo 用户名: "
 read -r USERNAME < /dev/tty || true
 # 密码静默读取（v0.34.1）：stty -echo + read——回车即返回；不可用 head -c N（读满 N 字节或 EOF 才返回，
@@ -40,19 +40,19 @@ PASSWORD=''
 read -r PASSWORD < /dev/tty || true
 stty echo < /dev/tty
 echo
-RESP=\$(curl -fsS --noproxy '127.0.0.1,localhost' -X POST "\$BASE_URL/api/v1/auth/agent-login" \\
+RESP=$(curl -fsS --noproxy '127.0.0.1,localhost' -X POST "$BASE_URL/api/v1/auth/agent-login" \\
   -H 'Content-Type: application/json' \\
-  -d "{\\"username\\":\\"\$USERNAME\\",\\"password\\":\\"\$PASSWORD\\"}") || { echo "授权失败：检查用户名/密码与服务地址"; exit 1; }
-TOKEN=\$(printf '%s' "\$RESP" | sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p')
-SCOPE=\$(printf '%s' "\$RESP" | sed -n 's/.*"scope":"\\([^"]*\\)".*/\\1/p')
-EXPIRES=\$(printf '%s' "\$RESP" | sed -n 's/.*"expiresAt":\\([0-9]*\\).*/\\1/p')
-[ -n "\$TOKEN" ] || { echo "解析令牌失败"; exit 1; }
-mkdir -p "\$CRED_DIR" && chmod 700 "\$CRED_DIR"
-TMP="\$CRED_FILE.tmp"
-printf '{\\"baseUrl\\":\\"%s\\",\\"token\\":\\"%s\\",\\"scope\\":\\"%s\\",\\"expiresAt\\":%s}\\n' "\$BASE_URL" "\$TOKEN" "\$SCOPE" "\$EXPIRES" > "\$TMP"
-mv "\$TMP" "\$CRED_FILE"
-chmod 600 "\$CRED_FILE"
-echo "授权成功，凭证写入 \$CRED_FILE（scope=\$SCOPE，90 天有效）"
+  -d "{\\"username\\":\\"$USERNAME\\",\\"password\\":\\"$PASSWORD\\"}") || { echo "授权失败：检查用户名/密码与服务地址"; exit 1; }
+TOKEN=$(printf '%s' "$RESP" | sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p')
+SCOPE=$(printf '%s' "$RESP" | sed -n 's/.*"scope":"\\([^"]*\\)".*/\\1/p')
+EXPIRES=$(printf '%s' "$RESP" | sed -n 's/.*"expiresAt":\\([0-9]*\\).*/\\1/p')
+[ -n "$TOKEN" ] || { echo "解析令牌失败"; exit 1; }
+mkdir -p "$CRED_DIR" && chmod 700 "$CRED_DIR"
+TMP="$CRED_FILE.tmp"
+printf '{\\"baseUrl\\":\\"%s\\",\\"token\\":\\"%s\\",\\"scope\\":\\"%s\\",\\"expiresAt\\":%s}\\n' "$BASE_URL" "$TOKEN" "$SCOPE" "$EXPIRES" > "$TMP"
+mv "$TMP" "$CRED_FILE"
+chmod 600 "$CRED_FILE"
+echo "授权成功，凭证写入 $CRED_FILE（scope=$SCOPE，90 天有效）"
 `
 }
 
@@ -83,20 +83,20 @@ export function renderInstallSh(baseUrl, version) {
 set -e
 BASE_URL="\${GB_PMO_BASE_URL:-${baseUrl}}"
 SKILL_DIR_NAME="gb-pmo"
-fetch() { curl -fsS --noproxy '127.0.0.1,localhost' "\$1"; }
+fetch() { curl -fsS --noproxy '127.0.0.1,localhost' "$1"; }
 TARGETS=()
-[ -d ".agents/skills" ] && TARGETS+=(".agents/skills/\$SKILL_DIR_NAME")
-TARGETS+=("\$HOME/.agents/skills/\$SKILL_DIR_NAME")
-[ -d "\$HOME/.codex/skills" ] && TARGETS+=("\$HOME/.codex/skills/\$SKILL_DIR_NAME")
-[ -d "\$HOME/.claude/skills" ] && TARGETS+=("\$HOME/.claude/skills/\$SKILL_DIR_NAME")
+[ -d ".agents/skills" ] && TARGETS+=(".agents/skills/$SKILL_DIR_NAME")
+TARGETS+=("$HOME/.agents/skills/$SKILL_DIR_NAME")
+[ -d "$HOME/.codex/skills" ] && TARGETS+=("$HOME/.codex/skills/$SKILL_DIR_NAME")
+[ -d "$HOME/.claude/skills" ] && TARGETS+=("$HOME/.claude/skills/$SKILL_DIR_NAME")
 for T in "\${TARGETS[@]}"; do
-  mkdir -p "\$T"
-  fetch "\$BASE_URL/agent/skill/\$SKILL_DIR_NAME/SKILL.md" > "\$T/SKILL.md"
-  fetch "\$BASE_URL/agent/skill/\$SKILL_DIR_NAME/client.sh" > "\$T/client.sh"
-  chmod +x "\$T/client.sh"
-  echo "installed -> \$T"
+  mkdir -p "$T"
+  fetch "$BASE_URL/agent/skill/$SKILL_DIR_NAME/SKILL.md" > "$T/SKILL.md"
+  fetch "$BASE_URL/agent/skill/$SKILL_DIR_NAME/client.sh" > "$T/client.sh"
+  chmod +x "$T/client.sh"
+  echo "installed -> $T"
 done
-echo "skill v${version} 安装完成。首次使用先运行授权：curl -fsSL \$BASE_URL/agent/login.sh | sh"
+echo "skill v${version} 安装完成。首次使用先运行授权：curl -fsSL $BASE_URL/agent/login.sh | sh"
 `
 }
 
@@ -104,25 +104,25 @@ export function renderClientSh(version) {
   return `#!/usr/bin/env bash
 # gb-pmo Agent 客户端 v${version} —— 查询/写入走 SQL 端点，触发走 action 端点，指标走 metrics 端点
 set -e
-CRED_FILE="\${GB_PMO_CRED:-\$HOME/.gb-pmo/credentials.json}"
-[ -f "\$CRED_FILE" ] || { echo "未授权：先 curl -fsSL <baseUrl>/agent/login.sh | sh"; exit 1; }
-BASE_URL=\$(sed -n 's/.*"baseUrl":"\\([^"]*\\)".*/\\1/p' "\$CRED_FILE")
-TOKEN=\$(sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p' "\$CRED_FILE")
+CRED_FILE="\${GB_PMO_CRED:-$HOME/.gb-pmo/credentials.json}"
+[ -f "$CRED_FILE" ] || { echo "未授权：先 curl -fsSL <baseUrl>/agent/login.sh | sh"; exit 1; }
+BASE_URL=$(sed -n 's/.*"baseUrl":"\\([^"]*\\)".*/\\1/p' "$CRED_FILE")
+TOKEN=$(sed -n 's/.*"token":"\\([^"]*\\)".*/\\1/p' "$CRED_FILE")
 api() { # method path [json_body]
-  local METHOD="\$1" PATH_="\$2" BODY="\$3"
-  if [ -n "\$BODY" ]; then
-    curl -fsS --noproxy '127.0.0.1,localhost' -X "\$METHOD" "\$BASE_URL\$PATH_" \\
-      -H "Authorization: Bearer \$TOKEN" -H 'Content-Type: application/json' -d "\$BODY"
+  local METHOD="$1" PATH_="$2" BODY="$3"
+  if [ -n "$BODY" ]; then
+    curl -fsS --noproxy '127.0.0.1,localhost' -X "$METHOD" "$BASE_URL$PATH_" \\
+      -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -d "$BODY"
   else
-    curl -fsS --noproxy '127.0.0.1,localhost' -X "\$METHOD" "\$BASE_URL\$PATH_" \\
-      -H "Authorization: Bearer \$TOKEN" -H 'Content-Type: application/json'
+    curl -fsS --noproxy '127.0.0.1,localhost' -X "$METHOD" "$BASE_URL$PATH_" \\
+      -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json'
   fi
 }
 case "\${1:-help}" in
-  sql)       shift; api POST /api/v1/agent/sql "{\\"sql\\":\\"\$(printf '%s' "\$*" | sed 's/"/\\\\\\"/g')\\"}" ;;
+  sql)       shift; api POST /api/v1/agent/sql "{\\"sql\\":\\"$(printf '%s' "$*" | sed 's/"/\\\\\\"/g')\\"}" ;;
   metrics)   api GET /api/v1/agent/metrics ;;
-  metric)    shift; api POST /api/v1/agent/metrics/query "{\\"metric\\":\\"\$1\\",\\"params\\":\$\{2:-{}\}}" ;;
-  action)    shift; api POST /api/v1/agent/actions "{\\"action\\":\\"\$1\\",\\"params\\":\$\{2:-{}\}}" ;;
+  metric)    shift; api POST /api/v1/agent/metrics/query "{\\"metric\\":\\"$1\\",\\"params\\":$\{2:-{}}}" ;;
+  action)    shift; api POST /api/v1/agent/actions "{\\"action\\":\\"$1\\",\\"params\\":$\{2:-{}}}" ;;
   help|*)    echo "usage: client.sh sql '<SQL>' | metrics | metric <id> '<params-json>' | action <name> '<params-json>'" ;;
 esac
 `

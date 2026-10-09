@@ -8,7 +8,6 @@ import { fileURLToPath } from 'node:url'
 import { createDb } from './db/index.mjs'
 import { buildApp } from './routes/app.js'
 import { bootstrapAdmin } from './engine/auth.js'
-import { getLlm } from './brain/llm.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, '..')

@@ -94,7 +94,7 @@ describe('S22 飞书项目日历', () => {
     await mkProject('无日期项目B') // 无任何起止 → 跳过计数
 
     let seq = 0
-    const stub = stubFeishu(({ body }) => {
+    const stub = stubFeishu(() => {
       seq += 1
       return { code: 0, data: { event: { event_id: `om_${seq}` } } }
     })
