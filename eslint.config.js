@@ -24,9 +24,8 @@ export default [
     rules: {
       ...reactHooks.configs.recommended.rules,
       // 本项目前端为手写 Context store + 「useEffect 里 void refresh()」数据加载惯用法（无外部数据库），
-      // react-hooks v6 的 set-state-in-effect 与该惯用法冲突——关闭；exhaustive-deps 降级为 warn（真实遗漏另行修）。
+      // react-hooks v6 的 set-state-in-effect 与该惯用法冲突——关闭；exhaustive-deps 保持 error（存量已裁决：K17）。
       'react-hooks/set-state-in-effect': 'off',
-      'react-hooks/exhaustive-deps': 'warn',
     },
   },
   {

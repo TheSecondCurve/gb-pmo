@@ -29,6 +29,7 @@ export default function Chat() {
     else if (!activeId && s.sessions.length) setActiveId(s.sessions[0].id)
   }
 
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- 刻意仅首载执行：reloadSessions 读取的 activeId 初始闭包是「首会话自动选中」的一次性语义，加入依赖会在选中后多取一次会话列表
   useEffect(() => { void reloadSessions() }, [])
   useEffect(() => {
     if (activeId == null) { setMessages([]); return }
@@ -38,7 +39,7 @@ export default function Chat() {
         setMessages(m.messages)
       } catch (e) { toast((e as Error).message, 'bad') }
     })()
-  }, [activeId])
+  }, [activeId, toast])
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
   const create = async () => {
