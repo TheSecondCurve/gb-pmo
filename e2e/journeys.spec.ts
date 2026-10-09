@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test'
 
 // 业务旅程 e2e（engineering-standards §3：Playwright 冒烟，独立 workflow 不挡合并）。
 // 覆盖 PRD 核心旅程：登录看板（S5）→ 立项（S1）→ 组合页四视图（S30）→ 建议确认闭环（S3/S20-2 同口子）
-// → 结项（S8/S29）→ 配置台权限（S17-6）→ AI 助手降级与斜杠（S24-5/S24-6）。
+// → 结项（S8/S29）→ 配置台权限（S17-6）→ AI 助手降级与斜杠（S24-5/S24-6）→ 任务删除（S36）。
 // 数据真理以 API 复核，UI 断言只锚用户可见事实。
 
 const ADMIN = { username: 'admin', password: 'e2e-admin-pass-123' }
@@ -139,4 +139,26 @@ test('J7 AI 助手：LLM 未配置回明确指引；/help 与 /new 确定性可�
   await input.fill('/new')
   await page.getByRole('button', { name: '发送' }).click()
   await expect(page.getByText(/不受影响|已清空|新话题/).first()).toBeVisible()
+})
+
+test('J8 任务删除旅程：详情页任务面行内删除 → 软删留痕，任务面计数减一（S36）', async ({ page }) => {
+  await login(page)
+  const name = `J8 删除 ${Date.now()}`
+  await createProjectViaUi(page, name)
+  await page.getByRole('link', { name }).first().click()
+  const projectId = Number(page.url().match(/projects\/(\d+)/)![1])
+  await expect(page.getByText('任务面（14）')).toBeVisible()
+
+  // 首条任务标题（API 取真理，复核用）；UI 走行内删除入口，原生 confirm 自动接受
+  const before = await (await page.request.get(`/api/v1/projects/${projectId}`)).json()
+  const firstTitle = before.tasks[0].title as string
+  page.on('dialog', (d) => void d.accept())
+  await page.getByRole('button', { name: '删除', exact: true }).first().click()
+
+  await expect(page.getByText('任务已删除（软删留痕）')).toBeVisible()
+  await expect(page.getByText('任务面（13）')).toBeVisible()
+  // API 复核：已删任务从任务面消失（软删留痕的行保留/审计由 server 场景测试锚定）
+  const after = await (await page.request.get(`/api/v1/projects/${projectId}`)).json()
+  expect(after.tasks.length).toBe(13)
+  expect(after.tasks.some((t: { title: string }) => t.title === firstTitle)).toBe(false)
 })

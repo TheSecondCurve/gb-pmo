@@ -41,7 +41,7 @@ export async function dailyReport(db, { force = false } = {}) {
     const myTasks = camelizeRows(
       db.prepare(
         `SELECT t.id, t.title, t.plan_end_date, p.name AS project_name FROM tasks t JOIN projects p ON p.id = t.project_id
-         WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing')`
+         WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL`
       ).all(m.id)
     )
     const tomorrow = today(now.getTime() + 86400000)
@@ -49,7 +49,7 @@ export async function dailyReport(db, { force = false } = {}) {
     const pending = camelizeRows(
       db.prepare(
         `SELECT e.summary FROM project_events e LEFT JOIN tasks t ON t.id = e.target_task_id LEFT JOIN projects p ON p.id = e.project_id
-         WHERE e.status = 'pending' AND (t.responsible_member_id = ? OR p.lead_member_id = ?)`
+         WHERE e.status = 'pending' AND (t.id IS NULL OR t.deleted_at IS NULL) AND (t.responsible_member_id = ? OR p.lead_member_id = ?)`
       ).all(m.id, m.id)
     )
     sections.push(`【我的任务】未完 ${myTasks.length} 项${dueTomorrow.length ? `，明日到期 ${dueTomorrow.length} 项（${dueTomorrow.map((t) => t.title).join('、')}）` : ''}${pending.length ? `\n【待确认建议】${pending.length} 条等你处理` : ''}`)

@@ -123,7 +123,7 @@ export function getProjectDetail(db, id) {
       `SELECT t.*, m.name AS responsible_name,
          (SELECT COUNT(*) FROM task_refs r WHERE r.task_id = t.id AND r.deleted_at IS NULL) AS ref_count
        FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
-       WHERE t.project_id = ? ORDER BY t.id`
+       WHERE t.project_id = ? AND t.deleted_at IS NULL ORDER BY t.id`
     )
     .all(id)
   const taskRows = tasks.map((t) => ({
@@ -148,7 +148,7 @@ export function listProjects(db, { statuses = OPEN_STATUSES } = {}) {
     .prepare(
       `SELECT p.*, m.name AS lead_name, pt.name AS type_name,
          (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status IN ('todo','doing','blocked')
-            AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY()) AS overdue_tasks,
+            AND t.deleted_at IS NULL AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY()) AS overdue_tasks,
          (SELECT MAX(e.business_time) FROM project_events e WHERE e.project_id = p.id AND e.status = 'effective') AS last_event_at
        FROM projects p LEFT JOIN members m ON m.id = p.lead_member_id
        LEFT JOIN project_types pt ON pt.id = p.project_type_id
@@ -221,7 +221,7 @@ export function closeProject(db, id, { summary } = {}, by) {
     throw Object.assign(new Error(`项目已${cur.status === 'closed' ? '结项' : '取消'}（S29 终态不可逆）`), { statusCode: 409 })
   }
   const openTasks = db
-    .prepare(`SELECT id, title FROM tasks WHERE project_id = ? AND status != 'done'`)
+    .prepare(`SELECT id, title FROM tasks WHERE project_id = ? AND status != 'done' AND deleted_at IS NULL`)
     .all(id)
   if (openTasks.length) {
     throw Object.assign(new Error('存在未完成任务，全部标记完成后方可结项（S8-1，v0.6 无「取消」处置）'), {

@@ -22,7 +22,7 @@ export async function projectDigest(db, projectId, { llm: llmOverride, windowDay
     db.prepare(
       `SELECT t.id, t.title, t.status, t.plan_start_date, t.plan_end_date, m.name AS responsible_name
        FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
-       WHERE t.project_id = ? AND t.status IN ('todo','doing') ORDER BY t.plan_end_date`
+       WHERE t.project_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL ORDER BY t.plan_end_date`
     ).all(projectId)
   )
   const overdue = tasks.filter((t) => t.planEndDate && t.planEndDate < today())
@@ -35,7 +35,7 @@ export async function projectDigest(db, projectId, { llm: llmOverride, windowDay
   )
   const lastEventAt = events[0]?.businessTime || null
   const taskChangedRecently = db
-    .prepare('SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND updated_at >= ?').get(projectId, Date.now() - windowDays * DAY).n
+    .prepare('SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND deleted_at IS NULL AND updated_at >= ?').get(projectId, Date.now() - windowDays * DAY).n
   const silent = !lastEventAt && taskChangedRecently === 0 || (lastEventAt && lastEventAt < Date.now() - th.silentDays * DAY && taskChangedRecently === 0)
 
   const taskPlane = tasks.map((t) => `#${t.id} ${t.title} [${t.status}]${t.planEndDate ? ` 截止${t.planEndDate}${t.planEndDate < today() ? '（已逾期）' : ''}` : ''}${t.responsibleName ? ` 负责:${t.responsibleName}` : '（未指派）'}`).join('\n') || '（无未完任务）'
@@ -97,7 +97,7 @@ export async function personDigest(db, memberId, { llm: llmOverride } = {}) {
     db.prepare(
       `SELECT t.id, t.title, t.status, t.plan_start_date, t.plan_end_date, p.name AS project_name, p.id AS project_id
        FROM tasks t JOIN projects p ON p.id = t.project_id
-       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND p.status = 'active' ORDER BY t.plan_end_date`
+       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL AND p.status = 'active' ORDER BY t.plan_end_date`
     ).all(memberId)
   )
   const overdue = tasks.filter((t) => t.planEndDate && t.planEndDate < today())

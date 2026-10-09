@@ -32,6 +32,7 @@ client.sh action generate_person_digest '{}'
 | 触发 | `POST /api/v1/agent/actions` | 白名单（触发类）：trigger_extraction / generate_project_digest / generate_person_digest / push_report |
 | 配置（S17-10） | `POST /api/v1/agent/actions` | 白名单（配置类，**仅系统管理员 PAT**，成员 403）：upsert_channel / delete_channel / put_setting / reset_channel_cursor |
 | 任务清单起草（S17-9，v0.18） | `POST /api/v1/agent/actions` | `draft_task_list`（write scope 即可，成员可用）：LLM 产任务清单草稿，**不落库**，供立项/类型编辑参考 |
+| 任务删除（S36，v0.40） | `POST /api/v1/agent/actions` | `delete_task`（write scope 即可，成员可用）：任务软删留痕；**删任务一律走此 action，不要手写 UPDATE/DELETE tasks** |
 
 ### 配置类 action 参数（S17-10）
 
@@ -40,16 +41,18 @@ client.sh action generate_person_digest '{}'
 - `put_setting` `{key, value}`（key ∈ thresholds / push / scheduler / llm / chat / im.feishu / im.wecom / backup；scheduler 含 cron 与每任务 enabled 开关（信息更新对齐/预警/日报/项目日历同步/数据库备份），非法值 400 并指明字段；llm 按类别分开存储：value 传 `{provider, apiKey?, baseUrl?, model?}`，只作用于该类别子配置、其他类别不覆盖，provider=当前生效类别，S17-11 v0.15；backup=S3 兼容备份存储 `{endpoint, region?, bucket, accessKeyId, secretAccessKey, prefix?, pathStyle?, keepCount?}`（阿里云 OSS / Cloudflare R2 / MinIO，定时快照异地备份，S34））
 - `draft_task_list` `{name, description?}` → `{tasks: [...]}`（LLM 按名称+说明产任务清单草稿，**不落库**；v0.18 起成员 write scope 可用。原 create_template / draft_template_tasks 已随任务模板对象裁撤移除——项目类型内嵌任务清单（project_type_tasks），类型创建走提议确认、配置台维护）
 - `reset_channel_cursor` `{channelId, days?}`（默认 7，1~90；重置后下次抽取回看 N 天，重放会追加新事件流）
+- `delete_task` `{id}`（S36，v0.40：任务软删——行保留、`deleted_at` 落值、落 `task.delete` 审计；任务参考资料一并软删，更新记录与讨论面历史事件保留；已删任务从列表/盘点/未指派/逾期/指标等一切读侧退出，结项校验不计；任务不存在/已删 404，项目结项/取消 409）
 
 ## 工作守则（必须遵守）
 
 1. **指标以 metrics 端点为准**（口径同源 dashboard）；明细与自由查询才用 SQL 端点。
-2. **写 SQL 守则**：手动补 `updated_at`（epoch 毫秒）与审计需要的字段；软删不硬删（人员改 status='offboarded'，不要 DELETE）；403 不换字段重试；只改自己为责任人/牵头人的对象，跨人变更走建议。
+2. **写 SQL 守则**：手动补 `updated_at`（epoch 毫秒）与审计需要的字段；软删不硬删（人员改 status='offboarded'，任务走 delete_task action 落 deleted_at，不要 DELETE）；403 不换字段重试；只改自己为责任人/牵头人的对象，跨人变更走建议。
 3. **时间与时区（S19）**：日历日一律北京时区。SQL 中「今天」用「BJ_TODAY()」（可传 epoch 毫秒参数取该时刻的北京日）；不要写 date('now')/datetime('now')——那是 UTC 语义，凌晨会差一天，端点会 400 拒绝；时间戳一律 epoch 毫秒。
 4. **LLM 信任边界**：口述更新一律 `INSERT INTO project_events (nature='suggestion', status='pending', ...)` 生成建议，等人在页面/接口确认；绝不直接 `UPDATE tasks` 改状态/日期/责任人。
 5. 常用查询模式：
-   - 「我本周的任务」：`SELECT t.id, t.title, t.plan_end_date, p.name FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.responsible_member_id=<我> AND t.status IN ('todo','doing')`
-   - 「B 项目卡在哪」：看 project_events 最新 blocker/risk + 逾期未完任务（plan_end_date < BJ_TODAY() 且 status != 'done'）。
+   - 「我本周的任务」：`SELECT t.id, t.title, t.plan_end_date, p.name FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.responsible_member_id=<我> AND t.status IN ('todo','doing') AND t.deleted_at IS NULL`
+   - 「B 项目卡在哪」：看 project_events 最新 blocker/risk + 逾期未完任务（plan_end_date < BJ_TODAY() 且 status != 'done' 且 deleted_at IS NULL）。
+   - **tasks 已删行（deleted_at 非空，S36）一切查询都要排除**（`AND deleted_at IS NULL`）——它们已退出任务面/指标/结项校验。
    - 任务状态固定三档：todo/doing/done（v0.6，无 blocked/cancelled）；任务相互独立，无前置依赖。
    - 「任务参考资料」（S23，SOP/知识库链接）：`SELECT title, url FROM task_refs WHERE task_id=<id> AND deleted_at IS NULL`；写入补 created_by/created_at，删除=软删（UPDATE task_refs SET deleted_at=<epoch毫秒>）；日报/预警/个人梳理推送会自动附带给责任人。
 6. 建议事件的 target 字段组合：task → status/plan_start_date/plan_end_date/responsible_member_id；milestone → target_object='milestone' 且 plan_date。
@@ -131,6 +134,7 @@ client.sh action generate_person_digest '{}'
 | actual_end_date | TEXT |  |
 | source | TEXT | template|manual|extraction|suggestion |
 | updated_at | INTEGER |  |
+| deleted_at | INTEGER |  |
 
 ### milestones
 

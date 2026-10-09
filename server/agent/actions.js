@@ -39,6 +39,10 @@ export const ACTIONS = {
     run: async (params, ctx) =>
       (await import('../brain/templates.js')).draftTaskList(ctx.db, params, { llm: ctx.llm ?? undefined }),
   },
+  // 任务删除（S36，v0.40）：软删留痕，write scope 即可（与 web 同引擎同守卫，D1 全员）；机器人不开放
+  delete_task: {
+    run: async (params, ctx) => tasks.deleteTask(ctx.db, Number(params.id), ctx.member.id) || { ok: true },
+  },
   reset_channel_cursor: {
     adminOnly: true,
     run: async (params, ctx) => tasks.resetChannelCursor(ctx.db, Number(params.channelId), { days: params.days }, ctx.member.id),

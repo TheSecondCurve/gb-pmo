@@ -41,22 +41,22 @@ export function morningReport(db, { projectId, now = Date.now() } = {}) {
 function blockFor(db, p, { todayStr, sinceMs }) {
   const dueToday = db.prepare(
     `SELECT t.title, m.name AS responsible FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
-     WHERE t.project_id = ? AND t.status != 'done' AND t.plan_end_date = ? ORDER BY t.plan_end_date`
+     WHERE t.project_id = ? AND t.status != 'done' AND t.deleted_at IS NULL AND t.plan_end_date = ? ORDER BY t.plan_end_date`
   ).all(p.id, todayStr)
   const overdueTasks = db.prepare(
     `SELECT t.title, m.name AS responsible, t.plan_end_date AS plan_end_date FROM tasks t
      LEFT JOIN members m ON m.id = t.responsible_member_id
-     WHERE t.project_id = ? AND t.status != 'done' AND t.plan_end_date IS NOT NULL AND t.plan_end_date < ?
+     WHERE t.project_id = ? AND t.status != 'done' AND t.deleted_at IS NULL AND t.plan_end_date IS NOT NULL AND t.plan_end_date < ?
      ORDER BY t.plan_end_date LIMIT ?`
   ).all(p.id, todayStr, MORNING_LIMITS.tasks)
     .map((r) => ({ title: r.title, responsible: r.responsible, planEndDate: r.plan_end_date, daysOverdue: dayDiff(r.plan_end_date, todayStr) }))
   const overdueTotal = db.prepare(
-    `SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND status != 'done' AND plan_end_date IS NOT NULL AND plan_end_date < ?`
+    `SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND status != 'done' AND deleted_at IS NULL AND plan_end_date IS NOT NULL AND plan_end_date < ?`
   ).get(p.id, todayStr).n
   const counts = db.prepare(
     `SELECT SUM(CASE WHEN status = 'doing' THEN 1 ELSE 0 END) AS doing,
             SUM(CASE WHEN status != 'done' THEN 1 ELSE 0 END) AS open
-     FROM tasks WHERE project_id = ?`
+     FROM tasks WHERE project_id = ? AND deleted_at IS NULL`
   ).get(p.id)
   const events = db.prepare(
     `SELECT e.event_type, e.business_time, e.summary, COALESCE(e.speaker_label, '—') AS speaker FROM project_events e

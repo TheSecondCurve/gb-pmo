@@ -121,6 +121,9 @@ export function expireStaleSuggestions(db, timeoutHours) {
 }
 
 function applyTaskPatch(db, e) {
+  // S36：目标任务已软删的建议不可生效（事务回滚，事件保持 pending；不复活任务面）
+  const alive = db.prepare('SELECT 1 AS ok FROM tasks WHERE id = ? AND deleted_at IS NULL').get(e.target_task_id)
+  if (!alive) throw Object.assign(new Error('任务已删除，建议不可生效'), { statusCode: 409 })
   const field = e.target_field
   const value = e.target_value
   if (field === 'status') {

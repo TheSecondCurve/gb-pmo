@@ -106,6 +106,15 @@ export default function ProjectDetail({ id }: { id: number }) {
                     <td className="whitespace-nowrap">
                       <Btn small kind="ghost" onClick={() => setRefsTask({ id: t.id, title: t.title })}>参考</Btn>
                       <Btn small kind="ghost" onClick={() => setRecordsTaskId(t.id)}>记录</Btn>
+                      {!readonly && (
+                        <Btn small kind="ghost" onClick={async () => {
+                          if (!confirm(`删除任务「${t.title}」？软删留痕：任务从列表与指标中移除，参考链接一并移除；更新记录与历史事件保留。`)) return
+                          try {
+                            await api.deleteTask(t.id)
+                            toast('任务已删除（软删留痕）'); await refresh()
+                          } catch (e) { toast((e as Error).message, 'bad') }
+                        }}>删除</Btn>
+                      )}
                     </td>
                   </tr>
                 ))}
