@@ -1,8 +1,9 @@
 import { camelizeRow, camelizeRows } from '../db/index.mjs'
 import { today, dayDiff, addDays } from '../db/time.js'
-import { assertValue } from './enums.js'
+import { assertValue, label } from './enums.js'
 import { addEvent } from './events.js'
 import { audit } from './auth.js'
+import { memberName } from './members.js'
 import { resolveTypeForCreate, typeTaskItems, normalizeTypeTasks } from './projectTypes.js'
 
 const OPEN_STATUSES = ['active'] // S29（v0.28）三态：进行中→已结项/已取消
@@ -57,7 +58,7 @@ export function createProject(db, input, by) {
   if (!name) throw Object.assign(new Error('项目名必填'), { statusCode: 400 })
   if (!leadMemberId) throw Object.assign(new Error('牵头人必填（S1-1）'), { statusCode: 400 })
   assertValue('priority', priority)
-  const lead = db.prepare(`SELECT id FROM members WHERE id = ? AND status = 'active'`).get(leadMemberId)
+  const lead = db.prepare(`SELECT id, name FROM members WHERE id = ? AND status = 'active'`).get(leadMemberId)
   if (!lead) throw Object.assign(new Error('牵头人不存在或已离职'), { statusCode: 400 })
   const type = resolveTypeForCreate(db, { typeCode, templateCode })
   const customItems = normalizeTypeTasks(input.tasks)
@@ -92,7 +93,7 @@ export function createProject(db, input, by) {
     }
     addEvent(db, {
       projectId, eventType: 'decision', nature: 'record', sourcePlatform: 'web', generatedBy: 'web',
-      summary: `项目立项：类型「${type.name}」${customItems !== undefined ? `· 自定义任务 ${titles.length} 项` : `· 预填清单 ${titles.length} 项`}，牵头人 #${leadMemberId}${planEndDate ? `，计划 ${planStartDate || ''}~${planEndDate}` : ''}${schedule ? '，任务按交付日期倒排' : ''}${refCount ? `，预填参考资料 ${refCount} 条` : ''}`,
+      summary: `项目立项：类型「${type.name}」${customItems !== undefined ? `· 自定义任务 ${titles.length} 项` : `· 预填清单 ${titles.length} 项`}，牵头人 ${lead.name}${planEndDate ? `，计划 ${planStartDate || ''}~${planEndDate}` : ''}${schedule ? '，任务按交付日期倒排' : ''}${refCount ? `，预填参考资料 ${refCount} 条` : ''}`,
       speakerMemberId: by ?? null,
     })
     audit(db, { memberId: by, action: 'project.create', objectType: 'project', objectId: projectId, detail: { typeCode: type.code, taskSource: source, tasks: titles.length, taskRefs: refCount, autoSchedule: Boolean(autoSchedule) } })
@@ -195,15 +196,16 @@ export function updateProject(db, id, patch, by) {
     const sets = Object.keys(fields).map((k) => `${k} = @${k}`).join(', ')
     db.prepare(`UPDATE projects SET ${sets} WHERE id = @__id`).run({ ...fields, __id: id })
     if (fields.priority) {
+      // S4-10（v0.47）：留痕摘要写中文档位与操作人姓名，不写枚举键/成员编号
       addEvent(db, {
         projectId: id, eventType: 'priority_change', nature: 'record', sourcePlatform: 'web', generatedBy: 'web',
-        summary: `优先级 ${cur.priority} → ${fields.priority}（#${by}）`, speakerMemberId: by,
+        summary: `优先级 ${label('priority', cur.priority)} → ${label('priority', fields.priority)}（${memberName(db, by)}）`, speakerMemberId: by,
       })
     }
     if (fields.lead_member_id) {
       addEvent(db, {
         projectId: id, eventType: 'owner_change', nature: 'record', sourcePlatform: 'web', generatedBy: 'web',
-        summary: `项目牵头人 #${cur.leadMemberId} → #${fields.lead_member_id}（#${by}）`, speakerMemberId: by,
+        summary: `项目牵头人 ${memberName(db, cur.leadMemberId)} → ${memberName(db, fields.lead_member_id)}（${memberName(db, by)}）`, speakerMemberId: by,
       })
     }
     audit(db, { memberId: by, action: 'project.update', objectType: 'project', objectId: id, detail: { fields: Object.keys(patch) } })

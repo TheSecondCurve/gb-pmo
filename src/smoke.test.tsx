@@ -511,3 +511,77 @@ describe('S41/S42/S43 状态色彩与进度排期可视化（v0.44）', () => {
     expect(document.querySelectorAll('[data-testid="mini-progress"]').length).toBe(1) // 空项目不渲染
   })
 })
+
+// PRD S4-8（v0.47）：讨论面事件流分栏——「进展」「风险/阻塞」「财务记录」三固定栏 +
+// 其余类型「其他」栏（类型筛选器，默认全显）；栏内业务时间倒序；待确认建议逐条确认入口不变（J4 锚点）。
+describe('S4-8 讨论面分栏（v0.47）', () => {
+  const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200 })
+  const E = (id: number, over: Record<string, unknown>) => ({
+    id, projectId: 1, businessTime: 1760000000000 + id * 1000, createdAt: 1760000000000 + id * 1000,
+    nature: 'record', summary: '', speakerLabel: null, status: 'effective',
+    targetTaskId: null, targetField: null, targetValue: null,
+    generatedBy: 'web', sourcePlatform: 'web', confidence: null, ...over,
+  })
+  const eventsFixture = [
+    E(101, { eventType: 'progress', summary: '进展：接口联调完成' }),
+    E(102, { eventType: 'risk', summary: '风险：客户验收口径未定' }),
+    E(103, { eventType: 'blocker', summary: '阻塞：等客户 VPN 白名单' }),
+    E(104, { eventType: 'finance', summary: '财务：首期款已到账' }),
+    E(105, { eventType: 'owner_change', summary: '任务「任务一」责任人 未指派 → 李四' }),
+    E(106, { eventType: 'decision', summary: '决策：二期范围砍半' }),
+    E(107, { eventType: 'status_change', nature: 'suggestion', status: 'pending', summary: '口述：任务一已完成', targetTaskId: 11, targetField: 'status', targetValue: 'done' }),
+  ]
+  const feedFetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.startsWith('/api/v1/auth/me')) return json({ member: { id: 1, name: '甲', role: 'admin' } })
+    if (url.startsWith('/api/v1/projects/1/events')) return json({ events: eventsFixture })
+    if (url.startsWith('/api/v1/projects/1')) {
+      return json({
+        id: 1, name: '项目甲', templateCode: 'lianmai_365', projectTypeId: 1, typeName: '365连麦',
+        status: 'active', priority: 'medium', leadMemberId: 1, leadName: '张三', clientName: null,
+        planStartDate: '2026-10-09', planEndDate: '2026-11-09', daysToDelivery: 31,
+        tasksTotal: 1, tasksDone: 0,
+        tasks: [{ id: 11, projectId: 1, title: '任务一', responsibleMemberId: null, responsibleName: null, status: 'todo', planStartDate: '2026-10-09', planEndDate: null, isOverdue: false, refCount: 0 }],
+        milestones: [],
+      })
+    }
+    if (url.startsWith('/api/v1/members')) return json({ members: [{ id: 1, name: '张三', status: 'active' }, { id: 2, name: '李四', status: 'active' }] })
+    if (url.startsWith('/api/v1/channels')) return json({ channels: [] })
+    return json({})
+  })
+  beforeEach(() => {
+    cleanup()
+    feedFetch.mockClear()
+    globalThis.fetch = feedFetch as unknown as typeof fetch
+    location.hash = '#/projects/1'
+  })
+
+  it('S4-8: 事件按类型进固定栏（进展/风险·阻塞/财务记录），其余进其他栏', async () => {
+    render(<StoreProvider><ProjectDetail id={1} /></StoreProvider>)
+    const colProgress = within(await screen.findByTestId('event-col-progress'))
+    const colRisk = within(screen.getByTestId('event-col-risk'))
+    const colFinance = within(screen.getByTestId('event-col-finance'))
+    const colOther = within(screen.getByTestId('event-col-other'))
+    expect(colProgress.getByText(/接口联调完成/)).toBeTruthy()
+    expect(colRisk.getByText(/验收口径未定/)).toBeTruthy()
+    expect(colRisk.getByText(/VPN 白名单/)).toBeTruthy() // 风险与阻塞同栏
+    expect(colFinance.getByText(/首期款已到账/)).toBeTruthy()
+    expect(colOther.getByText(/责任人 未指派 → 李四/)).toBeTruthy()
+    expect(colOther.getByText(/二期范围砍半/)).toBeTruthy()
+    // 固定栏类型不落入其他栏；待确认建议在其他栏保留逐条确认入口（J4 锚点）
+    expect(colOther.queryByText(/接口联调完成/)).toBeNull()
+    expect(colOther.getByRole('button', { name: '确认生效' })).toBeTruthy()
+  })
+
+  it('S4-8: 其他栏类型筛选器多选切换（默认全显，点选隐藏/恢复）', async () => {
+    render(<StoreProvider><ProjectDetail id={1} /></StoreProvider>)
+    const colOther = within(await screen.findByTestId('event-col-other'))
+    const chip = colOther.getByRole('button', { name: '决策' })
+    expect(chip.getAttribute('aria-pressed')).toBe('true') // 默认全显
+    fireEvent.click(chip) // 隐藏「决策」
+    expect(colOther.queryByText(/二期范围砍半/)).toBeNull()
+    expect(colOther.getByText(/责任人 未指派 → 李四/)).toBeTruthy() // 其余类型不受影响
+    fireEvent.click(colOther.getByRole('button', { name: '决策' })) // 恢复
+    expect(colOther.getByText(/二期范围砍半/)).toBeTruthy()
+  })
+})

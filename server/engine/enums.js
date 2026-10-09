@@ -20,6 +20,7 @@ export const ENUMS = {
     risk: '风险',
     decision: '决策',
     blocker: '阻塞',
+    finance: '财务记录', // S4-9（v0.47，K26）：纯文本记录分类，无金额字段，非财务管理功能
     schedule_change: '排期变更',
     status_change: '状态变更',
     suggestion: '建议',

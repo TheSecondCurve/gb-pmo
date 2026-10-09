@@ -2,6 +2,7 @@ import { camelizeRow, camelizeRows } from '../db/index.mjs'
 import { today } from '../db/time.js'
 import { assertValue, label } from './enums.js'
 import { getProject } from './projects.js'
+import { memberName } from './members.js'
 import { HTTP_URL } from './projectTypes.js'
 import { addEvent } from './events.js'
 import { audit } from './auth.js'
@@ -197,10 +198,10 @@ export function updateTask(db, id, patch, by) {
       ? null
       : assertActiveMember(db, patch.responsibleMemberId)
     if (fields.responsible_member_id && cur.responsible_member_id !== fields.responsible_member_id) {
-      // 责任人变更留痕（S4-4 语义，页面/Agent 同一通道）
+      // 责任人变更留痕（S4-4 语义，页面/Agent 同一通道）；S4-10（v0.47）：摘要写姓名不写编号
       addEvent(db, {
         projectId: cur.project_id, eventType: 'owner_change', nature: 'record', sourcePlatform: 'web', generatedBy: 'web',
-        summary: `任务「${cur.title}」责任人 #${cur.responsible_member_id} → #${fields.responsible_member_id}`, speakerMemberId: by,
+        summary: `任务「${cur.title}」责任人 ${memberName(db, cur.responsible_member_id)} → ${memberName(db, fields.responsible_member_id)}`, speakerMemberId: by,
       })
     }
   }
