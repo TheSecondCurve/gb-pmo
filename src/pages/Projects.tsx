@@ -487,7 +487,7 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
       </div>
       {chosen?.description && <div className="-mt-2 mb-3 text-[11px] text-[var(--color-ink-soft)]">{chosen.description}</div>}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        <Field label="牵头人 *（必填，任务默认责任人）">
+        <Field label="牵头人 *（必填，项目第一负责人）">
           <select className={inputCls} value={form.leadMemberId} onChange={(e) => set('leadMemberId', e.target.value)}>
             <option value="">选择成员…</option>
             {members.filter((m) => m.status === 'active').map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
@@ -535,7 +535,7 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
         <Btn onClick={onClose}>取消</Btn>
         <Btn kind="primary" disabled={!form.name || !form.leadMemberId || !form.typeCode} onClick={submit}>立项</Btn>
       </div>
-      <div className="mt-2 text-[11px] text-[var(--color-ink-soft)]">立项后请在详情页绑定核心渠道（飞书/企微专题群），未绑定会计入管理员待办。</div>
+      <div className="mt-2 text-[11px] text-[var(--color-ink-soft)]">立项后请在详情页绑定核心渠道（飞书/企微专题群），未绑定会计入管理员待办。任务默认未指派（S38），可在详情页逐条改派或用「✨ AI 初始分配」按类型初始化提示词批量分配（S39）。</div>
     </Modal>
   )
 }

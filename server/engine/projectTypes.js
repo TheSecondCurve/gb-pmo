@@ -8,7 +8,22 @@ import { audit } from './auth.js'
 // v0.33 / S33：任务项扩展为「标题 + 可选参考链接列表」（SOP/知识库/表单），子表
 // project_type_task_refs 镜像实例侧 task_refs；立项时参考随标题拷贝进 task_refs（S23 全套接管）。
 
-const TYPE_COLS = 'pt.id, pt.code, pt.name, pt.description, pt.status, pt.created_at, pt.updated_at'
+const TYPE_COLS = 'pt.id, pt.code, pt.name, pt.description, pt.init_prompt, pt.status, pt.created_at, pt.updated_at'
+
+/** 初始化提示词上限（S39，v0.42）：自然语言分配/倒排规则，提示词不是文档库。 */
+export const MAX_INIT_PROMPT = 2000
+
+/** 初始化提示词载荷归一：undefined=不动（patch 语义）；null/空串 → NULL；非字符串/超长 400。 */
+export function normalizeInitPrompt(value) {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (typeof value !== 'string') throw Object.assign(new Error('初始化提示词须为字符串'), { statusCode: 400 })
+  const text = value.trim()
+  if (text.length > MAX_INIT_PROMPT) {
+    throw Object.assign(new Error(`初始化提示词不超过 ${MAX_INIT_PROMPT} 字`), { statusCode: 400 })
+  }
+  return text || null
+}
 
 /** 参考 url 校验（与实例侧 task_refs 同规则；单一真相源，tasks.js 由此 import）。 */
 export const HTTP_URL = /^https?:\/\//i
@@ -67,6 +82,7 @@ export function getProjectType(db, id) {
 
 export function createProjectType(db, input, by) {
   const { code, name, description } = input
+  const initPrompt = normalizeInitPrompt(input.initPrompt) ?? null
   const taskItems = normalizeTypeTasks(input.tasks) ?? []
   if (!code || !name) throw Object.assign(new Error('code/name 必填'), { statusCode: 400 })
   if (db.prepare('SELECT 1 FROM project_types WHERE code = ?').get(code)) {
@@ -75,9 +91,9 @@ export function createProjectType(db, input, by) {
   const now = Date.now()
   const tx = db.transaction(() => {
     const info = db.prepare(
-      `INSERT INTO project_types (code, name, description, status, created_at, updated_at)
-       VALUES (?, ?, ?, 'active', ?, ?)`
-    ).run(code, name, description || null, now, now)
+      `INSERT INTO project_types (code, name, description, init_prompt, status, created_at, updated_at)
+       VALUES (?, ?, ?, ?, 'active', ?, ?)`
+    ).run(code, name, description || null, initPrompt, now, now)
     insertTasks(db, Number(info.lastInsertRowid), taskItems)
     audit(db, { memberId: by, action: 'projectType.create', objectType: 'project_type', objectId: info.lastInsertRowid, detail: { code, tasks: taskItems.length, taskRefs: taskItems.reduce((s, t) => s + t.refs.length, 0) } })
   })
@@ -93,6 +109,8 @@ export function updateProjectType(db, id, patch, by) {
   if ('name' in patch && patch.name) fields.name = patch.name
   if ('description' in patch) fields.description = patch.description || null
   if ('status' in patch) fields.status = assertValue('projectTypeStatus', patch.status)
+  const initPrompt = normalizeInitPrompt(patch.initPrompt)
+  if (initPrompt !== undefined) fields.init_prompt = initPrompt
   const replacing = 'tasks' in patch
   const finalItems = replacing ? normalizeTypeTasks(patch.tasks) : undefined
   if (!Object.keys(fields).length && !replacing) return getProjectType(db, id)

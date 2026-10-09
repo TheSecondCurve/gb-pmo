@@ -138,6 +138,19 @@ export function registerApiRoutes(app) {
     return projects.cancelProject(db, Number(req.params.id), { reason: req.body?.reason }, req.member.id)
   })
 
+  // S39（v0.42）：AI 初始分配——草案（不落库、逐行可编辑）→ 人审后应用（单事务批量生效）；
+  // Agent 通道 apply_init_assignments 可直写（K21 信任边界限定例外）
+  app.post('/api/v1/projects/:id/draft-init-assignments', async (req) => {
+    const { draftInitAssignments } = await import('../brain/initAssign.js')
+    const out = await draftInitAssignments(db, Number(req.params.id), { llm: app.llm ?? undefined })
+    auth.audit(db, { memberId: req.member.id, action: 'tasks.initAssignDraft', objectType: 'project', objectId: Number(req.params.id), detail: { assignments: out.assignments.length, warnings: out.warnings.length } })
+    return out
+  })
+
+  app.post('/api/v1/projects/:id/init-assignments', async (req) =>
+    tasks.applyInitAssignments(db, Number(req.params.id), req.body?.assignments, req.member.id)
+  )
+
   // S37（v0.41）：项目硬删除——物理抹除（与「取消」的业务终态留痕互补），仅系统管理员
   app.delete('/api/v1/projects/:id', async (req, reply) => {
     if (!requireAdmin(req, reply)) return

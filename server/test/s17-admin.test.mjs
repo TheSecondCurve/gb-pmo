@@ -39,6 +39,8 @@ describe('S17 配置台', () => {
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
       name: '客户Q系统', templateCode: 'lianmai_365', leadMemberId: ctx.members.lead.id,
     })
+    // v0.42/S38：立项默认未指派——「lead 名下有待转交任务」的前提需显式指派
+    ctx.db.prepare('UPDATE tasks SET responsible_member_id = ? WHERE project_id = ?').run(ctx.members.lead.id, p.body.id)
     const zhangCookie = await loginCookie(ctx.app, 'zhangsan', 'pass-123456')
     const tok = await authed(ctx.app, zhangCookie, 'POST', '/api/v1/auth/tokens', { scope: 'write' })
 
@@ -199,7 +201,7 @@ describe('S17 配置台改版：角色治理与类型/模板管理', () => {
     expect(list.status).toBe(200)
     expect(list.body.types.map((x) => x.code)).toContain('ops')
 
-    // 按类型立项：套用内嵌清单，任务责任人默认=牵头人；template_code=类型编码快照
+    // 按类型立项：套用内嵌清单，任务责任人默认未指派（v0.42/S38 推翻 D3 默认牵头人）；template_code=类型编码快照
     const p1 = await authed(local.app, adminCookie, 'POST', '/api/v1/projects', {
       name: '割接项目', typeCode: 'ops', leadMemberId: local.members.lead.id,
     })
@@ -207,7 +209,7 @@ describe('S17 配置台改版：角色治理与类型/模板管理', () => {
     expect(p1.body.typeName).toBe('运维')
     expect(p1.body.templateCode).toBe('ops')
     expect(p1.body.tasks.map((x) => x.title)).toEqual(['变更评审', '执行割接'])
-    expect(p1.body.tasks.every((x) => x.responsibleMemberId === local.members.lead.id)).toBe(true)
+    expect(p1.body.tasks.every((x) => x.responsibleMemberId === null)).toBe(true)
 
     // 编辑类型（整体替换任务清单）→ 只影响未来立项
     const upd = await authed(local.app, adminCookie, 'PATCH', `/api/v1/admin/project-types/${t.body.type.id}`, {

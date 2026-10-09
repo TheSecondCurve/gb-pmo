@@ -298,7 +298,11 @@ function softValidateProposal(db, kind, p) {
     const refErr = checkTaskRefs(tasks) // S33：类型模板步骤可挂参考链接（提议提前校验，引擎确认时兜底）
     if (refErr) return { error: refErr }
     return {
-      payload: { code: String(p.code), name: String(p.name), ...(p.description ? { description: String(p.description) } : {}), tasks },
+      payload: {
+        code: String(p.code), name: String(p.name), ...(p.description ? { description: String(p.description) } : {}),
+        ...(p.initPrompt ? { initPrompt: String(p.initPrompt) } : {}), // S39：初始化提示词透传（引擎确认时校验）
+        tasks,
+      },
       summary: `新建项目类型「${p.name}」（${p.code}，内嵌任务 ${tasks.length} 项${tasks.reduce((s, t) => s + ((t.refs ?? []).length), 0) ? `，参考资料 ${tasks.reduce((s, t) => s + ((t.refs ?? []).length), 0)} 条` : ''}）`,
     }
   }
@@ -322,7 +326,7 @@ function softValidateProposal(db, kind, p) {
         ...(p.planStartDate ? { planStartDate: String(p.planStartDate) } : {}),
         ...(p.planEndDate ? { planEndDate: String(p.planEndDate) } : {}),
       },
-      summary: `项目「${proj.name}」新增任务「${title.slice(0, 200)}」（责任人 ${owner ? owner.name : '缺省牵头人'}${p.planEndDate ? `，截止 ${p.planEndDate}` : ''}）`,
+      summary: `项目「${proj.name}」新增任务「${title.slice(0, 200)}」（责任人 ${owner ? owner.name : '未指派'}${p.planEndDate ? `，截止 ${p.planEndDate}` : ''}）`,
     }
   }
   if (kind === 'add_milestone') {

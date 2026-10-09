@@ -7,7 +7,8 @@ import { confirmEvent } from '../engine/events.js'
 import { today } from '../db/time.js'
 
 // PRD S35（v0.39）— 机器人项目维护面补全：建任务/建里程碑/项目信息变更走提议确认卡，
-// 里程碑改期/状态走建议事件；LLM 只起草不生效，确认分发回既有引擎（终态守卫/D3/审计/留痕全继承）。
+// 里程碑改期/状态走建议事件；LLM 只起草不生效，确认分发回既有引擎（终态守卫/审计/留痕全继承）。
+// v0.42/S38 修订：add_task 缺省责任人=未指派（D3 已由 K20 推翻）。
 
 const SECRET = 's35-test-bot-hmac-secret-32-bytes!'
 
@@ -52,7 +53,7 @@ beforeAll(async () => {
 afterAll(() => ctx?.db.close())
 
 describe('S35 机器人项目维护面补全', () => {
-  it('S35-1: add_task 提议——软校验拒绝不落库；牵头人确认生效（D3 缺省责任人 + 审计）；无权人 403；提议人可撤回；终态项目确认失败', async () => {
+  it('S35-1: add_task 提议——软校验拒绝不落库；牵头人确认生效（缺省未指派（v0.42/S38）+ 审计）；无权人 403；提议人可撤回；终态项目确认失败', async () => {
     const p = await mkProject('客户S35系统', ctx.members.lead.id)
 
     // 软校验：title 空白 / projectId 不真实 → refused，不落 proposals
@@ -89,14 +90,15 @@ describe('S35 机器人项目维护面补全', () => {
     const stranger = await authed(ctx.app, devCookie, 'POST', `/api/v1/proposals/${out.proposalId}/reject`, {})
     expect(stranger.status).toBe(403)
 
-    // 牵头人确认 → 生效：todo / 责任人缺省=牵头人（D3）/ 审计 task.create
+    // 牵头人确认 → 生效：todo / 责任人缺省=未指派（v0.42/S38 修订，原 D3 缺省牵头人作废）/ 审计 task.create
     const out2 = await write(ctx.members.lead, 'propose', { kind: 'add_task', projectId: p.id, title: '365 连麦表单城市字段修复', planEndDate: '2026-10-20' })
+    expect(out2.summary).toContain('未指派')
     const leadCookie = await loginCookie(ctx.app, 'zhangsan', 'pass-123456')
     const ok = await authed(ctx.app, leadCookie, 'POST', `/api/v1/proposals/${out2.proposalId}/confirm`, {})
     expect(ok.status).toBe(200)
     const task = ctx.db.prepare('SELECT * FROM tasks WHERE project_id = ? AND title = ?').get(p.id, '365 连麦表单城市字段修复')
     expect(task.status).toBe('todo')
-    expect(task.responsible_member_id).toBe(ctx.members.lead.id)
+    expect(task.responsible_member_id).toBeNull()
     expect(task.plan_end_date).toBe('2026-10-20')
     const audited = ctx.db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'task.create' AND object_id = ?").get(String(task.id)).n
     expect(audited).toBe(1)

@@ -33,7 +33,7 @@ export function listTasks(db, { projectId, responsibleMemberId, statuses } = {})
   )
 }
 
-/** S2-1 未指派兜底视图：已设计划开始日但无责任人（默认路径责任人=牵头人，不该出现；出现即告警）。 */
+/** S2-1 未指派视图：已设计划开始日但无责任人（v0.42 起未指派为立项后正常初态，本视图承担初次分配工作队列，S38/K20）。 */
 export function listUnassigned(db) {
   return decorate(
     db.prepare(
@@ -99,6 +99,70 @@ export function tasksInventory(db, { projectId } = {}) {
   return { text: lines.join('\n').trimEnd(), unassigned: total, totalProjects: projects.length }
 }
 
+/** 责任人须为在职成员（S38-3，与牵头人校验同口径；null/空=未指派放行）。 */
+function assertActiveMember(db, memberId) {
+  const m = db.prepare(`SELECT id FROM members WHERE id = ? AND status = 'active'`).get(Number(memberId))
+  if (!m) throw Object.assign(new Error('责任人不存在或已离职'), { statusCode: 400 })
+  return m.id
+}
+
+const DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/
+
+/** YYYY-MM-DD 真实日历日校验（纯算术比对，拒绝 2026-13-40 这类滚动越界；无时区语义，S39 草案/应用共用）。 */
+export function isCalendarDay(s) {
+  if (typeof s !== 'string' || !DATE_SHAPE.test(s)) return false
+  const [y, m, d] = s.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
+}
+
+/**
+ * S39（v0.42，K21 信任边界限定例外）：AI 初始分配批量应用——逐行校验后单事务落库。
+ * 每行 = 完整目标状态 {taskId, responsibleMemberId|null, planStartDate|null, planEndDate|null}（三字段全量覆盖）；
+ * web 草案人审后应用 / Agent apply_init_assignments 直写共用此引擎。
+ * 留痕 = 一条讨论面记录事件 + 一条 task.initAssign 审计（payload 快照），不做逐任务 owner_change（批量动作一条摘要可查）。
+ */
+export function applyInitAssignments(db, projectId, rows, by, { platform = 'web' } = {}) {
+  const project = getProject(db, projectId)
+  if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
+  if (project.status === 'closed' || project.status === 'cancelled') {
+    throw Object.assign(new Error('项目已结项/取消，任务面只读'), { statusCode: 409 })
+  }
+  if (!Array.isArray(rows) || !rows.length) {
+    throw Object.assign(new Error('assignments 必填且至少一行'), { statusCode: 400 })
+  }
+  const openIds = new Set(
+    db.prepare('SELECT id FROM tasks WHERE project_id = ? AND deleted_at IS NULL').all(projectId).map((r) => r.id)
+  )
+  // 先全量校验，再事务写入（任一非法行 → 整体 400 不落库）
+  const clean = rows.map((raw, i) => {
+    const r = typeof raw === 'object' && raw !== null ? raw : {}
+    const taskId = Number(r.taskId)
+    if (!Number.isInteger(taskId) || !openIds.has(taskId)) {
+      throw Object.assign(new Error(`第 ${i + 1} 行：任务不属于本项目或已删除（taskId=${r.taskId}）`), { statusCode: 400 })
+    }
+    const owner = r.responsibleMemberId == null ? null : assertActiveMember(db, r.responsibleMemberId)
+    const ps = r.planStartDate == null ? null : String(r.planStartDate)
+    const pe = r.planEndDate == null ? null : String(r.planEndDate)
+    if (ps !== null && !isCalendarDay(ps)) throw Object.assign(new Error(`第 ${i + 1} 行：planStartDate 须为真实日历日 YYYY-MM-DD`), { statusCode: 400 })
+    if (pe !== null && !isCalendarDay(pe)) throw Object.assign(new Error(`第 ${i + 1} 行：planEndDate 须为真实日历日 YYYY-MM-DD`), { statusCode: 400 })
+    if (ps !== null && pe !== null && pe < ps) throw Object.assign(new Error(`第 ${i + 1} 行：计划截止不早于计划开始`), { statusCode: 400 })
+    return { taskId, responsibleMemberId: owner, planStartDate: ps, planEndDate: pe }
+  })
+  const now = Date.now()
+  const tx = db.transaction(() => {
+    const stmt = db.prepare('UPDATE tasks SET responsible_member_id = ?, plan_start_date = ?, plan_end_date = ?, updated_at = ? WHERE id = ?')
+    for (const r of clean) stmt.run(r.responsibleMemberId, r.planStartDate, r.planEndDate, now, r.taskId)
+    addEvent(db, {
+      projectId, eventType: 'decision', nature: 'record', sourcePlatform: platform, generatedBy: platform,
+      summary: `初始化分配应用 ${clean.length} 项任务（责任人/计划起止）`, speakerMemberId: by ?? null,
+    })
+    audit(db, { memberId: by, action: 'task.initAssign', objectType: 'project', objectId: projectId, detail: { assignments: clean } })
+  })
+  tx()
+  return { updated: clean.length }
+}
+
 export function createTask(db, input, by) {
   const { projectId, title, responsibleMemberId, planStartDate, planEndDate } = input
   if (!projectId || !title) throw Object.assign(new Error('projectId/title 必填'), { statusCode: 400 })
@@ -106,8 +170,8 @@ export function createTask(db, input, by) {
   if (project.status === 'closed' || project.status === 'cancelled') {
     throw Object.assign(new Error('项目已结项/取消，任务面只读'), { statusCode: 409 })
   }
-  // D3：未指派责任人时默认项目牵头人
-  const owner = responsibleMemberId ?? project.leadMemberId
+  // S38/K20（v0.42 推翻 D3）：责任人与项目牵头人解耦，缺省=未指派（NULL），不再回填牵头人
+  const owner = responsibleMemberId == null || responsibleMemberId === '' ? null : assertActiveMember(db, responsibleMemberId)
   const now = Date.now()
   const info = db.prepare(
     `INSERT INTO tasks (project_id, title, responsible_member_id, status, plan_start_date, plan_end_date, source, created_at, updated_at)
@@ -128,12 +192,15 @@ export function updateTask(db, id, patch, by) {
   const fields = {}
   if ('title' in patch) fields.title = patch.title
   if ('responsibleMemberId' in patch) {
-    fields.responsible_member_id = patch.responsibleMemberId === '' ? null : patch.responsibleMemberId
-    if (patch.responsibleMemberId && cur.responsible_member_id !== patch.responsibleMemberId) {
+    // S38-3：清空（''）→ NULL 未指派；非空须为在职成员
+    fields.responsible_member_id = patch.responsibleMemberId === '' || patch.responsibleMemberId == null
+      ? null
+      : assertActiveMember(db, patch.responsibleMemberId)
+    if (fields.responsible_member_id && cur.responsible_member_id !== fields.responsible_member_id) {
       // 责任人变更留痕（S4-4 语义，页面/Agent 同一通道）
       addEvent(db, {
         projectId: cur.project_id, eventType: 'owner_change', nature: 'record', sourcePlatform: 'web', generatedBy: 'web',
-        summary: `任务「${cur.title}」责任人 #${cur.responsible_member_id} → #${patch.responsibleMemberId}`, speakerMemberId: by,
+        summary: `任务「${cur.title}」责任人 #${cur.responsible_member_id} → #${fields.responsible_member_id}`, speakerMemberId: by,
       })
     }
   }

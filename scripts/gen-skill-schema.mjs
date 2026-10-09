@@ -101,6 +101,7 @@ client.sh action generate_person_digest '{}'
 | 配置（S17-10） | \`POST /api/v1/agent/actions\` | 白名单（配置类，**仅系统管理员 PAT**，成员 403）：upsert_channel / delete_channel / put_setting / reset_channel_cursor / delete_project |
 | 任务清单起草（S17-9，v0.18） | \`POST /api/v1/agent/actions\` | \`draft_task_list\`（write scope 即可，成员可用）：LLM 产任务清单草稿，**不落库**，供立项/类型编辑参考 |
 | 任务删除（S36，v0.40） | \`POST /api/v1/agent/actions\` | \`delete_task\`（write scope 即可，成员可用）：任务软删留痕；**删任务一律走此 action，不要手写 UPDATE/DELETE tasks** |
+| AI 初始分配（S39，v0.42） | \`POST /api/v1/agent/actions\` | \`draft_init_assignments\` 产批量分配草案（不落库）/ \`apply_init_assignments\` 同事务批量落库（write scope，成员可用；**信任边界限定例外**：初始化分配可直写，仅限该 action） |
 
 ### 配置类 action 参数（S17-10）
 
@@ -111,13 +112,15 @@ client.sh action generate_person_digest '{}'
 - \`reset_channel_cursor\` \`{channelId, days?}\`（默认 7，1~90；重置后下次抽取回看 N 天，重放会追加新事件流）
 - \`delete_task\` \`{id}\`（S36，v0.40：任务软删——行保留、\`deleted_at\` 落值、落 \`task.delete\` 审计；任务参考资料一并软删，更新记录与讨论面历史事件保留；已删任务从列表/盘点/未指派/逾期/指标等一切读侧退出，结项校验不计；任务不存在/已删 404，项目结项/取消 409）
 - \`delete_project\` \`{id}\`（S37，v0.41：**项目硬删除**——物理抹除项目及任务/事件/里程碑/参考资料/渠道绑定/日历映射全部数据，**不可恢复**；仅系统管理员 PAT；任意状态可直接删；唯一痕迹=\`project.hardDelete\` 审计快照。与「取消」的业务终态留痕语义不同，抹数据才用；不要经 SQL 端点手写 DELETE projects——FK 约束会拒绝且绕开审计）
+- \`draft_init_assignments\` \`{projectId}\` → \`{assignments: [{taskId, title, responsibleMemberId, planStartDate, planEndDate}], warnings: [...]}\`（S39，v0.42：LLM 读该类型的初始化提示词 \`project_types.init_prompt\` + 未完成任务清单 + 在职成员名册产草案，**不落库**；非法任务/成员/日期行被过滤进 warnings；草案覆盖全部未删未完成任务，遗漏任务=保持现状）
+- \`apply_init_assignments\` \`{projectId, assignments: [{taskId, responsibleMemberId|null, planStartDate|null, planEndDate|null}]}\`（S39：每行=完整目标状态，单事务全量覆盖三字段；任务须属本项目未删除、成员须在职、日期真实日历日且止≥起——任一非法行整体 400 不落库；项目终态 409；落讨论面记录 + \`task.initAssign\` 审计。**初次分配推荐姿势**：先 draft 给人过目（或按类型 init_prompt 自行推理），确认后调 apply）
 
 ## 工作守则（必须遵守）
 
 1. **指标以 metrics 端点为准**（口径同源 dashboard）；明细与自由查询才用 SQL 端点。
 2. **写 SQL 守则**：手动补 \`updated_at\`（epoch 毫秒）与审计需要的字段；软删不硬删（人员改 status='offboarded'，任务走 delete_task action 落 deleted_at，不要 DELETE）；403 不换字段重试；只改自己为责任人/牵头人的对象，跨人变更走建议。
 3. **时间与时区（S19）**：日历日一律北京时区。SQL 中「今天」用「BJ_TODAY()」（可传 epoch 毫秒参数取该时刻的北京日）；不要写 date('now')/datetime('now')——那是 UTC 语义，凌晨会差一天，端点会 400 拒绝；时间戳一律 epoch 毫秒。
-4. **LLM 信任边界**：口述更新一律 \`INSERT INTO project_events (nature='suggestion', status='pending', ...)\` 生成建议，等人在页面/接口确认；绝不直接 \`UPDATE tasks\` 改状态/日期/责任人。
+4. **LLM 信任边界**：口述更新一律 \`INSERT INTO project_events (nature='suggestion', status='pending', ...)\` 生成建议，等人在页面/接口确认；绝不直接 \`UPDATE tasks\` 改状态/日期/责任人。**唯一例外（S39/K21）**：初始化分配经 \`apply_init_assignments\` 直写（人显式发起、逐行校验、审计留痕）；其余任务变更仍走建议确认。另注意：v0.42 起任务责任人默认未指派（不再默认回填牵头人），新建/立项任务缺省 \`responsible_member_id\` 留 NULL。
 5. 常用查询模式：
    - 「我本周的任务」：\`SELECT t.id, t.title, t.plan_end_date, p.name FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.responsible_member_id=<我> AND t.status IN ('todo','doing') AND t.deleted_at IS NULL\`
    - 「B 项目卡在哪」：看 project_events 最新 blocker/risk + 逾期未完任务（plan_end_date < BJ_TODAY() 且 status != 'done' 且 deleted_at IS NULL）。
