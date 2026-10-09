@@ -120,6 +120,44 @@ export function expireStaleSuggestions(db, timeoutHours) {
   return info.changes
 }
 
+// —— S4-7（v0.46/K25）一键批量处理：逐条走 confirmEvent/rejectEvent 同一口子，单条失败不阻塞其余 ——
+
+function normIds(ids) {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    throw Object.assign(new Error('ids 必填且须为非空数组'), { statusCode: 400 })
+  }
+  if (ids.length > 100) throw Object.assign(new Error('ids 至多 100 条'), { statusCode: 400 })
+  return ids.map((id) => {
+    const n = Number(id)
+    if (!Number.isInteger(n) || n <= 0) throw Object.assign(new Error(`非法事件 id: ${id}`), { statusCode: 400 })
+    return n
+  })
+}
+
+function batchDecide(ids, by, fn, noun) {
+  const done = []
+  const failed = []
+  for (const id of normIds(ids)) {
+    try {
+      fn(id, by)
+      done.push(id)
+    } catch (e) {
+      failed.push({ id, message: e.message })
+    }
+  }
+  return { [noun]: done, failed }
+}
+
+/** 批量确认生效（web 待确认队列「全部生效」）：聚合返回，单条 409/404 计入 failed 不中断。 */
+export function confirmEvents(db, ids, by) {
+  return batchDecide(ids, by, (id) => confirmEvent(db, id, by), 'confirmed')
+}
+
+/** 批量驳回（「全部驳回」）：同上聚合语义。 */
+export function rejectEvents(db, ids, by) {
+  return batchDecide(ids, by, (id) => rejectEvent(db, id, by), 'rejected')
+}
+
 function applyTaskPatch(db, e) {
   // S36：目标任务已软删的建议不可生效（事务回滚，事件保持 pending；不复活任务面）
   const alive = db.prepare('SELECT 1 AS ok FROM tasks WHERE id = ? AND deleted_at IS NULL').get(e.target_task_id)

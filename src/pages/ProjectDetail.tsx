@@ -40,6 +40,18 @@ export default function ProjectDetail({ id }: { id: number }) {
   const activeMembers = members.filter((m) => m.status === 'active')
   const nameOf = (mid: number | null | undefined) => activeMembers.find((m) => m.id === mid)?.name || '（未指派）'
 
+  // S4-7（v0.46/K25）：待确认建议一键批量处理——走 confirmEvent/rejectEvent 同口子，聚合回执
+  const pendingSuggestions = events.filter((e) => e.status === 'pending')
+  const batchDecide = async (action: 'confirm' | 'reject') => {
+    const ids = pendingSuggestions.map((e) => e.id)
+    if (!ids.length) return
+    const r = action === 'confirm' ? await api.confirmEventsBatch(ids) : await api.rejectEventsBatch(ids)
+    const done = ('confirmed' in r ? r.confirmed : r.rejected).length
+    const failText = r.failed.length ? `，${r.failed.length} 条失败：${r.failed.map((f) => `#${f.id} ${f.message}`).join('；')}` : ''
+    toast(`${action === 'confirm' ? '已生效' : '已驳回'} ${done} 条${failText}`)
+    await refresh()
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -192,6 +204,14 @@ export default function ProjectDetail({ id }: { id: number }) {
       </div>
 
       <Card title={`讨论面 · 事件流（${events.length}，append-only）`}>
+        {/* S4-7（v0.46/K25）：多条待确认建议时提供一键批量处理——同口子逐条应用，聚合回执 */}
+        {pendingSuggestions.length >= 2 && (
+          <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] p-2 text-[12px]">
+            <span className="text-[var(--color-ink-soft)]">待确认建议 {pendingSuggestions.length} 条</span>
+            <Btn small kind="primary" onClick={() => void batchDecide('confirm')}>全部生效</Btn>
+            <Btn small onClick={() => void batchDecide('reject')}>全部驳回</Btn>
+          </div>
+        )}
         {events.length === 0 ? <Empty hint="暂无事件：绑定渠道后由大脑自动抽取，或手动添加" /> : (
           <ul className="space-y-2">
             {events.map((e) => (

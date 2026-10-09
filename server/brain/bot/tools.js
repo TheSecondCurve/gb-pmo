@@ -1,15 +1,18 @@
 // S20 机器人工具面（读自由写收敛，K9）：
 // query = 只读 SQL（护栏与 Agent SQL 端点同源）；metric = queryMetric 口径捷径；
-// write = 语义化提议——分发器定性生效路径（record 自动生效 / suggest+bind 出确认卡 / trigger 复用 action 白名单），
-// LLM 只描述想做什么，不选择也不影响生效路径。所有校验失败都返回 refused 文案（不抛出，循环保持稳定）。
+// write = 语义化写动作——分发器定性生效路径（record 自动生效 / suggest 直改回执〔v0.46/K25：落建议型事件
+// 立即以发令人身份走 confirmEvent 生效，支持 items 批量〕/ bind 直写 / propose 仅取消·结项出确认卡、
+// 其余 kind 权限前置直写 / trigger 复用 action 白名单），LLM 只描述想做什么，不选择也不影响生效路径。
+// 所有校验失败都返回 refused 文案（不抛出，循环保持稳定）。
 
 import { runReadOnlyQuery } from '../../agent/sqlGuard.js'
 import { ACTIONS, BOT_ACTIONS } from '../../agent/actions.js'
 import { queryMetric } from '../../engine/metrics.js'
 import { projectBrief } from '../../engine/brief.js'
-import { addEvent } from '../../engine/events.js'
+import { addEvent, confirmEvent } from '../../engine/events.js'
 import { assertValue, label } from '../../engine/enums.js'
-import { pushSuggestion, mapSpeaker } from '../extract.js'
+import { mapSpeaker } from '../extract.js'
+import { upsertChannel } from '../../engine/tasks.js'
 import { createProposal, PROPOSAL_KINDS } from '../../engine/proposals.js'
 import { normalizeTypeTasks } from '../../engine/projectTypes.js'
 import { getSetting } from '../../engine/settings.js'
@@ -84,7 +87,7 @@ export async function runWriteTool(db, { kind, payload = {} }, ctx) {
     if (kind === 'suggest_event') return writeSuggestEvent(db, payload, ctx)
     if (kind === 'bind_channel') return writeBindChannel(db, payload, ctx)
     if (kind === 'trigger') return await runTrigger(db, payload, ctx)
-    if (kind === 'propose') return writePropose(db, payload, ctx)
+    if (kind === 'propose') return await writePropose(db, payload, ctx)
     return refused(`不支持的写类型: ${kind}（可用 record_event/suggest_event/bind_channel/trigger/propose）`)
   } catch (e) {
     if (e.statusCode === 403) return refused(`权限不足：${e.message}`, 'refused_permission')
@@ -112,32 +115,62 @@ function writeRecordEvent(db, payload, ctx) {
   return { type: 'receipt', text: `已登记${label('eventType', eventType)}事件 #${evt.id}（项目「${project.name}」），归因 ${ctx.member.name}。` }
 }
 
+/**
+ * S20-2（v0.46/K25）任务/里程碑变更直改：落建议型事件（讨论面留痕结构不变）并立即以发令人身份
+ * 走 confirmEvent 同一口子生效（终态/软删守卫与事务全继承，decided_by=发令人）——对话面是人的明确指令，
+ * 确认卡只留取消/结项等终态操作。一条指令含多个变更时用 payload.items 批量（≤20 条）：
+ * 逐条独立生效、一条汇总回执单列失败原因（best-effort，不整体回滚）。
+ */
 function writeSuggestEvent(db, payload, ctx) {
+  const items = Array.isArray(payload.items) ? payload.items : [payload]
+  if (!items.length) return refused('items 不能为空（单条变更直接给 targetTaskId/targetField/targetValue）')
+  if (items.length > 20) return refused('一条指令批量变更至多 20 条')
+  if (items.length === 1) {
+    const r = applySuggestion(db, items[0], ctx) // 校验/生效失败抛错，由 runWriteTool 统一转 refused
+    return { type: 'receipt', text: `已生效：${r.summary}（事件 #${r.eventId}）。` }
+  }
+  const ok = []
+  const failed = []
+  for (const item of items) {
+    try {
+      ok.push(applySuggestion(db, item, ctx))
+    } catch (e) {
+      failed.push({ label: Number(item?.targetMilestoneId) ? `里程碑 #${item.targetMilestoneId}` : `任务 #${item?.targetTaskId}`, message: e.message })
+    }
+  }
+  if (!ok.length) return refused(`批量变更全部失败：${failed.map((f) => `${f.label}（${f.message}）`).join('；')}`)
+  const okText = ok.map((r) => `${r.summary}（#${r.eventId}）`).join('；')
+  const failText = failed.map((f) => `${f.label}（${f.message}）`).join('；')
+  return { type: 'receipt', text: `已生效 ${ok.length} 项：${okText}${failed.length ? `。失败 ${failed.length} 项：${failText}` : ''}` }
+}
+
+/** 单条建议的校验 + 落事件 + 立即生效。校验失败/生效守卫抛中文 Error。 */
+function applySuggestion(db, payload, ctx) {
   const milestoneId = Number(payload.targetMilestoneId)
-  if (milestoneId) return writeMilestoneSuggest(db, payload, ctx, milestoneId) // S35：里程碑改期/状态
+  if (milestoneId) return applyMilestoneSuggest(db, payload, ctx, milestoneId) // S35：里程碑改期/状态
   const taskId = Number(payload.targetTaskId)
   const task = taskId
     ? db.prepare('SELECT t.id, t.title, t.project_id AS pid, p.status AS project_status FROM tasks t JOIN projects p ON p.id = t.project_id WHERE t.id = ? AND t.deleted_at IS NULL').get(taskId)
     : null
-  if (!task) return refused('targetTaskId 必填且须为真实任务 id（先 query 查任务）')
-  if (task.project_status === 'closed' || task.project_status === 'cancelled') return refused('项目已结项/取消，任务面只读')
+  if (!task) throw new Error('targetTaskId 必填且须为真实任务 id（先 query 查任务）')
+  if (task.project_status === 'closed' || task.project_status === 'cancelled') throw new Error('项目已结项/取消，任务面只读')
   if (payload.projectId !== undefined && payload.projectId !== null && Number(payload.projectId) !== task.pid) {
-    return refused('任务不属于该项目')
+    throw new Error('任务不属于该项目')
   }
   const field = String(payload.targetField || '')
-  if (!(field in SUGGEST_FIELDS)) return refused('targetField 仅支持 status / plan_start_date / plan_end_date / responsible_member_id')
+  if (!(field in SUGGEST_FIELDS)) throw new Error('targetField 仅支持 status / plan_start_date / plan_end_date / responsible_member_id')
   let value = payload.targetValue
   let valueLabel
   if (field === 'status') {
     value = assertValue('taskStatus', String(value))
     valueLabel = label('taskStatus', value)
   } else if (field === 'plan_start_date' || field === 'plan_end_date') {
-    if (!DATE_RE.test(String(value))) return refused('日期值须为 YYYY-MM-DD（按今天自己换算）')
+    if (!DATE_RE.test(String(value))) throw new Error('日期值须为 YYYY-MM-DD（按今天自己换算）')
     valueLabel = String(value)
   } else {
     value = Number(value)
     const m = db.prepare(`SELECT id, name FROM members WHERE id = ? AND status = 'active'`).get(value)
-    if (!m) return refused('责任人须为在职成员 id（先 query 查成员）')
+    if (!m) throw new Error('责任人须为在职成员 id（先 query 查成员）')
     valueLabel = m.name
   }
   const fieldLabel = { status: '状态', plan_start_date: '计划开始日', plan_end_date: '计划结束日', responsible_member_id: '责任人' }[field]
@@ -150,36 +183,36 @@ function writeSuggestEvent(db, payload, ctx) {
     speakerMemberId: ctx.member.id, speakerLabel: ctx.member.name,
     targetTaskId: taskId, targetField: field, targetValue: String(value), generatedBy: 'agent',
   })
-  pushSuggestion(db, evt) // 既有语义：推目标任务责任人 + 项目牵头人（pushes 表）
-  return { type: 'card', cardKind: 'suggest', eventId: evt.id, summary: evt.summary, eventType: evt.eventType }
+  confirmEvent(db, evt.id, ctx.member.id) // K25：落库即生效（发令人=生效人；守卫失败抛错，pending 事件留痕可补救）
+  return { eventId: evt.id, summary: evt.summary }
 }
 
-// S35：里程碑建议——建议通道扩展到里程碑（target_object='milestone'，确认走 events.applyMilestonePatch）。
-// 全员可确认口径与任务建议一致（v0.34）；plan_date 改期 / status 达成·延误·取消（met 落实际日期在确认侧）。
+// S35：里程碑建议——建议通道扩展到里程碑（target_object='milestone'，生效走 events.applyMilestonePatch）。
+// v0.46/K25：与任务建议同口径直改（任意已绑定成员可发起）；plan_date 改期 / status 达成·延误·取消（met 落实际日期）。
 const MILESTONE_FIELDS = { plan_date: 'schedule_change', status: 'status_change' }
 
-function writeMilestoneSuggest(db, payload, ctx, milestoneId) {
+function applyMilestoneSuggest(db, payload, ctx, milestoneId) {
   const ms = db
     .prepare('SELECT m.id, m.name, m.project_id AS pid, p.status AS project_status FROM milestones m JOIN projects p ON p.id = m.project_id WHERE m.id = ?')
     .get(milestoneId)
-  if (!ms) return refused('targetMilestoneId 必填且须为真实里程碑 id（先 query 查里程碑）')
-  if (ms.project_status === 'closed' || ms.project_status === 'cancelled') return refused('项目已结项/取消，任务面只读')
+  if (!ms) throw new Error('targetMilestoneId 必填且须为真实里程碑 id（先 query 查里程碑）')
+  if (ms.project_status === 'closed' || ms.project_status === 'cancelled') throw new Error('项目已结项/取消，任务面只读')
   if (payload.projectId !== undefined && payload.projectId !== null && Number(payload.projectId) !== ms.pid) {
-    return refused('里程碑不属于该项目')
+    throw new Error('里程碑不属于该项目')
   }
   const field = String(payload.targetField || '')
-  if (!(field in MILESTONE_FIELDS)) return refused('targetField 仅支持 plan_date / status')
+  if (!(field in MILESTONE_FIELDS)) throw new Error('targetField 仅支持 plan_date / status')
   let value = payload.targetValue
   let valueLabel
   if (field === 'plan_date') {
-    if (!DATE_RE.test(String(value))) return refused('日期值须为 YYYY-MM-DD（按今天自己换算）')
+    if (!DATE_RE.test(String(value))) throw new Error('日期值须为 YYYY-MM-DD（按今天自己换算）')
     valueLabel = String(value)
   } else {
     try {
       value = assertValue('milestoneStatus', String(value))
       valueLabel = label('milestoneStatus', value)
     } catch {
-      return refused('状态值须为 planned / met / missed / cancelled')
+      throw new Error('状态值须为 planned / met / missed / cancelled')
     }
   }
   const fieldLabel = { plan_date: '计划日期', status: '状态' }[field]
@@ -192,8 +225,8 @@ function writeMilestoneSuggest(db, payload, ctx, milestoneId) {
     speakerMemberId: ctx.member.id, speakerLabel: ctx.member.name,
     targetObject: 'milestone', targetTaskId: milestoneId, targetField: field, targetValue: String(value), generatedBy: 'agent',
   })
-  pushSuggestion(db, evt)
-  return { type: 'card', cardKind: 'suggest', eventId: evt.id, summary: evt.summary, eventType: evt.eventType }
+  confirmEvent(db, evt.id, ctx.member.id)
+  return { eventId: evt.id, summary: evt.summary }
 }
 
 function writeBindChannel(db, payload, ctx) {
@@ -204,18 +237,23 @@ function writeBindChannel(db, payload, ctx) {
   if (ctx.member.role !== 'admin' && project.lead_member_id !== ctx.member.id) {
     return refused('只有该项目的牵头人或系统管理员可以登记群，请 TA 来 @我登记', 'refused_permission')
   }
-  return {
-    type: 'card', cardKind: 'bind',
-    projectId: project.id, projectName: project.name,
-    chatId: ctx.evt.chatId, chatName: String(payload.chatName || ctx.evt.chatTitle || ''),
-  }
+  // v0.46/K25：直写不再出确认卡。新建绑定 cursor=登记时刻（只抽登记之后的聊天）；既有绑定更新保留游标（S3-6/v0.24 口径不变）
+  upsertChannel(db, {
+    platform: ctx.evt?.platform || 'feishu', groupKey: ctx.evt.chatId,
+    name: String(payload.chatName || ctx.evt.chatTitle || '') || null, channelType: 'dedicated', projectId: project.id,
+  }, ctx.member.id)
+  return { type: 'receipt', text: `本群已绑定为项目「${project.name}」的专题渠道，从现在开始定时抽取归档（不回灌历史）。` }
 }
 
-// —— S25（v0.17）项目级/配置级提议：软校验（真实 id + 合法枚举 + 摘要化），生效见 engine/proposals.js ——
+// —— S25（v0.17）项目级/配置级操作：v0.46/K25 分流——终态操作（取消/结项）走「提议→确认卡→生效」； ——
+// —— 其余 kind 软校验 + 发起人权限前置（canConfirm 复用为执行校验）后直写既有 engine，回执已生效 ——
+
+/** 确认卡只留删除级终态操作（用户 2026-10-09 拍板：只有删除动作做确认）。 */
+const CARD_KINDS = new Set(['cancel_project', 'close_project'])
 
 const normTasks = (tasks) => (Array.isArray(tasks) ? tasks : []).map((t) => (typeof t === 'string' ? { title: t } : t)).filter((t) => t && t.title)
 
-/** S33：提议载荷里的任务参考提前校验（复用引擎归一；确认时引擎兜底再校验一次）。 */
+/** S33：提议载荷里的任务参考提前校验（复用引擎归一；直写时引擎再兜底校验一次）。 */
 const checkTaskRefs = (tasks) => {
   try {
     normalizeTypeTasks(tasks.map((t) => (typeof t === 'string' ? { title: t } : t)))
@@ -226,13 +264,21 @@ const checkTaskRefs = (tasks) => {
 }
 const DATE_OK = /^\d{4}-\d{2}-\d{2}$/
 
-function writePropose(db, payload, ctx) {
+async function writePropose(db, payload, ctx) {
   const kind = String(payload?.kind || '')
   if (!PROPOSAL_KINDS[kind]) return refused(`不支持的提议类型: ${kind}（可用 ${Object.keys(PROPOSAL_KINDS).join(' / ')}）`)
   const check = softValidateProposal(db, kind, payload)
   if (check.error) return refused(check.error)
-  const prop = createProposal(db, { kind, payload: check.payload, summary: check.summary, proposedBy: ctx.member.id })
-  return { type: 'card', cardKind: 'propose', proposalId: prop.id, kind, summary: prop.summary }
+  if (CARD_KINDS.has(kind)) {
+    const prop = createProposal(db, { kind, payload: check.payload, summary: check.summary, proposedBy: ctx.member.id })
+    return { type: 'card', cardKind: 'propose', proposalId: prop.id, kind, summary: prop.summary }
+  }
+  // 直写：原确认矩阵前置为发起人执行权限校验（谁能确认 = 谁能直接执行，权限模型不变只少一步点按）
+  const spec = PROPOSAL_KINDS[kind]
+  const allowed = await spec.canConfirm(db, ctx.member, check.payload)
+  if (allowed !== true) throw allowed // 403 → runWriteTool 转 refused_permission
+  await spec.apply(db, check.payload, ctx.member.id)
+  return { type: 'receipt', text: `已生效：${check.summary}。` }
 }
 
 function getProj(db, id) {
@@ -274,7 +320,7 @@ function softValidateProposal(db, kind, p) {
     const tasks = normTasks(p.tasks)
     if (tasks.some((t) => !String(t.title).trim())) return { error: 'tasks 内不可有空白标题' }
     if (tasks.length > 30) return { error: 'tasks 至多 30 条' }
-    const refErr = checkTaskRefs(tasks) // S33：带 refs 的任务项提前校验（引擎在确认时兜底）
+    const refErr = checkTaskRefs(tasks) // S33：带 refs 的任务项提前校验（引擎生效时兜底）
     if (refErr) return { error: refErr }
     const autoSchedule = p.autoSchedule === true
     if (autoSchedule && !p.planEndDate) return { error: 'autoSchedule 倒排须同时给 planEndDate（交付日期，YYYY-MM-DD）' }
@@ -295,18 +341,18 @@ function softValidateProposal(db, kind, p) {
     const tasks = normTasks(p.tasks)
     if (tasks.some((t) => !String(t.title).trim())) return { error: 'tasks 内不可有空白标题' }
     if (tasks.length > 30) return { error: 'tasks 至多 30 条' }
-    const refErr = checkTaskRefs(tasks) // S33：类型模板步骤可挂参考链接（提议提前校验，引擎确认时兜底）
+    const refErr = checkTaskRefs(tasks) // S33：类型模板步骤可挂参考链接（提前校验，引擎生效时兜底）
     if (refErr) return { error: refErr }
     return {
       payload: {
         code: String(p.code), name: String(p.name), ...(p.description ? { description: String(p.description) } : {}),
-        ...(p.initPrompt ? { initPrompt: String(p.initPrompt) } : {}), // S39：初始化提示词透传（引擎确认时校验）
+        ...(p.initPrompt ? { initPrompt: String(p.initPrompt) } : {}), // S39：初始化提示词透传（引擎生效时校验）
         tasks,
       },
       summary: `新建项目类型「${p.name}」（${p.code}，内嵌任务 ${tasks.length} 项${tasks.reduce((s, t) => s + ((t.refs ?? []).length), 0) ? `，参考资料 ${tasks.reduce((s, t) => s + ((t.refs ?? []).length), 0)} 条` : ''}）`,
     }
   }
-  // —— S35 项目维护面：建任务 / 建里程碑 / 项目信息变更（软校验，硬校验在引擎确认时兜底）——
+  // —— S35 项目维护面：建任务 / 建里程碑 / 项目信息变更（软校验，硬校验在引擎生效时兜底）——
   if (kind === 'add_task') {
     const proj = getProj(db, p.projectId)
     if (!proj) return { error: 'projectId 必填且须为真实项目 id（先 query 查项目）' }

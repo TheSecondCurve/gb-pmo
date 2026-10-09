@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { BOT_SECRET as SECRET, scriptedLlm, makeRecorder, makeMsgFactory, mkProject, botRow } from './bot-kit.mjs'
-import { handleBotEvent, handleCardAction, issueBindCode } from '../brain/bot/command.js'
+import { handleBotEvent, issueBindCode } from '../brain/bot/command.js'
 import { parseSdkMessage, extractMessageText } from '../brain/bot/gateway.js'
 import { sendText, sendCard } from '../brain/connectors/feishu.js'
 import { setSetting } from '../engine/settings.js'
@@ -11,7 +11,7 @@ import { setSetting } from '../engine/settings.js'
 
 let ctx
 const recorder = makeRecorder()
-const { nextMsgId, p2p, group } = makeMsgFactory()
+const { p2p, group } = makeMsgFactory()
 
 beforeAll(async () => {
   ctx = await setupApp()
@@ -100,7 +100,7 @@ describe('S20 机器人指令通道 — 群聊', () => {
     expect(rec.sent).toHaveLength(0)
   })
 
-  it('S20-8: 牵头人群内登记项目 → 确认卡 → 渠道生效 cursor=登记时刻；普通成员被拒', async () => {
+  it('S20-8: 牵头人群内登记项目 → 直写渠道生效并回执 cursor=登记时刻（v0.46/K25）；普通成员被拒', async () => {
     const p = await mkProject(ctx, '客户E系统', ctx.members.lead.id)
     // 普通成员发起 → 权限拒绝文案
     const { llm: devLlm } = scriptedLlm(
@@ -111,20 +111,17 @@ describe('S20 机器人指令通道 — 群聊', () => {
     expect(devOut.result).toBe('refused_permission')
     expect(devRec.sent[0].text).toContain('牵头人')
 
-    // 牵头人发起 → 确认卡 → 确认后 channels 生效
+    // 牵头人发起 → 直写 channels 生效并回执（不再出确认卡）
     const { llm } = scriptedLlm(
       JSON.stringify({ action: 'query', sql: `SELECT id, name FROM projects WHERE name LIKE '%客户E%'` }),
       JSON.stringify({ action: 'write', kind: 'bind_channel', payload: { projectId: p.id, chatName: '客户E项目群' } })
     )
     const rec = recorder()
-    const out = await handleBotEvent(ctx.db, group('fs_zhang', 'oc_bind', '@bot 这是「客户E系统」的群'), { llm, send: rec.send, secret: SECRET })
-    expect(out.result).toBe('card_sent')
-    const btn = rec.sent[0].card.elements.find((e) => e.tag === 'action').actions[0]
-    expect(btn.value.a).toBe('bind')
-
     const before = Math.floor(Date.now() / 1000)
-    const ok = await handleCardAction(ctx.db, { operatorOpenId: 'fs_zhang', value: btn.value, chatId: 'oc_bind', messageId: nextMsgId() }, { send: recorder().send, secret: SECRET })
-    expect(ok.result).toBe('confirmed')
+    const out = await handleBotEvent(ctx.db, group('fs_zhang', 'oc_bind', '@bot 这是「客户E系统」的群'), { llm, send: rec.send, secret: SECRET })
+    expect(out.result).toBe('replied')
+    expect(rec.sent[0].text).toContain('已绑定')
+    expect(rec.sent[0].card).toBeUndefined()
     const ch = ctx.db.prepare(`SELECT * FROM channels WHERE platform = 'feishu' AND group_key = 'oc_bind'`).get()
     expect(ch.project_id).toBe(p.id)
     expect(ch.channel_type).toBe('dedicated')

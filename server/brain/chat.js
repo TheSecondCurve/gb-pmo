@@ -142,19 +142,16 @@ export async function sendChatMessage(db, { memberId, sessionId, text }, opts = 
     systemPrompt: buildSystemPrompt(db, { member, channel: null, chatType: 'p2p', surface: 'web' }),
   })
 
-  // 卡片出口：web 无卡片——提议/建议给编号 + 页面「生效/驳回」按钮（S24-3/S25，走既有确认口子）
+  // 卡片出口：web 无卡片——提议（v0.46 起仅取消/结项）给编号 + 页面「生效/驳回」按钮（S24-3/S25，走既有确认口子）
   if (out?.type === 'card') {
     const w = out.writeResult
-    const isPropose = w.cardKind === 'propose'
-    const cardText = isPropose
-      ? `已生成提议 #${w.proposalId}（${w.summary}），待有权人确认后才会生效——在下方点「生效」或「驳回」。`
-      : `已生成建议事件 #${w.eventId}（${w.summary}），待确认后才会变更任务——在下方点「生效」或「驳回」，确认人留痕。`
+    const cardText = `已生成提议 #${w.proposalId}（${w.summary}），待有权人确认后才会生效——在下方点「生效」或「驳回」。`
     lastAssistant = insertMessage(db, session.id, 'assistant', cardText, {
       result: 'card_sent', intent: `write:${w.cardKind}`, writeKind: w.cardKind,
-      ...(isPropose ? { proposalId: w.proposalId } : { eventId: w.eventId }),
+      proposalId: w.proposalId,
       llmCalls: out.llmCalls, queries: out.detail.queries, sql: out.detail.sql,
     })
-    finish({ intent: `write:${w.cardKind}${isPropose ? `:${w.kind}` : ''}`, result: 'card_sent', llmCalls: out.llmCalls, queries: out.detail.queries, sql: out.detail.sql })
+    finish({ intent: `write:${w.cardKind}:${w.kind}`, result: 'card_sent', llmCalls: out.llmCalls, queries: out.detail.queries, sql: out.detail.sql })
   }
   return { user: userMsg, assistant: lastAssistant, session: getSession(db, memberId, session.id) }
 }
