@@ -3,8 +3,11 @@ import { fmtDateTime } from '../fmt'
 import { api } from '../api'
 import { useStore } from '../store'
 import { Badge, Btn, Card, Empty, Field, InlineSelect, InlineText, Modal, Spinner, inputCls } from '../components/ui'
+import ProgressSchedule from '../components/ProgressSchedule'
+import { TASK_ROW_CLS, taskVisual } from '../progress'
 import {
-  EVENT_STATUS_LABEL, EVENT_TYPE_LABEL, PRIORITY_LABEL, PROJECT_STATUS_LABEL, TASK_STATUS_LABEL,
+  EVENT_STATUS_LABEL, EVENT_TYPE_LABEL, MILESTONE_STATUS_LABEL, MILESTONE_STATUS_TONE,
+  PRIORITY_LABEL, PROJECT_STATUS_LABEL, TASK_STATUS_LABEL, TASK_STATUS_TONE,
   type ChannelRow, type EventRow, type InitAssignmentRow, type Member, type ProjectDetail, type TaskRecordRow, type TaskRefRow,
 } from '../types'
 
@@ -79,6 +82,9 @@ export default function ProjectDetail({ id }: { id: number }) {
         <Card title={`结束原因 / 复盘记录（${p.status === 'closed' ? '已结项' : '已取消'} · 只读）`}><div className="whitespace-pre-wrap text-[13px]">{p.closeoutSummary}</div></Card>
       )}
 
+      {/* S42（v0.44）：进度（堆叠条/完成率）与排期（任务级甘特+里程碑刻度）一屏总览 */}
+      <ProgressSchedule tasks={p.tasks} milestones={p.milestones} />
+
       <Card title={`任务面（${p.tasks.length}）${readonly ? ' · 只读' : ''}`} actions={!readonly ? (
         <div className="flex gap-2">
           {/* S39：AI 初始分配——按类型初始化提示词批量产「责任人+排期」草案，人审后一键应用 */}
@@ -97,11 +103,15 @@ export default function ProjectDetail({ id }: { id: number }) {
                 </tr>
               </thead>
               <tbody>
-                {p.tasks.map((t) => (
-                  <tr key={t.id} className="border-b border-[var(--color-line)] last:border-0 hover:bg-[var(--color-bg)]">
-                    <td className="py-1">
+                {p.tasks.map((t) => {
+                  // S41/K23：整行浅底色按视觉桶区分（逾期红优先于状态色），data-visual 为冒烟锚点
+                  const visual = taskVisual(t)
+                  const statusTone = TASK_STATUS_TONE[t.status] || 'muted'
+                  return (
+                  <tr key={t.id} data-testid="task-row" data-visual={visual} className={`border-b border-[var(--color-line)] last:border-0 ${TASK_ROW_CLS[visual]}`}>
+                    <td className={`py-1 ${t.status === 'done' ? 'text-[var(--color-ink-soft)]' : ''}`}>
                       {readonly ? t.title : (
-                        <InlineText value={t.title} onSubmit={async (v) => { await api.patchTask(t.id, { title: v }); await refresh() }} />
+                        <InlineText value={t.title} className={t.status === 'done' ? 'text-[var(--color-ink-soft)]' : undefined} onSubmit={async (v) => { await api.patchTask(t.id, { title: v }); await refresh() }} />
                       )}
                     </td>
                     <td>
@@ -114,8 +124,10 @@ export default function ProjectDetail({ id }: { id: number }) {
                       )}
                     </td>
                     <td>
-                      {readonly ? TASK_STATUS_LABEL[t.status] : (
-                        <InlineSelect value={t.status} options={TASK_STATUS_LABEL} onSubmit={async (v) => { await api.patchTask(t.id, { status: v }); await refresh() }} />
+                      {readonly ? (
+                        <Badge tone={statusTone} data-testid="task-status-badge" data-tone={statusTone}>{TASK_STATUS_LABEL[t.status] || t.status}</Badge>
+                      ) : (
+                        <InlineSelect value={t.status} options={TASK_STATUS_LABEL} tones={TASK_STATUS_TONE} onSubmit={async (v) => { await api.patchTask(t.id, { status: v }); await refresh() }} />
                       )}
                     </td>
                     <td className="num">{readonly ? (t.planStartDate || '—') : <InlineText type="date" value={t.planStartDate} onSubmit={async (v) => { await api.patchTask(t.id, { planStartDate: v }); await refresh() }} />}</td>
@@ -138,7 +150,8 @@ export default function ProjectDetail({ id }: { id: number }) {
                       )}
                     </td>
                   </tr>
-                ))}
+                  )
+                })}
               </tbody>
             </table>
           </div>
@@ -155,7 +168,7 @@ export default function ProjectDetail({ id }: { id: number }) {
                   <span>{m.name}</span>
                   <span className="num flex items-center gap-2">
                     {readonly ? (m.planDate || '—') : <InlineText type="date" value={m.planDate} onSubmit={async (v) => { await api.patchMilestone(m.id, { planDate: v }); await refresh() }} />}
-                    <Badge tone={m.status === 'met' ? 'ok' : m.status === 'missed' ? 'bad' : 'muted'}>{m.status === 'met' ? '已达成' : m.status === 'missed' ? '已延误' : '计划中'}</Badge>
+                    <Badge tone={MILESTONE_STATUS_TONE[m.status] || 'muted'}>{MILESTONE_STATUS_LABEL[m.status] || m.status}</Badge>
                   </span>
                 </li>
               ))}
@@ -517,14 +530,18 @@ function CloseModal({ p, onClose, onDone }: { p: ProjectDetail; onClose: () => v
             <Btn small kind="primary" onClick={() => void markAll()}>全部标记完成</Btn>
           </div>
           <table className="w-full text-[13px]">
-            <thead className="text-left text-[12px] text-[var(--color-ink-soft)]"><tr className="border-b border-[var(--color-line)]"><th className="py-1">任务</th><th></th></tr></thead>
+            <thead className="text-left text-[12px] text-[var(--color-ink-soft)]"><tr className="border-b border-[var(--color-line)]"><th className="py-1">任务</th><th>状态</th><th></th></tr></thead>
             <tbody>
-              {unfinished.map((t) => (
-                <tr key={t.id} className="border-b border-[var(--color-line)] last:border-0">
+              {unfinished.map((t) => {
+                const tone = TASK_STATUS_TONE[t.status] || 'muted'
+                return (
+                <tr key={t.id} data-testid="task-row" data-visual={taskVisual(t)} className={`border-b border-[var(--color-line)] last:border-0 ${TASK_ROW_CLS[taskVisual(t)]}`}>
                   <td className="py-1">{t.title}</td>
+                  <td><Badge tone={tone} data-testid="task-status-badge" data-tone={tone}>{TASK_STATUS_LABEL[t.status] || t.status}</Badge></td>
                   <td><Btn small onClick={() => void markDone(t.id)}>标记完成</Btn></td>
                 </tr>
-              ))}
+                )
+              })}
             </tbody>
           </table>
         </div>

@@ -162,6 +162,19 @@ function DeliveryBadge({ p }: { p: ProjectRow }) {
     : <Badge tone="bad">超期 {-p.daysToDelivery} 天</Badge>
 }
 
+/** S43（v0.44）迷你进度条：表格「进度」列与看板卡共用；仅 tasksTotal>0 时由调用方渲染 */
+function MiniProgress({ done, total }: { done: number; total: number }) {
+  const pct = Math.round((done / total) * 100)
+  return (
+    <span data-testid="mini-progress" className="inline-flex items-center gap-1.5" title={`完成 ${done}/${total}（${pct}%）`}>
+      <span className="h-1.5 w-14 overflow-hidden rounded-full bg-gray-100">
+        <span className="block h-full bg-[var(--color-ok)]" style={{ width: `${pct}%` }} />
+      </span>
+      <span className="num text-[12px] text-[var(--color-ink-soft)]">{done}/{total}</span>
+    </span>
+  )
+}
+
 function TableView({ rows, unscheduled, onPriority }: {
   rows: ProjectRow[]; unscheduled: ProjectRow[]; onPriority: (p: ProjectRow, v: string) => Promise<void>
 }) {
@@ -173,6 +186,7 @@ function TableView({ rows, unscheduled, onPriority }: {
       <td><a className="text-[var(--color-brand)] hover:underline" href={`#/projects/${p.id}`}>{p.name}</a>{p.clientName ? <span className="text-[var(--color-ink-soft)]">（{p.clientName}）</span> : null}</td>
       <td>{p.leadName}</td>
       <td><StatusBadge p={p} /></td>
+      <td>{p.tasksTotal > 0 ? <MiniProgress done={p.tasksDone} total={p.tasksTotal} /> : <span className="text-[var(--color-ink-soft)]">—</span>}</td>
       <td className={`num ${p.overdueTasks ? 'text-[var(--color-bad)]' : ''}`}>{p.overdueTasks}</td>
       <td className="num whitespace-nowrap">
         {fmtDateRange(p.planStartDate, p.planEndDate)} <DeliveryBadge p={p} />
@@ -187,7 +201,7 @@ function TableView({ rows, unscheduled, onPriority }: {
           <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
             <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap">
               <th className="py-1.5">优先级</th><th>项目</th><th>牵头人</th><th>状态</th>
-              <th className="num">逾期</th><th>交付周期（S21）</th><th>类型</th>
+              <th>进度</th><th className="num">逾期</th><th>交付周期（S21）</th><th>类型</th>
             </tr>
           </thead>
           <tbody>
@@ -195,7 +209,7 @@ function TableView({ rows, unscheduled, onPriority }: {
             {unscheduled.length > 0 && (
               <>
                 <tr data-testid="unscheduled-group" className="border-b border-[var(--color-line)] bg-[var(--color-bg)]">
-                  <td colSpan={7} className="px-2 py-1.5 text-[12px] font-medium text-[var(--color-ink-soft)]">
+                  <td colSpan={8} className="px-2 py-1.5 text-[12px] font-medium text-[var(--color-ink-soft)]">
                     未排期（{unscheduled.length}）— 松散管理合法态，填计划日期后参与排序与时间线
                   </td>
                 </tr>
@@ -225,6 +239,7 @@ function ProjectCard({ p }: { p: ProjectRow }) {
         {p.overdueTasks > 0 && <Badge tone="bad">逾期 {p.overdueTasks}</Badge>}
         {p.status === 'active' && p.silentDays != null && p.silentDays >= 3 && <Badge tone="warn">静默 {p.silentDays} 天</Badge>}
       </div>
+      {p.tasksTotal > 0 && <div className="mt-1.5"><MiniProgress done={p.tasksDone} total={p.tasksTotal} /></div>}
     </div>
   )
 }

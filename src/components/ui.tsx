@@ -1,4 +1,5 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, type HTMLAttributes, type ReactNode } from 'react'
+import type { Tone } from '../types'
 
 // 手写极简组件层（tech-architecture：不用组件库）
 export function Btn({ children, onClick, kind = 'default', disabled, small, title }: {
@@ -53,13 +54,15 @@ export function Spinner() {
   return <div className="flex h-40 items-center justify-center text-[var(--color-ink-soft)]">加载中…</div>
 }
 
-export function Badge({ tone, children }: { tone: 'ok' | 'warn' | 'bad' | 'info' | 'muted'; children: ReactNode }) {
-  const cls = {
-    ok: 'bg-green-50 text-[var(--color-ok)]', warn: 'bg-amber-50 text-[var(--color-warn)]',
-    bad: 'bg-red-50 text-[var(--color-bad)]', info: 'bg-[var(--color-brand-soft)] text-[var(--color-brand)]',
-    muted: 'bg-gray-100 text-[var(--color-ink-soft)]',
-  }[tone]
-  return <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium ${cls}`}>{children}</span>
+// S41/K23：Tone→底色的映射在组件层唯一（Badge 与 InlineSelect 共用）
+const TONE_CLS: Record<Tone, string> = {
+  ok: 'bg-green-50 text-[var(--color-ok)]', warn: 'bg-amber-50 text-[var(--color-warn)]',
+  bad: 'bg-red-50 text-[var(--color-bad)]', info: 'bg-[var(--color-brand-soft)] text-[var(--color-brand)]',
+  muted: 'bg-gray-100 text-[var(--color-ink-soft)]',
+}
+
+export function Badge({ tone, children, ...rest }: { tone: Tone; children: ReactNode } & HTMLAttributes<HTMLSpanElement>) {
+  return <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium ${TONE_CLS[tone]}`} {...rest}>{children}</span>
 }
 
 /** 就地编辑：点击变输入框，Enter/blur 提交，Esc 取消（YNAB 式交互 §1/§4） */
@@ -89,13 +92,15 @@ export function InlineText({ value, onSubmit, className, type = 'text', placehol
   )
 }
 
-/** 就地下拉：状态/优先级档位快速改 */
-export function InlineSelect({ value, options, onSubmit }: {
-  value: string; options: Record<string, string>; onSubmit: (v: string) => void
+/** 就地下拉：状态/优先级档位快速改；S41 起可传 tones 按当前值着色（色彩语义表在 types.ts，K23） */
+export function InlineSelect({ value, options, onSubmit, tones }: {
+  value: string; options: Record<string, string>; onSubmit: (v: string) => void; tones?: Record<string, Tone>
 }) {
+  const tone = tones?.[value]
   return (
     <select
-      className="cursor-pointer rounded bg-transparent px-1 py-0.5 text-[13px] outline-none hover:bg-[var(--color-brand-soft)]"
+      data-tone={tone}
+      className={`cursor-pointer rounded px-1 py-0.5 text-[13px] outline-none ${tone ? TONE_CLS[tone] : 'bg-transparent hover:bg-[var(--color-brand-soft)]'}`}
       value={value} onChange={(e) => onSubmit(e.target.value)}
     >
       {Object.entries(options).map(([v, l]) => <option key={v} value={v}>{l}</option>)}

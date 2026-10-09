@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { dayNum, computeAxis, barLayout, monthTicks } from './gantt'
+import { dayNum, computeAxis, barLayout, monthTicks, pointPct } from './gantt'
 
 // PRD S30-3/S30-4（v0.29）— 甘特布局纯函数：日历日差运算（无时区语义）、
 // 轴窗口自适应、条形四形态（区间/截止旗/开放条/未排期=null）、月刻度。
@@ -53,5 +53,16 @@ describe('S30 甘特布局纯函数', () => {
     expect(ticks.map((t) => t.label)).toEqual(['2026-08', '2026-09', '2026-10'])
     for (let i = 1; i < ticks.length; i++) expect(ticks[i].leftPct).toBeGreaterThan(ticks[i - 1].leftPct)
     expect(ticks.at(-1)!.leftPct).toBeLessThanOrEqual(100)
+  })
+
+  it('S42-4: pointPct 单日期定位（里程碑刻度），轴外日期钳制到端点', () => {
+    const axis = computeAxis([{ planStartDate: '2026-09-01', planEndDate: '2026-10-15' }], '2026-09-20', 0)!
+    const pct = (d: string) => ((dayNum(d) - axis.start) / axis.totalDays) * 100
+    expect(pointPct('2026-09-01', axis)).toBeCloseTo(0, 5) // 轴起点
+    expect(pointPct('2026-10-15', axis)).toBeCloseTo(pct('2026-10-15'), 5)
+    expect(pointPct('2026-09-20', axis)).toBeCloseTo(pct('2026-09-20'), 5)
+    // 轴外钳制：早于起点→0，晚于终点→100（里程碑超出任务日期范围时不飞出轨道）
+    expect(pointPct('2020-01-01', axis)).toBe(0)
+    expect(pointPct('2099-01-01', axis)).toBe(100)
   })
 })
