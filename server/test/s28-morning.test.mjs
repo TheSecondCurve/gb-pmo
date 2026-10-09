@@ -4,6 +4,7 @@ import { morningReport } from '../engine/morning.js'
 import { addEvent } from '../engine/events.js'
 import { upsertChannel } from '../engine/tasks.js'
 import { handleBotEvent } from '../brain/bot/command.js'
+import { flattenCard } from './bot-kit.mjs'
 
 // PRD S28（v0.27）— 今日晨报：按会话自动定域（专题群=本群项目；私聊/web=全部在跑项目）
 // engine 确定性组装（北京日窗：昨日零点起），/morning 斜杠零 LLM，NL 走 morning 读侧动作。
@@ -102,16 +103,18 @@ describe('S28 今日晨报', () => {
   it('S28-1: 私聊 /morning——全部在跑项目晨报，零 LLM（不传 llm 也能回）', async () => {
     ctx = await setupApp()
     await seed()
+    // v0.50（S45）：晨报出口为消息卡片（私聊同群聊），内容口径不变——断言拍平卡片文本
     const rec = recorder()
     const out = await handleBotEvent(ctx.db, p2p('fs_zhang', '/morning'), { send: rec.send, secret: SECRET })
     expect(out.result).toBe('replied')
-    expect(rec.sent[0].text).toContain('项目大脑晨报')
-    expect(rec.sent[0].text).toContain('客户M甲系统')
-    expect(rec.sent[0].text).toContain('客户M乙系统')
+    const flat = flattenCard(rec.sent[0].card)
+    expect(flat).toContain('项目大脑晨报')
+    expect(flat).toContain('客户M甲系统')
+    expect(flat).toContain('客户M乙系统')
     // 别名 /晨报 与 /today 等价
     const rec2 = recorder()
     await handleBotEvent(ctx.db, p2p('fs_zhang', '/晨报'), { send: rec2.send, secret: SECRET })
-    expect(rec2.sent[0].text).toContain('项目大脑晨报')
+    expect(flattenCard(rec2.sent[0].card)).toContain('项目大脑晨报')
     // 未绑定成员：项目数据不漏，回绑定引导
     const rec3 = recorder()
     const g = await handleBotEvent(ctx.db, p2p('fs_stranger', '/morning'), { send: rec3.send, secret: SECRET })
@@ -126,13 +129,15 @@ describe('S28 今日晨报', () => {
     const rec = recorder()
     const out = await handleBotEvent(ctx.db, group('fs_zhang', 'oc_s28_g', '/morning'), { send: rec.send, secret: SECRET })
     expect(out.result).toBe('replied')
-    expect(rec.sent[0].text).toContain('客户M甲系统')
-    expect(rec.sent[0].text).not.toContain('客户M乙系统')
+    // v0.50（S45）：卡片拍平后内容口径不变——只含本群项目
+    const flat = flattenCard(rec.sent[0].card)
+    expect(flat).toContain('客户M甲系统')
+    expect(flat).not.toContain('客户M乙系统')
     // 通用群（已登记 general）：无默认项目 → 与私聊同域（全部在跑项目）
     upsertChannel(ctx.db, { platform: 'feishu', groupKey: 'oc_s28_gen', name: '大群', channelType: 'general' })
     const rec2 = recorder()
     await handleBotEvent(ctx.db, group('fs_zhang', 'oc_s28_gen', '/morning'), { send: rec2.send, secret: SECRET })
-    expect(rec2.sent[0].text).toContain('客户M乙系统')
+    expect(flattenCard(rec2.sent[0].card)).toContain('客户M乙系统')
   })
 
   it('S28-3: NL 走 morning 读侧动作（计入查询限额）；web 会话两路径一致', async () => {

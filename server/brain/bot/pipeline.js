@@ -104,7 +104,8 @@ async function slashMorning(db, env, reply) {
   }
   try {
     const r = morningReport(db, { projectId: morningScopeProjectId(db, env) })
-    return reply(r.text, { memberId: env.member.id, intent: 'morning', result: 'replied' })
+    // S45：structured 随 reply 透传——IM 适配器渲染消息卡片；web reply 忽略该字段，仍收纯文本（双入口契约）
+    return reply(r.text, { memberId: env.member.id, intent: 'morning', result: 'replied', structured: { kind: 'morning', data: r } })
   } catch (e) {
     return reply(`晨报生成失败：${e.message}`, { memberId: env.member.id, intent: 'morning', result: 'error' })
   }
@@ -117,7 +118,7 @@ async function slashTasks(db, env, reply) {
   }
   try {
     const r = tasksInventory(db, { projectId: morningScopeProjectId(db, env) })
-    return reply(r.text, { memberId: env.member.id, intent: 'tasks', result: 'replied' })
+    return reply(r.text, { memberId: env.member.id, intent: 'tasks', result: 'replied', structured: { kind: 'tasks', data: r } })
   } catch (e) {
     return reply(`任务盘点生成失败：${e.message}`, { memberId: env.member.id, intent: 'tasks', result: 'error' })
   }

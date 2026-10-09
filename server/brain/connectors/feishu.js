@@ -153,25 +153,39 @@ export async function sendText(cfg, chatId, text) {
   return postMessage(cfg, 'chat_id', chatId, 'text', { text })
 }
 
-/** 发消息卡片（S20 确认卡）。 */
+/** 发 post 富文本（S45：段落/粗体/链接结构化渲染；content 由 bot/format.js 确定性生成）。 */
+export async function sendPost(cfg, chatId, content) {
+  return postMessage(cfg, 'chat_id', chatId, 'post', content)
+}
+
+/** 发消息卡片（S20 确认卡；S45 晨报/盘点卡）。 */
 export async function sendCard(cfg, chatId, card) {
   return postMessage(cfg, 'chat_id', chatId, 'interactive', card)
 }
 
-/** 编辑应用已发送的文本消息（S20-19 私聊占位反馈：「收到，正在处理…」原地替换为最终答复）。
+/** 编辑应用已发送的消息（S20-19 私聊占位反馈：「收到，正在处理…」原地替换为最终答复）。
  *  「更新应用发送的消息内容」PUT /im/v1/messages/:message_id——仅应用自己发的 text/post 可编辑，
  *  需 im:message:update 权限；content 为全量替换（非增量）。失败 throw 由调用方降级为另发新消息。 */
-export async function patchText(cfg, messageId, text) {
+async function patchMessage(cfg, messageId, msgType, content) {
   const token = await tenantToken(cfg)
   const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-    body: JSON.stringify({ msg_type: 'text', content: JSON.stringify({ text }) }),
+    body: JSON.stringify({ msg_type: msgType, content: JSON.stringify(content) }),
   })
   if (!res.ok) throw Object.assign(new Error(`飞书编辑消息 HTTP ${res.status}`), { statusCode: 502 })
   const data = await res.json()
   if (data.code !== 0) throw Object.assign(new Error(`飞书编辑消息失败(${data.code}): ${data.msg}`), { statusCode: 502 })
   return { ok: true }
+}
+
+export async function patchText(cfg, messageId, text) {
+  return patchMessage(cfg, messageId, 'text', { text })
+}
+
+/** 编辑为 post 富文本（S45-1：占位消息按最终答复类型同型编辑，text→text、post→post）。 */
+export async function patchPost(cfg, messageId, content) {
+  return patchMessage(cfg, messageId, 'post', content)
 }
 
 /** 群信息（external 字段用于 S20-7 外部群拒答；调用方负责缓存）。 */
