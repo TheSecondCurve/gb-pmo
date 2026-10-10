@@ -82,6 +82,7 @@ export const PROPOSAL_KINDS = {
     apply(db, payload, by) {
       return tasks.createTask(db, {
         projectId: Number(payload.projectId), title: payload.title,
+        ...(payload.taskKind ? { kind: payload.taskKind } : {}), // S57：任务分类（bot 协议字段名 taskKind，避开提议判别符 kind）
         ...(payload.responsibleMemberId != null ? { responsibleMemberId: Number(payload.responsibleMemberId) } : {}),
         ...(payload.planStartDate ? { planStartDate: payload.planStartDate } : {}),
         ...(payload.planEndDate ? { planEndDate: payload.planEndDate } : {}),

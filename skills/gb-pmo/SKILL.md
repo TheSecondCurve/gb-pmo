@@ -140,6 +140,8 @@ client.sh action generate_person_digest '{}'
 | source | TEXT | template|manual|extraction|suggestion |
 | updated_at | INTEGER |  |
 | deleted_at | INTEGER |  |
+| kind | TEXT |  |
+| reminded_at | INTEGER |  |
 
 ### milestones
 
@@ -220,6 +222,7 @@ client.sh action generate_person_digest '{}'
 | status | TEXT | sent|failed|skipped |
 | error | TEXT |  |
 | message_id | TEXT |  |
+| group_key | TEXT |  |
 
 ### settings
 
@@ -420,6 +423,7 @@ client.sh action generate_person_digest '{}'
 - **projectTypeStatus**: active=启用、disabled=停用
 - **priority**: high=高、medium=中、low=低
 - **taskStatus**: todo=未开始、doing=进行中、done=完成
+- **taskKind**: work=工作、reminder=纯提醒
 - **taskSource**: template=模板、manual=手动、extraction=抽取、suggestion=建议采纳
 - **milestoneStatus**: planned=计划中、met=已达成、missed=已延误、cancelled=已取消
 - **channelPlatform**: feishu=飞书、wecom=企业微信
@@ -428,7 +432,7 @@ client.sh action generate_person_digest '{}'
 - **eventType**: progress=进展、risk=风险、decision=决策、blocker=阻塞、finance=财务记录、schedule_change=排期变更、status_change=状态变更、suggestion=建议、owner_change=责任人变更、priority_change=优先级变更
 - **eventStatus**: pending=待确认、effective=已生效、rejected=已驳回、expired=已超时
 - **eventGenerator**: extraction=IM 抽取、digest=梳理建议、agent=Agent 口述、web=页面操作、system=系统
-- **pushType**: daily_report=日报、digest=梳理、alert=预警、test=测试
+- **pushType**: daily_report=日报、digest=梳理、alert=预警、reminder=提醒、test=测试
 - **tokenScope**: read=只读、write=读写
 - **botCommandKind**: command=指令、card=卡片回调、bot_reply=机器人回复
 - **botCommandResult**: replied=已回复、clarified=已追问、guidance=绑定引导、bound=已绑定、card_sent=已发确认卡、confirmed=已确认生效、rejected=已驳回、refused_permission=权限不足、refused_quota=超出限额、refused_external=外部群拒答、refused_unregistered=未登记群拒答、ignored_unbound=未绑定忽略、ignored_dedup=重复忽略、refused_not_mentioned=未@机器人忽略、no_llm=LLM 未配置、error=错误
