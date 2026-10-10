@@ -604,3 +604,27 @@ describe('S4-8 讨论面分栏（v0.47）', () => {
     expect(colOther.getByText(/二期范围砍半/)).toBeTruthy()
   })
 })
+
+// S46（v0.51，K29）通知收件箱冒烟：推送记录列表渲染（类型/状态/标题/正文）
+describe('S46 通知收件箱（v0.51）', () => {
+  it('S46-4: 通知页渲染本人推送记录（类型标签/投递状态/标题/正文）', async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/v1/pushes')) {
+        return new Response(JSON.stringify({
+          pushes: [{
+            id: 1, pushType: 'daily_report', title: '项目大脑日报 2026-10-10', body: '【我的任务】未完 3 项',
+            status: 'skipped', error: '飞书凭证未配置', createdAt: 1760000000000,
+          }],
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ member: { id: 1, name: '甲', role: 'member' } }), { status: 200 })
+    }) as unknown as typeof fetch
+    location.hash = '#/pushes'
+    render(<StoreProvider><App /></StoreProvider>)
+    expect(await screen.findByText('项目大脑日报 2026-10-10')).toBeTruthy()
+    expect(screen.getByText('日报')).toBeTruthy() // 类型中文标签
+    expect(screen.getByText('未投递')).toBeTruthy() // skipped 中文状态
+    expect(screen.getByText(/未完 3 项/)).toBeTruthy()
+  })
+})

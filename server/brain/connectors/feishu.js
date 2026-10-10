@@ -153,6 +153,16 @@ export async function sendText(cfg, chatId, text) {
   return postMessage(cfg, 'chat_id', chatId, 'text', { text })
 }
 
+/** S46（v0.51，K29）推送链路：应用身份私聊成员（receive_id_type=open_id）——日报/预警/梳理真实投递。 */
+export async function sendTextToUser(cfg, openId, text) {
+  return postMessage(cfg, 'open_id', openId, 'text', { text })
+}
+
+/** S46：私聊成员的 post 富文本形态（多行/粗体/链接，与 sendTextToUser 同通道）。 */
+export async function sendPostToUser(cfg, openId, content) {
+  return postMessage(cfg, 'open_id', openId, 'post', content)
+}
+
 /** 发 post 富文本（S45：段落/粗体/链接结构化渲染；content 由 bot/format.js 确定性生成）。 */
 export async function sendPost(cfg, chatId, content) {
   return postMessage(cfg, 'chat_id', chatId, 'post', content)

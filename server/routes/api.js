@@ -10,6 +10,7 @@ import * as proposalsEngine from '../engine/proposals.js' // S25 通用提议确
 import { getAllSettings, setSetting, getSetting } from '../engine/settings.js'
 import { queryMetric, listMetrics } from '../engine/metrics.js'
 import { assertValue } from '../engine/enums.js'
+import { listPushes } from '../brain/push.js' // S46 通知收件箱
 
 export function registerApiRoutes(app) {
   const db = app.db
@@ -65,6 +66,12 @@ export function registerApiRoutes(app) {
     const out = issueBindCode(db, req.member.id)
     auth.audit(db, { memberId: req.member.id, action: 'bot.bindCode', objectType: 'member', objectId: req.member.id })
     return out
+  })
+
+  // S46（v0.51）：通知收件箱——本人推送记录（日报/预警/梳理/建议通知；投递状态三态：sent/failed/skipped）
+  app.get('/api/v1/pushes', async (req) => {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200)
+    return { pushes: listPushes(db, { recipientMemberId: req.member.id, limit }) }
   })
 
   // —— 成员（D1 全员透明：查看全员可；维护管理员）——

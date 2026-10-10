@@ -1,11 +1,12 @@
 // 大脑·预警（S7，v0.6）：关键人逾期未完任务 → 推老板+本人；关键人过载 → 老板视图标红并推送。
+// v0.51（S46）：推送经 opts.send 注入的投递层真实下发（缺省走飞书配置；失败落行不阻塞）。
 
 import { camelizeRows } from '../db/index.mjs'
 import { overdueTasksOf, taskRefMap, formatTaskRefs } from '../engine/tasks.js'
 import { queryMetric } from '../engine/metrics.js'
 import { notifyMember, notifyAdmins } from './push.js'
 
-export function evaluateAlerts(db) {
+export async function evaluateAlerts(db, { send } = {}) {
   const alerts = []
 
   // S7-1（v0.6 口径）：关键人名下逾期未完任务 ≥1
@@ -20,8 +21,8 @@ export function evaluateAlerts(db) {
       return `- ${d.projectName}「${d.title}」截止 ${d.planEndDate}，已逾期${refs ? `\n  参考：${refs}` : ''}`
     })
     const body = `你有 ${ods.length} 项逾期未完任务：\n${lines.join('\n')}`
-    notifyMember(db, m, { pushType: 'alert', title: `逾期任务预警：${m.name}`, body })
-    notifyAdmins(db, { pushType: 'alert', title: `逾期任务预警：${m.name}（${ods.length} 项）`, body })
+    await notifyMember(db, m, { pushType: 'alert', title: `逾期任务预警：${m.name}`, body }, { send })
+    await notifyAdmins(db, { pushType: 'alert', title: `逾期任务预警：${m.name}（${ods.length} 项）`, body }, { send })
     alerts.push({ type: 'overdue_tasks', memberId: m.id, count: ods.length, projects: [...new Set(ods.map((d) => d.project_id || d.projectId))] })
   }
 
@@ -30,7 +31,7 @@ export function evaluateAlerts(db) {
   for (const row of load.rows) {
     if (!row.overloaded) continue
     const body = `${row.member} 并行参与 ${row.parallelProjects} 个进行中项目（上限 ${row.maxParallelProjects}），未完任务 ${row.openTasks} 项。`
-    notifyAdmins(db, { pushType: 'alert', title: `负载预警：${row.member}`, body })
+    await notifyAdmins(db, { pushType: 'alert', title: `负载预警：${row.member}`, body }, { send })
     alerts.push({ type: 'overloaded', member: row.member, parallelProjects: row.parallelProjects, max: row.maxParallelProjects })
   }
   return { alerts }

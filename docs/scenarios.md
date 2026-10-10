@@ -443,6 +443,18 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S45-2 | /morning 与 /tasks 应以消息卡片呈现：标题栏 + 分项目 section；单项目域任务清单应以多列布局呈现（任务/状态·截止/责任人）；多项目域与超长段落应退化为分节文本行；web 端同一命令仍应收纯文本 | `server/test/s45-bot-rich-format.test.mjs`（含 web 契约用例） |
 | S45-3 | 卡片/post 发送失败应降级为纯文本补发；`bot_reply` 审计行应落完整纯文本（与卡片/富文本同内容），多轮上下文口径不变 | `server/test/s45-bot-rich-format.test.mjs` |
 
+## S46（P0）— 系统（大脑·推送通道）/全员 — 推送链路真实投递与通知收件箱（v0.51）
+
+日报/预警/梳理/建议通知此前只写 `pushes` 表不投递（真实触达率为零）。投递层升格为「投递+落库」：飞书 open_id 私聊真实下发（post/text 分流），三态落行 sent/failed/skipped（失败不阻塞调用方）；web 新增「通知」收件箱（#/pushes，仅本人）。企微维持只落库。决策见 design.md K29。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S46-1 | 当接收人已绑定 feishu_id 且飞书凭证已配置时，推送应经应用身份以 `receive_id_type=open_id` 私聊真实投递；成功时 `pushes` 行 `status='sent'` 且记录飞书 `message_id`；多行/含链接的正文以 post 富文本发送，单行纯文本发 text | `server/test/s46-push-delivery.test.mjs` |
+| S46-2 | 当飞书投递失败时（上游报错/网络异常），`pushes` 行应落 `status='failed'` 并记录 error 原因；单个接收人失败不影响其余接收人，也不向调用方抛错 | `server/test/s46-push-delivery.test.mjs` |
+| S46-3 | 当接收人无 IM 身份、或飞书凭证未配置时，应落 `status='skipped'` 且 `error` 写明原因；企微成员维持只落库不投递 | `server/test/s46-push-delivery.test.mjs` |
+| S46-4 | 当成员打开 web「通知」页（#/pushes）时，应看到自己的推送记录（类型中文标签/标题/正文/北京时刻/投递状态），接口仅返回本人数据；IM 未配置时收件箱仍可读 | `server/test/s46-push-delivery.test.mjs` + `src/smoke.test.tsx`（前端冒烟） |
+| S46-5 | 当日报/预警/梳理/建议通知链路产出推送时，应全部经过同一投递层（三态落行语义一致），不再只写库不发送 | `server/test/s46-push-delivery.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

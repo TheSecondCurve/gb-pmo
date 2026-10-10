@@ -218,6 +218,8 @@ client.sh action generate_person_digest '{}'
 | body | TEXT |  |
 | channel_platform | TEXT |  |
 | status | TEXT | sent|failed|skipped |
+| error | TEXT |  |
+| message_id | TEXT |  |
 
 ### settings
 

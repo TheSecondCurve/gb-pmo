@@ -88,6 +88,10 @@ export const api = {
     req<{ rejected: number[]; failed: { id: number; message: string }[] }>('POST', '/api/v1/events/reject-batch', { ids }),
   pendingEvents: () => req<{ events: import('./types').EventRow[] }>('GET', '/api/v1/events/pending'),
 
+  // S46（v0.51）：通知收件箱（仅本人推送记录）
+  pushes: (limit?: number) =>
+    req<{ pushes: import('./types').PushRow[] }>('GET', `/api/v1/pushes${limit ? `?limit=${limit}` : ''}`),
+
   // S25 通用提议：确认/驳回（与飞书卡片同一口子，权限矩阵在 engine）
   confirmProposal: (id: number) => req('POST', `/api/v1/proposals/${id}/confirm`, {}),
   rejectProposal: (id: number) => req('POST', `/api/v1/proposals/${id}/reject`, {}),

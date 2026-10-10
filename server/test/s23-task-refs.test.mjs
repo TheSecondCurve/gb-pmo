@@ -111,7 +111,7 @@ describe('S23 任务参考资料', () => {
     expect(plainPush.body).not.toContain('【参考资料】')
 
     // 逾期预警：任务行附带参考资料
-    evaluateAlerts(ctx.db)
+    await evaluateAlerts(ctx.db)
     const alertPush = ctx.db.prepare(`SELECT * FROM pushes WHERE push_type = 'alert' AND recipient_member_id = ? AND title LIKE '%逾期任务预警%'`).get(ctx.members.key.id)
     expect(alertPush.body).toContain(taskB.title)
     expect(alertPush.body).toContain(`验收清单 https://kb.example.com/accept`)

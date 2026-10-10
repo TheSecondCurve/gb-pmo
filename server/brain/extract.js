@@ -14,7 +14,7 @@ import * as wecom from './connectors/wecom.js'
 const CONNECTORS = { feishu, wecom }
 
 /** 定时/按需触发入口（action 端点 / 调度器）：按渠道配置拉增量并抽取。 */
-export async function runExtraction(db, { channelId, projectId } = {}, { llm } = {}) {
+export async function runExtraction(db, { channelId, projectId } = {}, { llm, send } = {}) {
   const channels = camelizeRows(
     channelId
       ? db.prepare('SELECT * FROM channels WHERE id = ?').all(channelId)
@@ -26,7 +26,7 @@ export async function runExtraction(db, { channelId, projectId } = {}, { llm } =
     const cfg = getSetting(db, `im.${ch.platform}`)
     try {
       const { messages, nextCursor } = await CONNECTORS[ch.platform].fetchMessages(cfg, ch, ch.cursor)
-      const ingested = await ingestMessages(db, ch, messages, { llm })
+      const ingested = await ingestMessages(db, ch, messages, { llm, send })
       db.prepare('UPDATE channels SET cursor = ?, last_pull_at = ? WHERE id = ?').run(nextCursor, Date.now(), ch.id)
       results.push({ channelId: ch.id, platform: ch.platform, pulled: messages.length, ...ingested })
     } catch (e) {
@@ -36,11 +36,11 @@ export async function runExtraction(db, { channelId, projectId } = {}, { llm } =
   // S3-5：采纳率告警（周窗口低于阈值 → 告警管理员）
   const alarm = acceptanceAlarm(db)
   if (alarm) {
-    notifyAdmins(db, {
+    await notifyAdmins(db, {
       pushType: 'alert',
       title: `大脑抽取采纳率低于阈值（${Math.round(alarm.rate * 100)}% < ${Math.round(alarm.threshold * 100)}%）`,
       body: `近 7 天生成建议 ${alarm.generated} 条，被采纳 ${alarm.accepted} 条。请在配置台调整抽取策略或阈值。`,
-    })
+    }, { send })
     results.push({ acceptanceAlarm: alarm })
   }
   return { channels: results }
@@ -51,7 +51,7 @@ export async function runExtraction(db, { channelId, projectId } = {}, { llm } =
  * 每条消息：身份映射 → （通用群）分拣 → LLM 抽取 → 事件写入。
  * S20-10：机器人已处理/已回复的消息（bot_commands 有 message_id）跳过，防同一消息双入库。
  */
-export async function ingestMessages(db, channel, messages, { llm: llmOverride } = {}) {
+export async function ingestMessages(db, channel, messages, { llm: llmOverride, send } = {}) {
   const llm = getLlm(db, llmOverride)
   const stats = { events: 0, suggestions: 0, unrouted: 0, unknownSpeakers: 0, botProcessed: 0 }
   const botSeen = db.prepare('SELECT 1 FROM bot_commands WHERE message_id = ?')
@@ -102,7 +102,7 @@ export async function ingestMessages(db, channel, messages, { llm: llmOverride }
       })
       if (created.status === 'pending') {
         stats.suggestions += 1
-        pushSuggestion(db, created)
+        await pushSuggestion(db, created, { send })
       } else {
         stats.events += 1
       }
@@ -113,8 +113,9 @@ export async function ingestMessages(db, channel, messages, { llm: llmOverride }
 
 /** 建议推送（S3-4/S20-2 共用）：目标任务责任人 + 项目牵头人（去重），记 pushed_to。
  *  里程碑目标（S35，target_object='milestone'，id 复用 target_task_id 列）无责任人语义，
- *  且不得按同 id 任务误 JOIN 责任人——只推项目牵头人。 */
-export function pushSuggestion(db, evt) {
+ *  且不得按同 id 任务误 JOIN 责任人——只推项目牵头人。
+ *  v0.51（S46/K29）：经投递层真实下发（send 注入点；缺省走飞书配置），失败落行不阻塞。 */
+export async function pushSuggestion(db, evt, { send } = {}) {
   const target = evt.targetTaskId && evt.targetObject !== 'milestone'
     ? db.prepare('SELECT responsible_member_id AS rid FROM tasks WHERE id = ? AND deleted_at IS NULL').get(evt.targetTaskId)
     : null
@@ -123,12 +124,12 @@ export function pushSuggestion(db, evt) {
   for (const rid of recipients) {
     const m = db.prepare('SELECT * FROM members WHERE id = ?').get(rid)
     if (m) {
-      notifyMember(db, camelizeRow(m), {
+      await notifyMember(db, camelizeRow(m), {
         pushType: 'digest',
         title: `待确认建议：${evt.summary}`,
         body: `事件 #${evt.id}（${evt.eventType}）待你确认：同意后生效，驳回则忽略。`,
         projectId: evt.projectId,
-      })
+      }, { send })
     }
   }
   markPushedTo(db, evt.id, recipients)

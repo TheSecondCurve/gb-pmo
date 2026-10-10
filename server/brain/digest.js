@@ -12,7 +12,7 @@ import { notifyMember } from './push.js'
 const DAY = 86400000
 
 /** S15 项目梳理：任务面 + 讨论面双来源汇总，每条结论带依据引用。 */
-export async function projectDigest(db, projectId, { llm: llmOverride, windowDays = 7 } = {}) {
+export async function projectDigest(db, projectId, { llm: llmOverride, windowDays = 7, send } = {}) {
   const llm = getLlm(db, llmOverride)
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId)
   if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
@@ -80,14 +80,14 @@ export async function projectDigest(db, projectId, { llm: llmOverride, windowDay
   const title = `项目梳理：${project.name}${silent ? '（项目沉默）' : ''}`
   const body = `${silent ? '⚠ 项目沉默：近窗口无事件且无任务变动。\n' : ''}${narrative}\n\n任务面：\n${taskPlane}\n\n建议 ${createdSuggestions.length} 条（待确认生效）`
   if (lead) {
-    notifyMember(db, camelizeRow(lead), { pushType: 'digest', title, body, projectId })
+    await notifyMember(db, camelizeRow(lead), { pushType: 'digest', title, body, projectId }, { send })
     for (const evt of createdSuggestions) markPushedTo(db, evt.id, [lead.id])
   }
   return { projectId, title, narrative, silent, taskCount: tasks.length, overdueCount: overdue.length, unassignedCount: unassigned.length, eventCount: events.length, suggestions: createdSuggestions }
 }
 
 /** S16 员工梳理：跨项目任务 + 被依赖 + 排期冲突 + 超时待确认置顶。 */
-export async function personDigest(db, memberId, { llm: llmOverride } = {}) {
+export async function personDigest(db, memberId, { llm: llmOverride, send } = {}) {
   const llm = getLlm(db, llmOverride)
   const member = db.prepare('SELECT * FROM members WHERE id = ?').get(memberId)
   if (!member) throw Object.assign(new Error('成员不存在'), { statusCode: 404 })
@@ -135,7 +135,7 @@ export async function personDigest(db, memberId, { llm: llmOverride } = {}) {
   narrative ||= `你有 ${tasks.length} 项未完任务（逾期 ${overdue.length}）、排期冲突 ${conflicts.length} 处、超时待确认建议 ${timedOut.length} 条。${overdue.length ? '建议优先处理逾期项。' : ''}`
 
   const body = `${timedOut.length ? `⏰ 超时待确认（置顶）：\n${timedOut.map((e) => `- ${e.summary}（事件#${e.id}）`).join('\n')}\n\n` : ''}${narrative}\n\n任务：\n${taskLines}${conflicts.length ? `\n\n排期冲突：\n${conflicts.map(([a, b]) => `- ${a.title}（${a.planStartDate}~${a.planEndDate}）与 ${b.title}（${b.planStartDate}~${b.planEndDate}）重叠`).join('\n')}` : ''}`
-  notifyMember(db, camelizeRow(member), { pushType: 'digest', title: `个人梳理：${member.name}`, body })
+  await notifyMember(db, camelizeRow(member), { pushType: 'digest', title: `个人梳理：${member.name}`, body }, { send })
 
   return { memberId, narrative, taskCount: tasks.length, overdueCount: overdue.length, conflictCount: conflicts.length, timedOutSuggestions: timedOut.length, timedOut, conflicts }
 }

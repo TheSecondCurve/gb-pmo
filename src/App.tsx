@@ -8,6 +8,7 @@ import Projects, { type PortfolioView } from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
 import Admin from './pages/Admin'
 import Chat from './pages/Chat'
+import Pushes from './pages/Pushes'
 
 // hash 路由（自写，静态托管无需 history fallback）
 function useHashRoute(): [string, (to: string) => void] {
@@ -44,6 +45,7 @@ export default function App() {
   else if (path === '/projects') page = <Projects view="table" />
   else if (pvm) page = <Projects view={pvm[1] as PortfolioView} />
   else if (path === '/chat') page = <Chat /> // S24 AI 助手（全员）
+  else if (path === '/pushes') page = <Pushes /> // S46 通知收件箱（全员，仅本人）
   else if (m) page = <ProjectDetail id={Number(m[1])} />
   else if (path === '/admin' || path.startsWith('/admin/')) {
     // 配置台二级路由：#/admin/<section>/<tab>（S17，仅系统管理员；Shell 负责缺省段归一化）
@@ -58,6 +60,7 @@ export default function App() {
     ['#/dashboard', '全局看板'],
     ['#/projects', '项目列表'],
     ['#/chat', 'AI 助手'],
+    ['#/pushes', '通知'], // S46 通知收件箱
     ...(member.role === 'admin' ? [['#/admin', '配置台'] as [string, string]] : []),
   ]
   // 选中态：#/admin 深链（#/admin/<sec>/<tab>）与 #/projects 深链（#/projects/<view>，S30）也高亮；#/ 与 #/dashboard 同页
