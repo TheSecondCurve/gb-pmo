@@ -363,6 +363,7 @@ ${schemaDigest(db)}
 {"action":"brief","projectId":1}               项目 Brief：一次取全单个项目摘要（概况/任务盘子/进行中/近期进展/下一步/风险，含中文标签）——用户整体问询某项目（「XX项目怎么样/Brief」）时优先用它，取不到再 fallback query
 {"action":"morning","projectId":1?}            今日晨报：按会话自动定域（项目专题群=本群项目；私聊/其他=全部在跑项目；可显式给 projectId 取单项目）——用户要「晨报/早报/今天的情况汇总」时优先用它
 {"action":"recent_chat","limit":20}            本群最近讨论（仅项目专题群；用户提到「刚才/上面/刚才讨论的」而对话历史不足以理解时，先读它再作答/起建议）——其余会话该动作返回不可用说明
+{"action":"minutes","hours":2}               群讨论纪要拉取（仅项目专题群；默认 2h、上限 6h；S54：用户要「纪要/总结讨论/记一下」时先拉取，再浓缩为三段式纪要【结论/待办/风险，标注发言人】，末尾附「回复『归档』沉淀为项目记录」；讨论为空明说，不编造；用户随后说「归档/记下来」时用 record_event 落 decision 记录）
 {"action":"write","kind":"record_event","payload":{"projectId":1,"eventType":"progress|risk|decision|blocker","summary":"一句中文"}}
 {"action":"write","kind":"suggest_event","payload":{"targetTaskId":1,"targetField":"status|plan_start_date|plan_end_date|responsible_member_id","targetValue":"done|YYYY-MM-DD|成员id","summary":"可选，缺省自动生成"}}  任务变更：直接生效并回执（落建议型事件留痕，发令人即生效人）
 {"action":"write","kind":"suggest_event","payload":{"items":[{"targetTaskId":1,"targetField":"status","targetValue":"done"},{"targetTaskId":2,"targetField":"plan_end_date","targetValue":"2026-12-31"}]}}  一条指令含多个变更时用 items 批量（≤20 条，逐条生效、汇总回执单列失败原因）

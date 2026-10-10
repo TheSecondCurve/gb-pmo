@@ -12,7 +12,7 @@ import { morningReport } from '../../engine/morning.js'
 import { tasksInventory } from '../../engine/tasks.js'
 import { myWork, weekAhead, riskBoard } from '../../engine/statusBoard.js' // S53
 import { runAgentLoop } from './agent.js'
-import { runQueryTool, runMetricTool, runWriteTool, runBriefTool, runRecentChatTool } from './tools.js'
+import { runQueryTool, runMetricTool, runWriteTool, runBriefTool, runRecentChatTool, runMinutesTool } from './tools.js'
 
 // —— 帮助文案（按 surface；/bind 仅飞书私聊，web 清单不出现） ——
 
@@ -235,6 +235,13 @@ export function makeExecTool(db, env, { llm, sqlLog = [], fetchChat } = {}) {
         return await runRecentChatTool(db, env, { fetchChat, limit: parsed.limit })
       } catch (e) {
         return `recent_chat 失败：${e.message}（可改用 query 查已抽取事件，或让用户直接复述讨论结论）`
+      }
+    }
+    if (parsed.action === 'minutes') { // S54：群讨论纪要拉取（仅专题群；计入查询限额）
+      try {
+        return await runMinutesTool(db, env, { fetchChat, limit: parsed.limit, hours: parsed.hours })
+      } catch (e) {
+        return `minutes 失败：${e.message}`
       }
     }
     if (parsed.action === 'brief') {

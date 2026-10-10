@@ -532,6 +532,17 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S53-3 | 当成员发 `/risk`（`/风险`）时，应返回全局风险板：逾期任务（项目/责任人/超期天数）、沉默项目（天数）、未指派任务计数、关键人过载清单；各项为空时明确标注而非省略 | `server/test/s53-slash-commands.test.mjs` |
 | S53-4 | 三个命令应在 LLM 未配置、额度耗尽时照常可用（确定性、不占限额），`/help` 文案收录；web 与飞书两入口行为一致 | `server/test/s53-slash-commands.test.mjs` |
 
+## S54（P0）— 成员 — 全线（会话面，专题群主场景）— 群讨论纪要浓缩与归档（v0.59）
+
+`minutes` 读动作（仅专题群，默认 2h/上限 6h/≤50 条，不挪游标不产事件）拉讨论 → LLM 三段式纪要（结论/待办/风险，标注发言人）→ 用户确认「归档」经 record_event 落记录型事件。决策见 design.md K37。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S54-1 | 当专题群内 LLM 调用 `minutes` 动作时，应返回本群最近 N 小时（默认 2、上限 6）的尾端讨论（≤50 条，说话人经身份映射，机器人自身消息过滤）；私聊/通用群/未登记群/web 会话应返回不可用说明；不挪 channels.cursor、不产事件 | `server/test/s54-minutes.test.mjs` |
+| S54-2 | 当用户要纪要时，应先经 minutes 拉取讨论再产出三段式纪要（结论/待办/风险，标注发言人），末尾附「回复『归档』沉淀为项目记录」指引；讨论为空时明说而非编造 | `server/test/s54-minutes.test.mjs` |
+| S54-3 | 当用户随后确认归档（「归档/记下来」）时，应经 record_event 落记录型事件（自动生效，归爆发令人，摘要含纪要浓缩）；纪要内容可在项目事件流查到 | `server/test/s54-minutes.test.mjs` |
+| S54-4 | minutes 应计入有界循环查询次数（与 query/metric/recent_chat 同族限额） | `server/test/s54-minutes.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |
