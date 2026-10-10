@@ -521,6 +521,17 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S52-3 | 当缓冲排干过程失败时，行保持未消费（下轮重试）；已消费行超过 7 天滚动清理 | `server/test/s52-event-buffer.test.mjs` |
 | S52-4 | 当消息已被机器人指令处理/回复时（bot_commands 有 message_id 且非「未@忽略」行——忽略行不算已处理，正是缓冲要抽取的内容），既不去重缓冲也不进抽取（S20-10 口径不变）；缓冲消息仍受 S50 噪音预过滤约束 | `server/test/s52-event-buffer.test.mjs` |
 
+## S53（P0）— 成员 — 全线（会话面）— 确定性斜杠 /my /week /risk（v0.58）
+
+高频问询做确定性斜杠（零 LLM、不占限额、未配置可用）：/my=本人工作面，/week=本周到期（定域同晨报），/risk=全局风险板。引擎组装、IM 走 post、web 纯文本。决策见 design.md K36。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S53-1 | 当成员发 `/my`（`/我的`）时，应返回本人未完任务（项目/#id/标题/状态/截止日，逾期标注超期天数）+ 明日到期清单 + 待确认建议计数；全部在跑项目跨项目聚合 | `server/test/s53-slash-commands.test.mjs` |
+| S53-2 | 当成员发 `/week`（`/本周`）时，专题群应只返回本群绑定项目的本周到期任务与计划中里程碑，私聊/通用群/web 应返回全部在跑项目的本周到期项；窗口=本北京自然周 | `server/test/s53-slash-commands.test.mjs` |
+| S53-3 | 当成员发 `/risk`（`/风险`）时，应返回全局风险板：逾期任务（项目/责任人/超期天数）、沉默项目（天数）、未指派任务计数、关键人过载清单；各项为空时明确标注而非省略 | `server/test/s53-slash-commands.test.mjs` |
+| S53-4 | 三个命令应在 LLM 未配置、额度耗尽时照常可用（确定性、不占限额），`/help` 文案收录；web 与飞书两入口行为一致 | `server/test/s53-slash-commands.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

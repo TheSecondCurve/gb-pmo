@@ -10,6 +10,7 @@ import { updateMember } from '../../engine/members.js'
 import { bjDayStartMs } from '../../db/time.js'
 import { morningReport } from '../../engine/morning.js'
 import { tasksInventory } from '../../engine/tasks.js'
+import { myWork, weekAhead, riskBoard } from '../../engine/statusBoard.js' // S53
 import { runAgentLoop } from './agent.js'
 import { runQueryTool, runMetricTool, runWriteTool, runBriefTool, runRecentChatTool } from './tools.js'
 
@@ -17,21 +18,21 @@ import { runQueryTool, runMetricTool, runWriteTool, runBriefTool, runRecentChatT
 
 const HELP_IM = `我是项目大脑机器人，可以直接用自然语言使唤我：
 · 查询/汇总：「我的任务」「A 项目现在怎么样」「逾期有哪些」「总结一下 A 项目」
-· 任务盘点：/tasks（别名 /任务、/盘点）——项目群=本项目任务清单（未分配责任人置顶），私聊=全部在跑项目的未分配任务
+· 快捷命令（零等待）：/my（我的任务+明日到期+待确认）、/week（本周到期任务与里程碑）、/risk（全局风险板）、/morning（今日晨报）、/tasks（任务盘点）
 · 登记：「登记进展：接口联调完成」「登记风险：等客户环境」（记录型，直接生效）
 · 变更：「把任务 #12 标为完成」「任务 #12 推迟到 2026-10-05」「任务 #12 转给小王」（直接生效并回执；一条指令可含多个变更，批量一次办完）
 · 项目维护：「建个任务：XXX」「加个里程碑：XX 验收」「更新项目优先级为高」（牵头人/管理员直接生效）；「取消项目」「结项」会出确认卡，牵头人/管理员点按后才生效
 · 群登记：管理员或牵头人在群里 @我 说「这是 XX 项目的群」（直接登记生效）
 · 记忆：我记得本会话最近的对话（约 2 小时内、群聊含他人发言），发 /new 立刻清空重新开始
-· 命令：/bind <绑定码>（绑定飞书账号，仅私聊）、/new（开新话题，清空上下文）、/morning（今日晨报：项目群=本项目，私聊=全部在跑项目）、/tasks（任务盘点）、/help`
+· 命令：/bind <绑定码>（绑定飞书账号，仅私聊）、/new（开新话题）、/morning、/tasks、/my、/week、/risk、/help`
 
 const HELP_WEB = `我是项目大脑 AI 助手，直接用自然语言使唤我：
 · 查询/汇总：「我的任务」「A 项目现在怎么样」「逾期有哪些」「总结一下 A 项目」
-· 任务盘点：/tasks（别名 /任务、/盘点）——全部在跑项目的未分配责任人任务，按项目分组
+· 快捷命令（零等待）：/my（我的任务+明日到期+待确认）、/week（本周到期）、/risk（全局风险板）、/morning（今日晨报）、/tasks（任务盘点）
 · 登记：「登记进展：接口联调完成」「登记风险：等客户环境」（记录型，直接生效）
 · 变更：「把任务 #12 标为完成」「任务 #12 推迟到 2026-10-05」（直接生效并回执；一条指令可含多个变更，批量一次办完）；「取消项目」「结项」会生成待确认提议，页面上点「生效/驳回」后变更
 · 记忆：我记得本会话最近的对话，发 /new 立刻清空重新开始（也可左侧新建会话）
-· 命令：/new（别名 /clear，开新话题，清空上下文）、/morning（今日晨报：全部在跑项目）、/tasks（任务盘点）、/help`
+· 命令：/new（别名 /clear，开新话题，清空上下文）、/morning、/tasks、/my、/week、/risk、/help`
 
 export function helpText(surface) {
   return surface === 'web' ? HELP_WEB : HELP_IM
@@ -124,11 +125,52 @@ async function slashTasks(db, env, reply) {
   }
 }
 
+// —— S53（v0.58，K36）高频问询确定性斜杠：/my /week /risk（零 LLM、不占限额、未配置也可用） ——
+
+async function slashMy(db, env, reply) {
+  if (!env.member) {
+    return reply('还未识别你的飞书账号。请先在系统 web 端登录生成飞书绑定码（10 分钟内有效），再私聊我发送 /bind <绑定码> 完成绑定。', { intent: 'my', result: 'guidance' })
+  }
+  try {
+    const r = myWork(db, env.member.id)
+    return reply(r.text, { memberId: env.member.id, intent: 'my', result: 'replied' })
+  } catch (e) {
+    return reply(`生成失败：${e.message}`, { memberId: env.member.id, intent: 'my', result: 'error' })
+  }
+}
+
+async function slashWeek(db, env, reply) {
+  if (!env.member) {
+    return reply('还未识别你的飞书账号。请先在系统 web 端登录生成飞书绑定码（10 分钟内有效），再私聊我发送 /bind <绑定码> 完成绑定。', { intent: 'week', result: 'guidance' })
+  }
+  try {
+    const r = weekAhead(db, { projectId: morningScopeProjectId(db, env) })
+    return reply(r.text, { memberId: env.member.id, intent: 'week', result: 'replied' })
+  } catch (e) {
+    return reply(`生成失败：${e.message}`, { memberId: env.member.id, intent: 'week', result: 'error' })
+  }
+}
+
+async function slashRisk(db, env, reply) {
+  if (!env.member) {
+    return reply('还未识别你的飞书账号。请先在系统 web 端登录生成飞书绑定码（10 分钟内有效），再私聊我发送 /bind <绑定码> 完成绑定。', { intent: 'risk', result: 'guidance' })
+  }
+  try {
+    const r = riskBoard(db)
+    return reply(r.text, { memberId: env.member.id, intent: 'risk', result: 'replied' })
+  } catch (e) {
+    return reply(`生成失败：${e.message}`, { memberId: env.member.id, intent: 'risk', result: 'error' })
+  }
+}
+
 const SLASH_COMMANDS = {
   '/bind': { surfaces: ['im'], run: slashBind },
   '/new': { surfaces: ['im', 'web'], aliases: ['/clear'], run: slashNew },
   '/morning': { surfaces: ['im', 'web'], aliases: ['/晨报', '/today'], run: slashMorning },
   '/tasks': { surfaces: ['im', 'web'], aliases: ['/任务', '/盘点'], run: slashTasks },
+  '/my': { surfaces: ['im', 'web'], aliases: ['/我的'], run: slashMy }, // S53
+  '/week': { surfaces: ['im', 'web'], aliases: ['/本周'], run: slashWeek }, // S53
+  '/risk': { surfaces: ['im', 'web'], aliases: ['/风险'], run: slashRisk }, // S53
   '/help': {
     surfaces: ['im', 'web'],
     run: (db, env, reply) => reply(helpText(env.surface), { memberId: env.member?.id, intent: 'help', result: 'replied' }),
