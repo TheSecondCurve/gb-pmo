@@ -417,6 +417,18 @@ client.sh action generate_person_digest '{}'
 | ts | INTEGER | 消息时刻（epoch 毫秒） |
 | consumed_at | INTEGER | 抽取排干时刻；NULL=待消费 |
 
+### project_wiki_bindings
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| project_id | INTEGER | 一项目绑一页 |
+| space_id | TEXT | wiki 空间 id |
+| node_token | TEXT | wiki 节点 token（绑定目标页面） |
+| obj_token | TEXT | get_node 换出的 document_id（docx 写入用） |
+| title | TEXT | 页面标题（展示/回执用） |
+| updated_at | INTEGER |  |
+
 ## 枚举（值 ↔ 中文 label，双向对齐）
 
 - **memberRole**: admin=系统管理员、member=成员

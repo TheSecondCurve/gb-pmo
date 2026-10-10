@@ -24,13 +24,15 @@ export default function ProjectDetail({ id }: { id: number }) {
   const [recordsTaskId, setRecordsTaskId] = useState<number | null>(null)
   const [refsTask, setRefsTask] = useState<{ id: number; title: string } | null>(null)
   const [initAssigning, setInitAssigning] = useState(false)
+  const [wiki, setWiki] = useState<import('./types').WikiBinding | null>(null) // S61 知识库绑定
+  const [bindingWiki, setBindingWiki] = useState(false)
   const [hiddenEventTypes, setHiddenEventTypes] = useState<string[]>([]) // S4-8 其他栏筛选：被隐藏的类型（默认空=全显）
 
   const refresh = useCallback(async () => {
-    const [d, e, m, c] = await Promise.all([
-      api.project(id), api.projectEvents(id), api.members(), api.channels(),
+    const [d, e, m, c, w] = await Promise.all([
+      api.project(id), api.projectEvents(id), api.members(), api.channels(), api.projectWiki(id),
     ])
-    setP(d); setEvents(e.events); setMembers(m.members); setChannels(c.channels.filter((ch) => ch.projectId === id))
+    setP(d); setEvents(e.events); setMembers(m.members); setChannels(c.channels.filter((ch) => ch.projectId === id)); setWiki(w.wiki)
   }, [id])
   useEffect(() => { void refresh() }, [refresh])
 
@@ -243,6 +245,15 @@ export default function ProjectDetail({ id }: { id: number }) {
             </ul>
           )}
         </Card>
+
+        <Card title="知识库（飞书）" actions={canManageChannels ? <Btn small onClick={() => setBindingWiki(true)}>{wiki ? '换绑' : '绑定'}</Btn> : undefined}>
+          {wiki ? (
+            <div className="flex items-center justify-between text-[13px]">
+              <span>📄 《{wiki.title || '未命名'}》<span className="num text-[var(--color-ink-soft)]"> · {wiki.nodeToken}</span></span>
+              <a className="text-[var(--color-primary)]" href={`https://feishu.cn/wiki/${wiki.nodeToken}`} target="_blank" rel="noreferrer">打开</a>
+            </div>
+          ) : <Empty hint="未绑定知识库页面——绑定后在群里说「记一下…」即可写入" />}
+        </Card>
       </div>
 
       <Card title={`讨论面 · 事件流（${events.length}，append-only）`}>
@@ -300,6 +311,7 @@ export default function ProjectDetail({ id }: { id: number }) {
       {closing && <CloseModal p={p} onClose={() => setClosing(false)} onDone={async () => { setClosing(false); toast('项目已结项归档'); await refresh() }} />}
       {cancelling && <CancelModal p={p} onClose={() => setCancelling(false)} onDone={async () => { setCancelling(false); toast('项目已取消归档'); await refresh() }} />}
       {binding && <BindChannelModal projectId={id} onClose={() => setBinding(false)} onDone={async () => { setBinding(false); toast('渠道已绑定'); await refresh() }} />}
+      {bindingWiki && <BindWikiModal projectId={id} onClose={() => setBindingWiki(false)} onDone={async () => { setBindingWiki(false); toast('知识库已绑定'); await refresh() }} />}
       {initAssigning && (
         <InitAssignModal projectId={id} members={activeMembers} onClose={() => setInitAssigning(false)} onDone={async () => { setInitAssigning(false); await refresh() }} />
       )}
@@ -757,6 +769,44 @@ function BindChannelModal({ projectId, onClose, onDone }: { projectId: number; o
         }}>绑定</Btn>
       </div>
       <div className="mt-2 text-[11px] text-[var(--color-ink-soft)]">专题渠道 1 群:1 项目；跨项目混聊的通用群请在配置台维护。</div>
+    </Modal>
+  )
+}
+
+/** S61（v0.66）：绑定项目到飞书知识库页面——贴已有页面链接，或在指定页面下新建子页。 */
+function BindWikiModal({ projectId, onClose, onDone }: { projectId: number; onClose: () => void; onDone: () => Promise<void> }) {
+  const [mode, setMode] = useState<'existing' | 'create'>('existing')
+  const [wikiUrl, setWikiUrl] = useState('')
+  const [parentWikiUrl, setParentWikiUrl] = useState('')
+  const [newTitle, setNewTitle] = useState('')
+  const [err, setErr] = useState('')
+  const canSubmit = mode === 'existing' ? Boolean(wikiUrl) : Boolean(parentWikiUrl && newTitle)
+  return (
+    <Modal title="绑定知识库页面（S61）" onClose={onClose}>
+      <Field label="方式">
+        <select className={inputCls} value={mode} onChange={(e) => setMode(e.target.value as 'existing' | 'create')}>
+          <option value="existing">绑定已有页面</option><option value="create">在指定页面下新建子页</option>
+        </select>
+      </Field>
+      {mode === 'existing' ? (
+        <Field label="页面链接（https://xxx.feishu.cn/wiki/...）"><input className={inputCls} value={wikiUrl} onChange={(e) => setWikiUrl(e.target.value)} placeholder="粘贴 wiki 页面链接" /></Field>
+      ) : (
+        <>
+          <Field label="父页面链接"><input className={inputCls} value={parentWikiUrl} onChange={(e) => setParentWikiUrl(e.target.value)} placeholder="在该页面下新建" /></Field>
+          <Field label="子页标题"><input className={inputCls} value={newTitle} onChange={(e) => setNewTitle(e.target.value)} /></Field>
+        </>
+      )}
+      {err && <div className="mb-3 rounded bg-red-50 px-2 py-1.5 text-[12px] text-[var(--color-bad)]">{err}</div>}
+      <div className="flex justify-end gap-2">
+        <Btn onClick={onClose}>取消</Btn>
+        <Btn kind="primary" disabled={!canSubmit} onClick={async () => {
+          try {
+            await api.bindProjectWiki(projectId, mode === 'existing' ? { wikiUrl } : { parentWikiUrl, newTitle })
+            await onDone()
+          } catch (e) { setErr((e as Error).message) }
+        }}>绑定</Btn>
+      </div>
+      <div className="mt-2 text-[11px] text-[var(--color-ink-soft)]">前提：知识库管理员已把机器人加进知识库（知识库设置→成员设置）。绑定后在项目群里说「记一下…」即可写入该页。</div>
     </Modal>
   )
 }

@@ -15,6 +15,7 @@ import { mapSpeaker } from '../extract.js'
 import { upsertChannel } from '../../engine/tasks.js'
 import { createProposal, PROPOSAL_KINDS } from '../../engine/proposals.js'
 import { normalizeTypeTasks } from '../../engine/projectTypes.js'
+import { bindProjectWiki, recordToWiki } from '../../engine/wiki.js'
 import { getSetting } from '../../engine/settings.js'
 import { camelizeRow } from '../../db/index.mjs'
 import * as feishuConnector from '../connectors/feishu.js'
@@ -113,11 +114,13 @@ export async function runMinutesTool(db, env, { fetchChat, limit, hours } = {}) 
 export async function runWriteTool(db, { kind, payload = {} }, ctx) {
   try {
     if (kind === 'record_event') return writeRecordEvent(db, payload, ctx)
+    if (kind === 'record_wiki') return await writeRecordWiki(db, payload, ctx)
+    if (kind === 'bind_wiki') return await writeBindWiki(db, payload, ctx)
     if (kind === 'suggest_event') return writeSuggestEvent(db, payload, ctx)
     if (kind === 'bind_channel') return writeBindChannel(db, payload, ctx)
     if (kind === 'trigger') return await runTrigger(db, payload, ctx)
     if (kind === 'propose') return await writePropose(db, payload, ctx)
-    return refused(`不支持的写类型: ${kind}（可用 record_event/suggest_event/bind_channel/trigger/propose）`)
+    return refused(`不支持的写类型: ${kind}（可用 record_event/record_wiki/bind_wiki/suggest_event/bind_channel/trigger/propose）`)
   } catch (e) {
     if (e.statusCode === 403) return refused(`权限不足：${e.message}`, 'refused_permission')
     return refused(`操作被拒绝：${e.message}`)
@@ -272,6 +275,40 @@ function writeBindChannel(db, payload, ctx) {
     name: String(payload.chatName || ctx.evt.chatTitle || '') || null, channelType: 'dedicated', projectId: project.id,
   }, ctx.member.id)
   return { type: 'receipt', text: `本群已绑定为项目「${project.name}」的专题渠道，从现在开始定时抽取归档（不回灌历史）。` }
+}
+
+/** S61（v0.66，K45）：把一条内容记录到项目绑定的飞书知识库页面（用户「记一下」类指令）。 */
+async function writeRecordWiki(db, payload, ctx) {
+  const projectId = Number(payload.projectId)
+  const project = projectId ? db.prepare('SELECT id, name FROM projects WHERE id = ?').get(projectId) : null
+  if (!project) return refused('projectId 必填且须为真实项目 id（先 query 查项目）')
+  const summary = String(payload.summary || '').trim()
+  if (!summary) return refused('summary 必填（一句中文，要记到文档里的内容）')
+  const eventType = String(payload.eventType || 'progress')
+  try {
+    const r = await recordToWiki(db, project.id, { eventType, summary }, ctx.member.id)
+    return { type: 'receipt', text: `已记到项目「${project.name}」的知识库页面《${r.title || '未命名'}》（${r.section} 小节）✓` }
+  } catch (e) {
+    return refused(e.message) // 未绑定/权限不足/页面被删 → 明确中文回执
+  }
+}
+
+/** S61（v0.66，K45）：绑定项目到知识库页面（贴链接，或在指定页面下新建子页）。仅牵头人/管理员。 */
+async function writeBindWiki(db, payload, ctx) {
+  const projectId = Number(payload.projectId)
+  const project = projectId ? db.prepare('SELECT id, name, lead_member_id FROM projects WHERE id = ?').get(projectId) : null
+  if (!project) return refused('projectId 必填且须为真实项目 id（先 query 查项目）')
+  if (ctx.member.role !== 'admin' && project.lead_member_id !== ctx.member.id) {
+    return refused('只有该项目的牵头人或系统管理员可以绑定知识库，请 TA 来操作', 'refused_permission')
+  }
+  try {
+    const b = await bindProjectWiki(db, project.id, {
+      wikiUrl: payload.wikiUrl, parentWikiUrl: payload.parentWikiUrl, newTitle: payload.newTitle,
+    }, ctx.member.id)
+    return { type: 'receipt', text: `项目「${project.name}」已绑定知识库页面《${b.title || '未命名'}》，之后说「记一下…」我就会写进去。` }
+  } catch (e) {
+    return refused(e.message)
+  }
 }
 
 // —— S25（v0.17）项目级/配置级操作：v0.46/K25 分流——终态操作（取消/结项）走「提议→确认卡→生效」； ——

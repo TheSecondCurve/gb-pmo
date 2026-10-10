@@ -613,6 +613,18 @@ extraction 调度周期尾部，把本轮各项目沉淀的 record 型 `progress
 | S60-3 | 当卡片发送失败时，应降级富文本补发（必达兜底，pushes 行三态语义不变）；同一调度周期内同项目不重复播报（幂等） | `server/test/s60-progress-digest.test.mjs` |
 | S60-4 | 当提醒任务到期自动完成（S57）产生「系统提醒已送达」记录时，不应触发进展播报（系统动作非真实进展） | `server/test/s60-progress-digest.test.mjs` |
 
+## S61（P0）— 全员（web/机器人）+ 系统（大脑·飞书知识库）— 项目知识库绑定与写入（v0.66）
+
+每个项目可绑定一个飞书知识库页面（贴链接绑定已有页面，或在指定页面下新建 docx 子页）；用户「记一下」类指令把内容按类型分小节追加到绑定页面。硬前提：机器人须先被加进知识库。决策见 design.md K45。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S61-1 | 当贴 wiki 链接绑定已有页面时，应解析出 node_token、经 get_node 验证存在并换出 obj_token，绑定行落库（一项目绑一页，重复绑定覆盖） | `server/test/s61-wiki.test.mjs` |
+| S61-2 | 当在指定页面下新建子页并绑定时，应在父节点下创建 docx 子页（用父节点 spaceId），新页绑定落库 | `server/test/s61-wiki.test.mjs` |
+| S61-3 | 当 record_wiki 记录内容时，应按 eventType 映射小节标题（progress→进展/decision→决策/risk→风险/其他→记录），往绑定页面追加 heading2 小节 + text 内容两个 block | `server/test/s61-wiki.test.mjs` |
+| S61-4 | 当未绑定页面、机器人未被加进知识库（403/131006）、或页面不存在时，应返回明确中文错误指引（不静默） | `server/test/s61-wiki.test.mjs` |
+| S61-5 | 当经机器人 record_wiki/bind_wiki 操作时，bind_wiki 仅牵头人/管理员可用；record_wiki 未绑定页面回执指引文案；绑定成功回执含页面标题 | `server/test/s61-wiki.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |
