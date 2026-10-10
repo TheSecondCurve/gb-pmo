@@ -84,8 +84,9 @@ export async function notifyAdmins(db, payload, opts = {}) {
  * S57（v0.62，K40）：项目群推送——发往项目绑定的全部飞书专题渠道（设计约定 #5 每项目 1..N 核心渠道）。
  * pushes 行 recipient_member_id 空、group_key 落痕；企微渠道不投递（连接器只读，K6）；
  * 无绑定专题渠道 = 无目标，不落行（调用方私聊侧已兜底触达）。
+ * v0.63（K41）：payload.card 支持——卡片失败降级 post/text 补发（与 notifyMember 同构，必达兜底）。
  */
-export async function notifyProjectChannel(db, projectId, { pushType, title, body }, { send } = {}) {
+export async function notifyProjectChannel(db, projectId, { pushType, title, body, card = null }, { send } = {}) {
   const chs = db.prepare(
     `SELECT group_key FROM channels WHERE project_id = ? AND platform = 'feishu' AND channel_type = 'dedicated' ORDER BY id`
   ).all(projectId)
@@ -99,11 +100,17 @@ export async function notifyProjectChannel(db, projectId, { pushType, title, bod
       error = '飞书凭证未配置（配置台「外部依赖→飞书」填 appId/appSecret 后投递）——仅落库'
     } else {
       const post = richPost(body)
-      const payload = post
+      const textPayload = post
         ? { chatId: ch.group_key, post: { zh_cn: { title, content: post.zh_cn.content } } }
         : { chatId: ch.group_key, text: `【${title}】\n${body}` }
       try {
-        const r = await sender(payload)
+        let r = null
+        if (card) {
+          try {
+            r = await sender({ chatId: ch.group_key, card })
+          } catch { /* 卡片失败落到文本补发（必达） */ }
+        }
+        if (!r) r = await sender(textPayload)
         status = 'sent'
         messageId = r?.messageId || null
       } catch (e) {
