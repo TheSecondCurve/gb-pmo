@@ -168,6 +168,15 @@ function applyTaskPatch(db, e) {
     assertValue('taskStatus', value)
     db.prepare('UPDATE tasks SET status = ?, actual_end_date = ?, updated_at = ? WHERE id = ?')
       .run(value, value === 'done' ? today() : null, Date.now(), e.target_task_id)
+    // S59（v0.65，K43）：建议确认置 done 同样落进展（与状态修改同事务原子，generatedBy=extraction）
+    if (value === 'done') {
+      const title = db.prepare('SELECT title FROM tasks WHERE id = ?').get(e.target_task_id)?.title || `任务#${e.target_task_id}`
+      addEvent(db, {
+        projectId: e.project_id, eventType: 'progress', nature: 'record',
+        sourcePlatform: e.source_platform || 'web', generatedBy: 'extraction',
+        summary: `✅ 完成任务「${title}」`, speakerMemberId: e.speaker_member_id ?? null,
+      })
+    }
   } else if (field === 'plan_end_date' || field === 'plan_start_date') {
     db.prepare(`UPDATE tasks SET ${field} = ?, updated_at = ? WHERE id = ?`).run(value, Date.now(), e.target_task_id)
   } else if (field === 'responsible_member_id') {

@@ -67,6 +67,27 @@ const card = (template, title, elements) => ({
 })
 
 /**
+ * S60（v0.65，K44）群进展播报卡：绿色 header 🎉 + 本轮沉淀的进展列表。
+ * items: [{summary}]——record 型 progress 事件摘要；>TABLE_MAX_ROWS 条截断并标注。
+ */
+export function buildProgressDigestCard({ projectName, items }) {
+  const shown = items.slice(0, TABLE_MAX_ROWS)
+  const lines = shown.map((it, i) => `${i + 1}. ${it.summary}`)
+  if (items.length > TABLE_MAX_ROWS) lines.push(`… 等 ${items.length} 条`)
+  return card('green', `🎉 ${projectName} 有新进展`, [
+    md(`本轮抽取沉淀 **${items.length}** 条进展：\n${lines.join('\n')}`),
+  ])
+}
+
+/** S60 播报文本兜底（卡片降级 / web 通知收件箱共用 body）。 */
+export function progressDigestBody({ items }) {
+  const shown = items.slice(0, TABLE_MAX_ROWS)
+  const lines = shown.map((it, i) => `${i + 1}. ${it.summary}`)
+  if (items.length > TABLE_MAX_ROWS) lines.push(`… 等 ${items.length} 条`)
+  return `本轮抽取沉淀 ${items.length} 条进展：\n${lines.join('\n')}`
+}
+
+/**
  * 晨报卡片。输入 = engine morningReport 返回体（projects 为块结构）。
  * 单项目域：今日到期/逾期清单成表（2/3 列）；多项目域：每项目一组 lark_md 文本行 + hr 分隔。
  */

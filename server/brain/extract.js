@@ -10,7 +10,7 @@ import { addEvent, markPushedTo } from '../engine/events.js'
 import { addTaskRecord } from '../engine/tasks.js'
 import { getLlm, parseJsonLoose } from './llm.js'
 import { routeMessage } from './routing.js'
-import { notifyMember, notifyAdmins } from './push.js'
+import { notifyMember, notifyAdmins, notifyProjectChannel } from './push.js'
 import { buildSuggestionCard } from './bot/cards.js' // S55：建议确认卡
 import { label } from '../engine/enums.js'
 import { acceptanceAlarm } from '../engine/metrics.js'
@@ -20,7 +20,8 @@ import * as wecom from './connectors/wecom.js'
 const CONNECTORS = { feishu, wecom }
 
 /** 定时/按需触发入口（action 端点 / 调度器）：按渠道配置拉增量并抽取。 */
-export async function runExtraction(db, { channelId, projectId } = {}, { llm, send } = {}) {
+export async function runExtraction(db, { channelId, projectId } = {}, { llm, send, connectors } = {}) {
+  const CONN = connectors || CONNECTORS // S60：测试可注入 mock 连接器（生产走默认）
   const channels = camelizeRows(
     channelId
       ? db.prepare('SELECT * FROM channels WHERE id = ?').all(channelId)
@@ -28,6 +29,7 @@ export async function runExtraction(db, { channelId, projectId } = {}, { llm, se
   ).filter((c) => !projectId || c.channelType === 'general' || c.projectId === projectId)
 
   const results = []
+  const progressByProject = new Map() // S60：本轮沉淀的 record 型 progress 事件（projectId → [{summary, projectName}]）
   for (const ch of channels) {
     const row = { channelId: ch.id, platform: ch.platform }
     // S52：① 先排干事件流缓冲（独立于 API 拉取；失败不标记、下轮重试）
@@ -40,15 +42,22 @@ export async function runExtraction(db, { channelId, projectId } = {}, { llm, se
     // ② API 游标对账（既有语义：失败不推进游标）
     try {
       const cfg = getSetting(db, `im.${ch.platform}`)
-      const { messages, nextCursor } = await CONNECTORS[ch.platform].fetchMessages(cfg, ch, ch.cursor)
+      const { messages, nextCursor } = await CONN[ch.platform].fetchMessages(cfg, ch, ch.cursor)
       const ingested = await ingestMessages(db, ch, messages, { llm, send })
       db.prepare('UPDATE channels SET cursor = ?, last_pull_at = ? WHERE id = ?').run(nextCursor, Date.now(), ch.id)
       Object.assign(row, { pulled: messages.length, events: (row.events ?? 0) + (ingested.events ?? 0), suggestions: (row.suggestions ?? 0) + (ingested.suggestions ?? 0), unrouted: (row.unrouted ?? 0) + (ingested.unrouted ?? 0), noiseSkipped: (row.noiseSkipped ?? 0) + (ingested.noiseSkipped ?? 0), bufferSkipped: (row.bufferSkipped ?? 0) + (ingested.bufferSkipped ?? 0) })
+      // S60：收集本轮进展（排干缓冲与 API 两路都汇聚）
+      for (const ev of ingested.progressEvents ?? []) {
+        if (!progressByProject.has(ev.projectId)) progressByProject.set(ev.projectId, [])
+        progressByProject.get(ev.projectId).push(ev)
+      }
     } catch (e) {
       row.error = e.message
     }
     results.push(row)
   }
+  // S60：抽取后群进展播报（周期尾部，三道闸任一不过即静默）
+  await broadcastProgress(db, progressByProject, { send })
   // S3-5：采纳率告警（周窗口低于阈值 → 告警管理员）
   const alarm = acceptanceAlarm(db)
   if (alarm) {
@@ -60,6 +69,33 @@ export async function runExtraction(db, { channelId, projectId } = {}, { llm, se
     results.push({ acceptanceAlarm: alarm })
   }
   return { channels: results }
+}
+
+/**
+ * S60（v0.65，K44）群进展播报：把本轮各项目沉淀的 record 型 progress 事件按项目聚合，
+ * 往项目绑定的飞书专题群（dedicated）发绿色「🎉 有新进展」汇总卡。
+ * 三道闸（任一不过即静默）：本轮没拉到新群消息 / 拉到的全是噪音闲聊 / 抽取出事件但无一条
+ * record 型 progress——progressByProject 为空即整体静默，单项目无进展即跳过该项目。
+ * 幂等：同调度周期（小时级 cron）同项目已播报过则不重复发（pushes 台账锚点）。
+ */
+async function broadcastProgress(db, progressByProject, { send } = {}) {
+  if (!progressByProject.size) return // 闸：本轮零进展
+  const cycleStart = Date.now() - 3600_000 // extraction 默认每小时一轮：同周期 = 近一小时内已播报过
+  const { buildProgressDigestCard, progressDigestBody } = await import('./bot/cards.js')
+  for (const [projectId, items] of progressByProject) {
+    if (!items.length) continue // 闸：该项目本轮无进展
+    const dup = db.prepare(
+      `SELECT 1 FROM pushes WHERE push_type = 'progress_digest' AND related_project_id = ? AND created_at >= ?`
+    ).get(projectId, cycleStart)
+    if (dup) continue // 幂等：同周期已播报
+    const projectName = items[0].projectName
+    await notifyProjectChannel(db, projectId, {
+      pushType: 'progress_digest',
+      title: `🎉 ${projectName} 有新进展`,
+      body: progressDigestBody({ items }),
+      card: buildProgressDigestCard({ projectName, items }),
+    }, { send })
+  }
 }
 
 /**
@@ -104,7 +140,8 @@ function chunkBatches(items) {
  * S20-10：机器人已处理/已回复的消息（bot_commands 有 message_id）跳过，防同一消息双入库。
  */
 export async function ingestMessages(db, channel, messages, { llm: llmOverride, send } = {}) {
-  const stats = { events: 0, suggestions: 0, unrouted: 0, unknownSpeakers: 0, botProcessed: 0, noiseSkipped: 0, bufferSkipped: 0, taskRecords: 0 }
+  const stats = { events: 0, suggestions: 0, unrouted: 0, unknownSpeakers: 0, botProcessed: 0, noiseSkipped: 0, bufferSkipped: 0, taskRecords: 0, progressEvents: [] } // S60：progressEvents 供周期尾部播报聚合
+  const projectNameCache = new Map() // S60：projectId → 项目名（播报卡片标题用，单次 ingest 内查一次）
   // S20-10 去重口径（v0.57 修订）：机器人「指令已处理/已回复」的消息跳过；refused_not_mentioned 的
   // 未@忽略行不算已处理——正是 S52 缓冲要抽取的内容，不排除（否则缓冲排干会被全部误跳）。
   const botSeen = db.prepare(
@@ -190,6 +227,13 @@ export async function ingestMessages(db, channel, messages, { llm: llmOverride, 
           await pushSuggestion(db, created, { send })
         } else {
           stats.events += 1
+          // S60：record 型 progress 事件收集供周期尾部播报（不落台账、不阻塞，仅聚合摘要）
+          if (evt.eventType === 'progress') {
+            if (!projectNameCache.has(projectId)) {
+              projectNameCache.set(projectId, db.prepare('SELECT name FROM projects WHERE id = ?').get(projectId)?.name || `项目#${projectId}`)
+            }
+            stats.progressEvents.push({ projectId, projectName: projectNameCache.get(projectId), summary: evt.summary })
+          }
           // S56（v0.61，K39）：记录型事件带合法任务归属 → 同步归档任务时间线
           // （复用 addTaskRecord 既有守卫：终态项目/已删任务静默跳过，不阻塞事件与后续消息）
           if (evt.targetTaskId) {
