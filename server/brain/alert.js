@@ -2,12 +2,16 @@
 // v0.51（S46）：推送经 opts.send 注入的投递层真实下发（缺省走飞书配置；失败落行不阻塞）。
 // v0.53（S48-4，K31）：沉默项目预警——连续 silentDays 天无已生效事件且无任务变动的在跑项目
 // 推牵头人+管理员；同项目同窗口按 pushes 既有行节流（预警周期 15 分钟不刷屏）。
+// v0.63（K41）：预警推送卡片化——逾期/负载/沉默均附交互卡片（bot/cards.js 模板），
+// 卡片失败降级 post/text 补发（推送层兜底）；文本 body 同步补粗体标记（降级与 web 收件箱共用）。
 
 import { camelizeRows, camelizeRow } from '../db/index.mjs'
 import { overdueTasksOf, taskRefMap, formatTaskRefs } from '../engine/tasks.js'
 import { queryMetric } from '../engine/metrics.js'
 import { getSetting } from '../engine/settings.js'
+import { today, dayDiff } from '../db/time.js'
 import { notifyMember, notifyAdmins } from './push.js'
+import { buildOverdueAlertCard, buildLoadAlertCard, buildSilentAlertCard } from './bot/cards.js'
 
 const DAY = 86400000
 
@@ -16,6 +20,7 @@ export async function evaluateAlerts(db, { send } = {}) {
   const nowMs = Date.now()
 
   // S7-1（v0.6 口径）：关键人名下逾期未完任务 ≥1
+  const todayStr = today() // S19：北京日历日（超期天数与晨报/简报同口径，dayDiff）
   const keypersons = camelizeRows(db.prepare(`SELECT * FROM members WHERE status = 'active'`).all())
   for (const m of keypersons) {
     const ods = overdueTasksOf(db, m.id)
@@ -24,11 +29,18 @@ export async function evaluateAlerts(db, { send } = {}) {
     const refMap = taskRefMap(db, ods.map((d) => d.id))
     const lines = ods.map((d) => {
       const refs = formatTaskRefs(refMap.get(d.id))
-      return `- ${d.projectName}「${d.title}」截止 ${d.planEndDate}，已逾期${refs ? `\n  参考：${refs}` : ''}`
+      return `- **${d.projectName}**「${d.title}」截止 ${d.planEndDate}，已超期 ${dayDiff(d.planEndDate, todayStr)} 天${refs ? `\n  参考：${refs}` : ''}`
     })
-    const body = `你有 ${ods.length} 项逾期未完任务：\n${lines.join('\n')}`
-    await notifyMember(db, m, { pushType: 'alert', title: `逾期任务预警：${m.name}`, body }, { send })
-    await notifyAdmins(db, { pushType: 'alert', title: `逾期任务预警：${m.name}（${ods.length} 项）`, body }, { send })
+    const body = `你有 **${ods.length}** 项逾期未完任务：\n${lines.join('\n')}`
+    const card = buildOverdueAlertCard({
+      memberName: m.name,
+      tasks: ods.map((d) => ({
+        id: d.id, title: d.title, projectName: d.projectName, planEndDate: d.planEndDate,
+        daysOverdue: dayDiff(d.planEndDate, todayStr), refs: refMap.get(d.id),
+      })),
+    })
+    await notifyMember(db, m, { pushType: 'alert', title: `逾期任务预警：${m.name}`, body, card }, { send })
+    await notifyAdmins(db, { pushType: 'alert', title: `逾期任务预警：${m.name}（${ods.length} 项）`, body, card }, { send })
     alerts.push({ type: 'overdue_tasks', memberId: m.id, count: ods.length, projects: [...new Set(ods.map((d) => d.project_id || d.projectId))] })
   }
 
@@ -36,8 +48,9 @@ export async function evaluateAlerts(db, { send } = {}) {
   const load = queryMetric(db, 'keyperson_load', { groupBy: 'member' })
   for (const row of load.rows) {
     if (!row.overloaded) continue
-    const body = `${row.member} 并行参与 ${row.parallelProjects} 个进行中项目（上限 ${row.maxParallelProjects}），未完任务 ${row.openTasks} 项。`
-    await notifyAdmins(db, { pushType: 'alert', title: `负载预警：${row.member}`, body }, { send })
+    const body = `**${row.member}** 并行参与 **${row.parallelProjects}** 个进行中项目（上限 ${row.maxParallelProjects}），未完任务 **${row.openTasks}** 项。`
+    const card = buildLoadAlertCard({ member: row.member, parallelProjects: row.parallelProjects, maxParallelProjects: row.maxParallelProjects, openTasks: row.openTasks })
+    await notifyAdmins(db, { pushType: 'alert', title: `负载预警：${row.member}`, body, card }, { send })
     alerts.push({ type: 'overloaded', member: row.member, parallelProjects: row.parallelProjects, max: row.maxParallelProjects })
   }
 
@@ -66,7 +79,8 @@ export async function evaluateAlerts(db, { send } = {}) {
     const payload = {
       pushType: 'alert', projectId: p.id,
       title: `沉默项目预警：${p.name}`,
-      body: `项目「${p.name}」已连续 ${days} 天无已生效事件且无任务变动。请关注：是真停滞还是讨论没进群？`,
+      body: `项目「**${p.name}**」已连续 **${days}** 天无已生效事件且无任务变动。请关注：是真停滞还是讨论没进群？`,
+      card: buildSilentAlertCard({ projectName: p.name, days }),
     }
     if (lead) await notifyMember(db, camelizeRow(lead), payload, { send })
     await notifyAdmins(db, payload, { send })

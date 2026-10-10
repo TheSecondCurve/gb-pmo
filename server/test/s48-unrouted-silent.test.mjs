@@ -97,7 +97,23 @@ describe('S48 沉默项目预警', () => {
     // 同窗口重复巡检 → 节流不再推
     const again = await evaluateAlerts(db, { send: fakeSend })
     expect(again.alerts.some((a) => a.type === 'silent_project' && a.projectId === silent.id)).toBe(false)
-    const pushRows2 = db.prepare(`SELECT * FROM pushes WHERE push_type = 'alert' AND title LIKE '沉默项目预警%'`).all()
+    const pushRows2 = ctx.db.prepare(`SELECT * FROM pushes WHERE push_type = 'alert' AND title LIKE '沉默项目预警%'`).all()
     expect(pushRows2.length).toBe(2)
+  })
+
+  it('S48-4: 沉默预警以交互卡片送达——橙色 header 含项目名与沉默天数（v0.63）', async () => {
+    const { db, members } = ctx
+    // 另起一个沉默项目（上一用例的同项目已被节流），牵头人张三有飞书绑定
+    const silent2 = createProject(db, { name: '沉默的项目乙', typeCode: 'lianmai_365', leadMemberId: members.lead.id }, members.admin.id)
+    const old = Date.now() - 10 * 86400000
+    db.prepare('UPDATE project_events SET business_time = ? WHERE project_id = ?').run(old, silent2.id)
+    db.prepare('UPDATE tasks SET updated_at = ? WHERE project_id = ?').run(old, silent2.id)
+
+    const sent = []
+    await evaluateAlerts(db, { send: async (m) => { sent.push(m); return { messageId: 'om_c' } } })
+    const toLead = sent.find((m) => m.openId === 'fs_zhang' && m.card?.header?.title?.content === '沉默项目预警：沉默的项目乙')
+    expect(toLead).toBeTruthy()
+    expect(toLead.card.header.template).toBe('orange')
+    expect(JSON.stringify(toLead.card)).toContain('已连续')
   })
 })
