@@ -8,7 +8,7 @@ import { TASK_ROW_CLS, taskVisual } from '../progress'
 import {
   EVENT_PINNED_COLS, EVENT_STATUS_LABEL, EVENT_TYPE_LABEL, MILESTONE_STATUS_LABEL, MILESTONE_STATUS_TONE,
   PRIORITY_LABEL, PROJECT_STATUS_LABEL, TASK_STATUS_LABEL, TASK_STATUS_TONE,
-  type ChannelRow, type EventRow, type InitAssignmentRow, type Member, type ProjectDetail, type TaskRecordRow, type TaskRefRow,
+  type ChannelRow, type EventRow, type InitAssignmentRow, type Member, type ProjectDetail, type TaskRecordRow, type TaskRefRow, type WikiBinding,
 } from '../types'
 
 export default function ProjectDetail({ id }: { id: number }) {
@@ -24,7 +24,7 @@ export default function ProjectDetail({ id }: { id: number }) {
   const [recordsTaskId, setRecordsTaskId] = useState<number | null>(null)
   const [refsTask, setRefsTask] = useState<{ id: number; title: string } | null>(null)
   const [initAssigning, setInitAssigning] = useState(false)
-  const [wiki, setWiki] = useState<import('./types').WikiBinding | null>(null) // S61 知识库绑定
+  const [wiki, setWiki] = useState<WikiBinding | null>(null) // S61 知识库绑定
   const [bindingWiki, setBindingWiki] = useState(false)
   const [hiddenEventTypes, setHiddenEventTypes] = useState<string[]>([]) // S4-8 其他栏筛选：被隐藏的类型（默认空=全显）
 
