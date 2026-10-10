@@ -19,7 +19,10 @@ export default function IntegrationAdmin({ tab }: { tab: string }) {
 }
 
 interface LlmSub { apiKey: string; baseUrl: string; model: string }
-interface LlmCfg { provider: string; deepseek: LlmSub; 'glm-coding': LlmSub; timeoutMs?: number }
+interface LlmCfg {
+  provider: string; deepseek: LlmSub; 'glm-coding': LlmSub; timeoutMs?: number
+  purposeModels?: Record<string, { provider?: string; model?: string }> // S51：按用途模型覆盖
+}
 
 // LLM 类别目录（S17-11）：与 server/engine/enums.js 的 LLM_PROVIDERS 保持一致
 const LLM_PROVIDERS: { key: string; label: string; baseUrl: string; model: string; note?: string }[] = [
@@ -74,11 +77,23 @@ function LlmCard() {
           <input className={inputCls} type="number" min={1} max={600} value={Math.round((cfg.timeoutMs ?? 120000) / 1000)}
             onChange={(e) => setCfg({ ...cfg, timeoutMs: Number(e.target.value) * 1000 })} />
         </Field>
+        {/* S51（v0.56，K34）：高频用途模型覆盖——留空=跟随生效类别模型；其余用途经 Agent put_setting 可配 */}
+        <Field label="抽取模型覆盖（extraction，留空=跟随生效类别）">
+          <input className={inputCls} placeholder="如 glm-5.3-Flash" value={cfg.purposeModels?.extraction?.model ?? ''}
+            onChange={(e) => setCfg({ ...cfg, purposeModels: { ...cfg.purposeModels, extraction: { model: e.target.value } } } as LlmCfg)} />
+        </Field>
+        <Field label="分拣模型覆盖（routing，留空=跟随生效类别）">
+          <input className={inputCls} placeholder="如 glm-5.3-Flash" value={cfg.purposeModels?.routing?.model ?? ''}
+            onChange={(e) => setCfg({ ...cfg, purposeModels: { ...cfg.purposeModels, routing: { model: e.target.value } } } as LlmCfg)} />
+        </Field>
       </div>
       {provider.note && <p className="mb-3 text-[12px] text-[var(--color-ink-soft)]">{provider.note}</p>}
       <div className="flex items-center gap-2">
         <Btn kind="primary" onClick={async () => {
-          await api.putSetting('llm', { provider: provider.key, ...shown, timeoutMs: cfg.timeoutMs })
+          // S51：purposeModels 清理空条目（留空=不覆盖），其余用途条目原样保留
+          const pm = Object.fromEntries(Object.entries(cfg.purposeModels ?? {})
+            .filter(([, v]) => (v as { model?: string })?.model?.trim()))
+          await api.putSetting('llm', { provider: provider.key, ...shown, timeoutMs: cfg.timeoutMs, purposeModels: pm })
           toast(`已保存并切换生效类别：${provider.label}`)
           const s = await api.settings(); setCfg(s.llm as LlmCfg); setActive((s.llm as LlmCfg).provider)
         }}>保存（含切换生效类别）</Btn>

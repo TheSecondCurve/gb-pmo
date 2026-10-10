@@ -130,16 +130,24 @@ export function deepseekAdapter(cfg) {
 /** 统一入口：优先注入的 override（测试/调用方），其次按配置构建——v0.15 起按类别分开存储，
  *  生效类别（cfg.provider）未配 apiKey 返回 null（走确定性降级），另一类别已配不顶用。
  *  S47（v0.52，K30）：meta = { purpose, projectId? }——给出 purpose 即启用用量记账
- *  （真实适配器经 onDone 回调带 token 用量；fake 注入经 wrapUsage 包裹，token 记 NULL）。 */
+ *  （真实适配器经 onDone 回调带 token 用量；fake 注入经 wrapUsage 包裹，token 记 NULL）。
+ *  S51（v0.56，K34）：cfg.purposeModels[meta.purpose] 命中时按覆盖类别+模型构建；
+ *  覆盖类别未配 apiKey 时回退当前生效类别（功能不被禁用），用量行按实际生效类别记录。 */
 export function getLlm(db, override, meta = {}) {
   if (override !== undefined) return override && meta.purpose ? wrapUsage(db, override, meta) : override
   const cfg = getSetting(db, 'llm')
-  const sub = cfg[cfg.provider] ?? {}
+  const ov = meta.purpose ? cfg.purposeModels?.[meta.purpose] : null
+  const ovProvider = ov?.provider ?? cfg.provider
+  const ovSub = cfg[ovProvider] ?? {}
+  const inEffect = ov && ovSub.apiKey // 覆盖类别有 key 才真正生效（否则回退主类别）
+  const provider = inEffect ? ovProvider : cfg.provider
+  const sub = inEffect ? ovSub : (cfg[cfg.provider] ?? {})
   if (!sub.apiKey) return null
+  const model = (inEffect ? ov.model : null) || sub.model || LLM_PROVIDERS[provider]?.model
   return buildLlmAdapter(
-    { provider: cfg.provider, ...sub, timeoutMs: cfg.timeoutMs },
+    { provider, ...sub, model, timeoutMs: cfg.timeoutMs },
     meta.purpose
-      ? { onDone: (info) => logLlmCall(db, meta, { provider: cfg.provider, model: sub.model || LLM_PROVIDERS[cfg.provider]?.model, ...info }) }
+      ? { onDone: (info) => logLlmCall(db, meta, { provider, model, ...info }) }
       : {},
   )
 }

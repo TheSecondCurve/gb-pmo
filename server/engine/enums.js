@@ -68,6 +68,10 @@ export const LLM_PROVIDERS = {
   'glm-coding': { label: 'GLM 国内 Coding Plan（智谱）', baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4', model: 'glm-5.3' },
 }
 
+// S51（v0.56，K34）：按用途模型覆盖（llm.purposeModels）的用途白名单——高频低价路径（extraction/routing）
+// 可独立指向便宜模型，低频叙事路径维持主模型。
+export const LLM_PURPOSES = ['extraction', 'routing', 'digest', 'closeout', 'draft', 'init_assign', 'chat']
+
 // 阈值默认值（配置台 settings 可覆盖；PRD K5）
 export const DEFAULT_SETTINGS = {
   thresholds: {
@@ -104,6 +108,7 @@ export const DEFAULT_SETTINGS = {
     deepseek: { apiKey: '', baseUrl: LLM_PROVIDERS.deepseek.baseUrl, model: LLM_PROVIDERS.deepseek.model },
     'glm-coding': { apiKey: '', baseUrl: LLM_PROVIDERS['glm-coding'].baseUrl, model: LLM_PROVIDERS['glm-coding'].model },
     timeoutMs: 120000,
+    purposeModels: {}, // S51：按用途模型覆盖 { <purpose>: { provider?, model } }（空=全覆盖生效类别）
   },
   'im.feishu': {
     appId: '', appSecret: '',

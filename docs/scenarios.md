@@ -499,6 +499,17 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S50-3 | 当通用群一轮消息分拣落定到多个项目时，应按项目分组分别批量抽取；分拣本身维持逐条调用；未识别发言人的建议过滤按事件的源消息发言人判定（S3-3 口径延伸到批量） | `server/test/s50-extract-batch.test.mjs` |
 | S50-4 | 当 LLM 未配置时，降级路径同样先经噪音预过滤（噪音不产降级记录事件），其余消息维持「每条一条记录型进展事件」语义不变 | `server/test/s50-extract-batch.test.mjs` |
 
+## S51（P0）— 系统（大脑·LLM 适配层）/管理员 — 模型分层·按用途模型覆盖（v0.56）
+
+`llm.purposeModels` 按用途覆盖模型（高频低价路径独立指向便宜模型）；getLlm 按用途解析，覆盖类别未配 key 回退主类别；无覆盖行为不变。决策见 design.md K34。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S51-1 | 当配置 `purposeModels.extraction = { model: 'glm-5.3-Flash' }` 时，抽取用途的调用应使用该模型（provider 缺省=当前生效类别），其余用途维持主模型 | `server/test/s51-purpose-models.test.mjs` |
+| S51-2 | 当 purposeModels 的 purpose 不在约定清单、provider 未知或 model 为空时，保存应 400 并指明字段 | `server/test/s51-purpose-models.test.mjs` |
+| S51-3 | 当覆盖条目指定了未配 apiKey 的类别时，该用途应回退当前生效类别（功能不被禁用），用量行按实际生效类别记录 | `server/test/s51-purpose-models.test.mjs` |
+| S51-4 | 当无任何覆盖时，各用途行为与 v0.52 完全一致（模型=生效类别配置） | `server/test/s51-purpose-models.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |
