@@ -10,6 +10,8 @@ import { addEvent, markPushedTo } from '../engine/events.js'
 import { getLlm, parseJsonLoose } from './llm.js'
 import { routeMessage } from './routing.js'
 import { notifyMember, notifyAdmins } from './push.js'
+import { buildSuggestionCard } from './bot/cards.js' // S55：建议确认卡
+import { label } from '../engine/enums.js'
 import { acceptanceAlarm } from '../engine/metrics.js'
 import * as feishu from './connectors/feishu.js'
 import * as wecom from './connectors/wecom.js'
@@ -197,21 +199,31 @@ export async function ingestMessages(db, channel, messages, { llm: llmOverride, 
 /** 建议推送（S3-4/S20-2 共用）：目标任务责任人 + 项目牵头人（去重），记 pushed_to。
  *  里程碑目标（S35，target_object='milestone'，id 复用 target_task_id 列）无责任人语义，
  *  且不得按同 id 任务误 JOIN 责任人——只推项目牵头人。
- *  v0.51（S46/K29）：经投递层真实下发（send 注入点；缺省走飞书配置），失败落行不阻塞。 */
-export async function pushSuggestion(db, evt, { send } = {}) {
+ *  v0.51（S46/K29）：经投递层真实下发（send 注入点；缺省走飞书配置），失败落行不阻塞。
+ *  v0.60（S55/K38）：飞书绑定成员 + 有签名密钥时改发确认卡（确认/驳回按钮，HMAC 与 S20 卡同构，
+ *  点按由 handleCardAction 的 confirm/reject 分支承接）；缺密钥/未绑定/发卡失败降级文本推送。 */
+export async function pushSuggestion(db, evt, { send, secret } = {}) {
   const target = evt.targetTaskId && evt.targetObject !== 'milestone'
     ? db.prepare('SELECT responsible_member_id AS rid FROM tasks WHERE id = ? AND deleted_at IS NULL').get(evt.targetTaskId)
     : null
   const lead = db.prepare('SELECT lead_member_id AS lid FROM projects WHERE id = ?').get(evt.projectId)
   const recipients = [...new Set([target?.rid, lead?.lid].filter(Boolean))]
+  const hmacSecret = secret ?? process.env.GB_PMO_SESSION_SECRET ?? ''
+  const project = db.prepare('SELECT name FROM projects WHERE id = ?').get(evt.projectId)
   for (const rid of recipients) {
     const m = db.prepare('SELECT * FROM members WHERE id = ?').get(rid)
     if (m) {
-      await notifyMember(db, camelizeRow(m), {
+      const member = camelizeRow(m)
+      // S55：卡片仅在「绑定飞书 + 有签名密钥」时有意义（按钮回调要能过签名校验）
+      const card = member.feishuId && hmacSecret
+        ? buildSuggestionCard({ id: evt.id, summary: evt.summary, projectName: project?.name, typeLabel: label('eventType', evt.eventType) }, hmacSecret)
+        : null
+      await notifyMember(db, member, {
         pushType: 'digest',
         title: `待确认建议：${evt.summary}`,
         body: `事件 #${evt.id}（${evt.eventType}）待你确认：同意后生效，驳回则忽略。`,
         projectId: evt.projectId,
+        card,
       }, { send })
     }
   }

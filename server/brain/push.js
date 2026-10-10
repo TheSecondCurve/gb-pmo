@@ -8,20 +8,22 @@
 import { camelizeRows } from '../db/index.mjs'
 import { getSetting } from '../engine/settings.js'
 import { richPost } from './bot/format.js'
-import { sendTextToUser, sendPostToUser } from './connectors/feishu.js'
+import { sendTextToUser, sendPostToUser, sendCardToUser } from './connectors/feishu.js'
 
-/** 默认发送器：飞书凭证齐备才可投递（否则 null → 落 skipped）。 */
+/** 默认发送器：飞书凭证齐备才可投递（否则 null → 落 skipped）。S55：card 走交互卡片通道。 */
 function defaultSender(db) {
   const cfg = getSetting(db, 'im.feishu')
   if (!cfg.appId || !cfg.appSecret) return null
-  return ({ openId, text, post }) => (post ? sendPostToUser(cfg, openId, post) : sendTextToUser(cfg, openId, text))
+  return ({ openId, text, post, card }) =>
+    (card ? sendCardToUser(cfg, openId, card) : post ? sendPostToUser(cfg, openId, post) : sendTextToUser(cfg, openId, text))
 }
 
 /**
  * 投递 + 落库统一入口。opts.send 注入假发送器（测试）；缺省按 im.feishu 配置走真实连接器。
- * send 载荷：{ openId, text?, post? }（post/text 二选一，post 优先），返回 { messageId }。
+ * send 载荷：{ openId, text?, post?, card? }（优先级 card > post > text），返回 { messageId }。
+ * S55：payload.card 存在时先发卡片；卡片失败降级 post/text 补发（必达兜底，S45-3 同则）。
  */
-export async function notifyMember(db, member, { pushType, title, body, projectId = null }, { send } = {}) {
+export async function notifyMember(db, member, { pushType, title, body, projectId = null, card = null }, { send } = {}) {
   let platform = 'none'
   let status = 'skipped'
   let error = null
@@ -32,13 +34,16 @@ export async function notifyMember(db, member, { pushType, title, body, projectI
     if (!sender) {
       error = '飞书凭证未配置（配置台「外部依赖→飞书」填 appId/appSecret 后投递）——仅落库'
     } else {
+      const post = richPost(body) // 正文多行/粗体/链接 → post（标题进 post title）；单行纯文本 → text
+      const textPayload = { openId: member.feishuId, post: post ? { zh_cn: { title, content: post.zh_cn.content } } : undefined, text: post ? undefined : `【${title}】\n${body}` }
       try {
-        const post = richPost(body) // 正文多行/粗体/链接 → post（标题进 post title）；单行纯文本 → text
-        const r = await sender({
-          openId: member.feishuId,
-          post: post ? { zh_cn: { title, content: post.zh_cn.content } } : undefined,
-          text: post ? undefined : `【${title}】\n${body}`,
-        })
+        let r = null
+        if (card) {
+          try {
+            r = await sender({ openId: member.feishuId, card })
+          } catch { /* 卡片失败落到文本补发（必达） */ }
+        }
+        if (!r) r = await sender(textPayload)
         status = 'sent'
         messageId = r?.messageId || null
       } catch (e) {

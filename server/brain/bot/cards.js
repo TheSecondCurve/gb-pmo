@@ -2,8 +2,37 @@
 // 结构选型：标题栏 + 分项目 section；单项目域（专题群=群聊主场景）任务清单用 column_set
 // 多列布局（≤TABLE_MAX_ROWS 行成表，超出退化文本行）；多项目域一律分节 lark_md 文本行
 // （卡片元素预算护栏）。卡片 2.0 原生 table 组件留待线上实测后另行启用（本期 column_set 保底）。
+// S55（v0.60，K38）：建议确认卡（buildSuggestionCard）——抽取面待确认建议的 IM 点按闭环。
 
+import crypto from 'node:crypto'
 import { INV_MAX_PER_PROJECT } from '../../engine/tasks.js'
+
+/** 卡片按钮签名（与 command.js 的 hmac 同构——命令面确认卡与本面建议卡共用一套签名语义）。 */
+function hmac(secret, canonical) {
+  return crypto.createHmac('sha256', secret).update(canonical).digest('hex').slice(0, 16)
+}
+
+/**
+ * S55 建议确认卡：待确认建议推送的交互形态——「确认生效/驳回」按钮 value 携带
+ * {a:confirm|reject, e:事件id, s:HMAC}，由 handleCardAction 的 confirm/reject 分支承接（v0.46 兼容分支）。
+ */
+export function buildSuggestionCard({ id, summary, projectName, typeLabel }, secret) {
+  const value = (a) => ({ a, e: String(id), s: hmac(secret, `${a}:${id}`) })
+  return {
+    config: { wide_screen: true },
+    header: { template: 'blue', title: { tag: 'plain_text', content: `待确认建议 #${id}${typeLabel ? `（${typeLabel}）` : ''}` } },
+    elements: [
+      { tag: 'div', text: { tag: 'lark_md', content: `**${summary}**${projectName ? `\n项目：${projectName}` : ''}\n确认后生效，驳回则忽略（事件流保留痕迹）。` } },
+      {
+        tag: 'action',
+        actions: [
+          { tag: 'button', text: { tag: 'plain_text', content: '确认生效' }, type: 'primary', value: value('confirm') },
+          { tag: 'button', text: { tag: 'plain_text', content: '驳回' }, type: 'danger', value: value('reject') },
+        ],
+      },
+    ],
+  }
+}
 
 /** 成表行数上限：超出则该段落退化为文本行（元素预算与移动端可读性护栏）。 */
 export const TABLE_MAX_ROWS = 8

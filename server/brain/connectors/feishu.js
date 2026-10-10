@@ -163,6 +163,11 @@ export async function sendPostToUser(cfg, openId, content) {
   return postMessage(cfg, 'open_id', openId, 'post', content)
 }
 
+/** S55（v0.60，K38）：私聊成员的交互卡片（建议确认卡——确认/驳回按钮）。 */
+export async function sendCardToUser(cfg, openId, card) {
+  return postMessage(cfg, 'open_id', openId, 'interactive', card)
+}
+
 /** 发 post 富文本（S45：段落/粗体/链接结构化渲染；content 由 bot/format.js 确定性生成）。 */
 export async function sendPost(cfg, chatId, content) {
   return postMessage(cfg, 'chat_id', chatId, 'post', content)

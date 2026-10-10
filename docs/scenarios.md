@@ -543,6 +543,17 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S54-3 | 当用户随后确认归档（「归档/记下来」）时，应经 record_event 落记录型事件（自动生效，归爆发令人，摘要含纪要浓缩）；纪要内容可在项目事件流查到 | `server/test/s54-minutes.test.mjs` |
 | S54-4 | minutes 应计入有界循环查询次数（与 query/metric/recent_chat 同族限额） | `server/test/s54-minutes.test.mjs` |
 
+## S55（P0）— 牵头人/成员（抽取面建议确认）— IM 内确认卡闭环（v0.60）
+
+待确认建议推送升级为飞书确认卡（确认/驳回按钮，HMAC 签名与 S20 卡同构，点按走 confirmEvent 既有口子）；未绑定/未配置/缺密钥/发卡失败降级原文本推送。抽取面人确认边界不动。决策见 design.md K38。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S55-1 | 当建议推送且接收人已绑定飞书、应用凭证齐备、签名密钥存在时，应发出带「确认生效/驳回」按钮的卡片（按钮 value 含事件 id + HMAC 签名，与 S20 确认卡同构）；pushes 行落 sent + message_id | `server/test/s55-im-confirm-cards.test.mjs` |
+| S55-2 | 当成员点按卡片「确认生效」时，应走 `confirmEvent` 既有口子生效（decided_by=点按人）并回执；点「驳回」走 `rejectEvent`；伪造签名/未绑定操作者拒绝 | `server/test/s55-im-confirm-cards.test.mjs` |
+| S55-3 | 当接收人未绑定飞书、凭证/密钥缺失或卡片发送失败时，应降级为原文本推送（post/text 分流不变），内容不丢、pushes 行状态如实 | `server/test/s55-im-confirm-cards.test.mjs` |
+| S55-4 | 当建议目标是里程碑（target_object='milestone'）时，卡片只推项目牵头人（S35 口径），点按同样生效 | `server/test/s55-im-confirm-cards.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |
