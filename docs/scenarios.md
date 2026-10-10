@@ -591,6 +591,28 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S58-5 | 当个人梳理（S16）/晨报组装任务清单时，任务行应附带备注（与 S23 参考资料随推送同一管道语义） | `server/test/s58-task-note.test.mjs` |
 | S58-6 | 当经机器人/web AI 助手 add_task 建任务带备注时，提议生效透传 note（缺省无备注） | `server/test/s58-task-note.test.mjs` |
 
+## S59（P0）— 系统（大脑·引擎）— 任务生命周期落进展（v0.65）
+
+任务新增（createTask）与完成（updateTask/applyTaskPatch 置 done）三条路径各落一条 record 型 `progress` 事件进讨论面进展列（summary 带 🆕/✅ 前缀）；add_task 建议确认与软删不重复落。决策见 design.md K43。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S59-1 | 当 createTask 新增任务时，应同步落一条 record 型 `progress` 事件进 project_events（summary 含 🆕 与任务标题，generatedBy=web，status=effective 即时生效） | `server/test/s59-task-progress-events.test.mjs` |
+| S59-2 | 当 updateTask 把任务置为 done（web/agent 直接完成）时，应落一条 record 型 `progress` 事件（summary 含 ✅ 与任务标题）；非 done 的状态流转不落 | `server/test/s59-task-progress-events.test.mjs` |
+| S59-3 | 当建议确认经 applyTaskPatch 把任务置为 done 时，应在 confirmEvent 事务内同步落一条 record 型 `progress` 事件（generatedBy=extraction，与状态修改原子） | `server/test/s59-task-progress-events.test.mjs` |
+| S59-4 | 当任务经 add_task 建议确认创建或被软删时，不重复落进展事件（新增只在 createTask 一处；软删留痕走 audit 不进进展列） | `server/test/s59-task-progress-events.test.mjs` |
+
+## S60（P0）— 系统（大脑·推送）— 抽取后群进展播报（v0.65）
+
+extraction 调度周期尾部，把本轮各项目沉淀的 record 型 `progress` 事件按项目聚合，往项目绑定的飞书专题群（dedicated）发一张绿色「🎉 有新进展」汇总卡（失败降级富文本，pushes 台账幂等）。三道闸任一不过即静默：本轮没拉到新群消息 / 拉到的全是噪音闲聊 / 抽取出事件但无一条进展，都不发消息、不打扰团队。决策见 design.md K44。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S60-1 | 当本轮抽取沉淀了某项目至少一条 record 型 `progress` 事件时，应往该项目绑定的专题群发一张绿色汇总卡（标题含 🎉 与项目名，正文列出各进展摘要），pushes 行落 group_key | `server/test/s60-progress-digest.test.mjs` |
+| S60-2 | 当本轮无新群消息、或拉到的全是噪音闲聊、或抽取出事件但无一条 record 型 progress（只有风险/决策/建议或无归属闲聊）时，应静默不发任何群消息 | `server/test/s60-progress-digest.test.mjs` |
+| S60-3 | 当卡片发送失败时，应降级富文本补发（必达兜底，pushes 行三态语义不变）；同一调度周期内同项目不重复播报（幂等） | `server/test/s60-progress-digest.test.mjs` |
+| S60-4 | 当提醒任务到期自动完成（S57）产生「系统提醒已送达」记录时，不应触发进展播报（系统动作非真实进展） | `server/test/s60-progress-digest.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |
