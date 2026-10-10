@@ -142,7 +142,7 @@ export default function ProjectDetail({ id }: { id: number }) {
             <table className="w-full min-w-[44rem] text-[13px]">
               <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
                 <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap">
-                  <th className="py-1.5">任务</th><th>责任人（唯一）</th><th>状态</th><th>计划开始</th><th>计划结束</th><th>标记</th><th></th>
+                  <th className="py-1.5">任务</th><th>责任人（唯一）</th><th>状态</th><th>计划开始</th><th>计划结束</th><th>备注</th><th>标记</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -177,6 +177,13 @@ export default function ProjectDetail({ id }: { id: number }) {
                     </td>
                     <td className="num">{readonly ? (t.planStartDate || '—') : <InlineText type="date" value={t.planStartDate} onSubmit={async (v) => { await api.patchTask(t.id, { planStartDate: v }); await refresh() }} />}</td>
                     <td className={`num ${t.isOverdue ? 'text-[var(--color-bad)]' : ''}`}>{readonly ? (t.planEndDate || '—') : <InlineText type="date" value={t.planEndDate} onSubmit={async (v) => { await api.patchTask(t.id, { planEndDate: v }); await refresh() }} />}</td>
+                    <td className="max-w-[10rem]">
+                      {/* S58：任务备注（≤200 字）——模板默认值立项拷贝，实例独立改；提醒/预警推送自动携带 */}
+                      {readonly ? <span className="block truncate" title={t.note || ''}>{t.note || '—'}</span> : (
+                        <InlineText value={t.note} placeholder="点此补备注" className="block max-w-[10rem] truncate"
+                          onSubmit={async (v) => { await api.patchTask(t.id, { note: v }); await refresh() }} />
+                      )}
+                    </td>
                     <td>
                       {t.isOverdue && <Badge tone="bad">逾期</Badge>}
                       {t.kind === 'reminder' && <Badge tone="info" data-testid="reminder-badge">⏰ 提醒</Badge>}
@@ -459,6 +466,7 @@ function TaskRefsModal({ taskId, taskTitle, readonly, onClose }: { taskId: numbe
 
 function AddTask({ projectId, members, onDone }: { projectId: number; members: Member[]; onDone: () => Promise<void> }) {
   const [title, setTitle] = useState('')
+  const [note, setNote] = useState('') // S58：任务备注（可选，≤200 字；提醒/预警推送自动携带）
   const [owner, setOwner] = useState('') // S38：新建默认未指派（责任人与项目牵头人解耦，K20）
   const [kind, setKind] = useState('work') // S57：work=工作 / reminder=纯提醒（到期推送后自动完成）
   const [date, setDate] = useState('') // S57：纯提醒的提醒日（=planEndDate，必填）
@@ -468,9 +476,10 @@ function AddTask({ projectId, members, onDone }: { projectId: number; members: M
     await api.createTask({
       projectId, title, kind,
       ...(kind === 'reminder' ? { planEndDate: date } : {}),
+      ...(note.trim() ? { note: note.trim() } : {}),
       ...(owner ? { responsibleMemberId: Number(owner) } : {}),
     })
-    setTitle(''); setOwner(''); setDate(''); await onDone()
+    setTitle(''); setNote(''); setOwner(''); setDate(''); await onDone()
   }
   const reminder = kind === 'reminder'
   return (
@@ -490,6 +499,9 @@ function AddTask({ projectId, members, onDone }: { projectId: number; members: M
           onChange={(e) => setDate(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void submit() }} />
       )}
+      <input className="cell-input w-full sm:w-44" aria-label="新任务备注（可选）" placeholder="备注：怎么干（可选）"
+        maxLength={200} value={note} onChange={(e) => setNote(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') void submit() }} />
       <select className="cell-input w-full sm:w-32" aria-label="新任务责任人（默认未指派）" value={owner} onChange={(e) => setOwner(e.target.value)}>
         <option value="">（未指派）</option>
         {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}

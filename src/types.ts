@@ -10,7 +10,7 @@ export interface TypeTaskRef { title: string; url: string; note?: string | null 
 export interface ProjectType {
   id: number; code: string; name: string; description?: string | null
   initPrompt?: string | null // S39（v0.42）：初始化提示词——该类项目的任务分配/倒排日期自然语言规则，AI 初始分配读取
-  tasks: { title: string; refs?: TypeTaskRef[] }[] // v0.18 任务清单内嵌于类型（立项时预填，可覆盖）；v0.33 每任务可挂参考链接（S33，立项时随标题拷贝）
+  tasks: { title: string; note?: string | null; refs?: TypeTaskRef[] }[] // v0.18 任务清单内嵌于类型（立项时预填，可覆盖）；v0.33 每任务可挂参考链接（S33）；v0.64 每任务可配默认备注（S58，立项随任务拷贝）
   status: 'active' | 'disabled'; projectCount: number; openProjectCount: number
 }
 // S39（v0.42）：AI 初始分配草案行/应用行 = 完整目标状态（责任人/计划起止三字段全量覆盖）
@@ -30,6 +30,7 @@ export interface ProjectRow {
 export interface TaskRow {
   id: number; projectId: number; title: string; responsibleMemberId: number | null; responsibleName?: string | null
   status: string; planStartDate?: string | null; planEndDate?: string | null
+  note?: string | null // S58：任务备注（≤200 字；模板默认值立项拷贝，实例独立改；提醒/预警推送自动携带）
   isOverdue: boolean
   kind?: string // S57：任务分类 work=工作 / reminder=纯提醒（到期推送后自动完成）
   remindedAt?: number | null // S57：提醒已送达时刻（幂等锚点；改期/重开重置）

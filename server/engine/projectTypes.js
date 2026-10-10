@@ -7,6 +7,7 @@ import { audit } from './auth.js'
 // 模板只在立项时实例化拷贝的语义不变——编辑类型清单只影响未来立项，历史项目是立项时的实例快照。
 // v0.33 / S33：任务项扩展为「标题 + 可选参考链接列表」（SOP/知识库/表单），子表
 // project_type_task_refs 镜像实例侧 task_refs；立项时参考随标题拷贝进 task_refs（S23 全套接管）。
+// v0.64 / S58：任务项再扩展默认备注（note ≤200 字），立项随任务拷贝进实例；实例改不回写类型。
 
 const TYPE_COLS = 'pt.id, pt.code, pt.name, pt.description, pt.init_prompt, pt.status, pt.created_at, pt.updated_at'
 
@@ -31,6 +32,21 @@ export const HTTP_URL = /^https?:\/\//i
 /** 每任务参考上限（防呆：参考是链接型提示，不是文档库）。 */
 export const MAX_TASK_REFS = 10
 
+/** 任务备注上限（S58）：备注是短说明不是文档；卡片渲染按同上限截断（bot/cards.js）。 */
+export const MAX_TASK_NOTE = 200
+
+/** 任务备注载荷归一（S58）：undefined=不动（patch 语义）；null/空串 → NULL；非字符串/超长 400。 */
+export function normalizeTaskNote(value) {
+  if (value === undefined) return undefined
+  if (value === null) return null
+  if (typeof value !== 'string') throw Object.assign(new Error('任务备注须为字符串'), { statusCode: 400 })
+  const text = value.trim()
+  if (text.length > MAX_TASK_NOTE) {
+    throw Object.assign(new Error(`任务备注不超过 ${MAX_TASK_NOTE} 字`), { statusCode: 400 })
+  }
+  return text || null
+}
+
 /** 单条参考载荷归一：{title, url, note?} → {title, url, note}；标题必填、url 须 http(s)，否则 400。 */
 export function normalizeTypeRef(ref) {
   const r = typeof ref === 'object' && ref !== null ? ref : {}
@@ -42,8 +58,8 @@ export function normalizeTypeRef(ref) {
   return { title, url, note }
 }
 
-/** 任务清单载荷归一（S1-6/S17-8/S33）：字符串、{title}、{title, refs?} 均可 → [{title, refs}]；
- * 空白标题 400；refs 逐条同实例侧校验，每任务 ≤ MAX_TASK_REFS。 */
+/** 任务清单载荷归一（S1-6/S17-8/S33/S58）：字符串、{title}、{title, note?, refs?} 均可 → [{title, note, refs}]；
+ * 空白标题 400；备注 ≤ MAX_TASK_NOTE（S58）；refs 逐条同实例侧校验，每任务 ≤ MAX_TASK_REFS。 */
 export function normalizeTypeTasks(tasks) {
   if (tasks === undefined || tasks === null) return undefined
   if (!Array.isArray(tasks)) throw Object.assign(new Error('tasks 必须是数组'), { statusCode: 400 })
@@ -51,6 +67,7 @@ export function normalizeTypeTasks(tasks) {
     const item = typeof t === 'string' ? { title: t } : (t ?? {})
     const title = String(item.title ?? '').trim()
     if (!title) throw Object.assign(new Error('任务标题必填（不可为空白）'), { statusCode: 400 })
+    const note = normalizeTaskNote(item.note) ?? null
     let refs = []
     if (item.refs !== undefined && item.refs !== null) {
       if (!Array.isArray(item.refs)) throw Object.assign(new Error('任务 refs 必须是数组'), { statusCode: 400 })
@@ -59,7 +76,7 @@ export function normalizeTypeTasks(tasks) {
       }
       refs = item.refs.map(normalizeTypeRef)
     }
-    return { title, refs }
+    return { title, note, refs }
   })
 }
 
@@ -161,11 +178,11 @@ export function resolveTypeForCreate(db, { typeCode, templateCode } = {}) {
   return type
 }
 
-/** 类型的任务清单（含每任务参考，按顺序）：[{title, refs: [{title, url, note}]}]。 */
+/** 类型的任务清单（含每任务默认备注与参考，按顺序）：[{title, note, refs: [{title, url, note}]}]。 */
 export function typeTaskItems(db, typeId) {
-  const tasks = db.prepare('SELECT id, title FROM project_type_tasks WHERE type_id = ? ORDER BY sort_order').all(typeId)
+  const tasks = db.prepare('SELECT id, title, note FROM project_type_tasks WHERE type_id = ? ORDER BY sort_order').all(typeId)
   const refStmt = db.prepare('SELECT title, url, note FROM project_type_task_refs WHERE type_task_id = ? ORDER BY sort_order')
-  return tasks.map((t) => ({ title: t.title, refs: camelizeRows(refStmt.all(t.id)) }))
+  return tasks.map((t) => ({ title: t.title, note: t.note ?? null, refs: camelizeRows(refStmt.all(t.id)) }))
 }
 
 // —— 内部 ——
@@ -181,7 +198,7 @@ function clearTypeTasks(db, typeId) {
 function insertTasks(db, typeId, items) {
   const refStmt = db.prepare('INSERT INTO project_type_task_refs (type_task_id, title, url, note, sort_order) VALUES (?, ?, ?, ?, ?)')
   items.forEach((item, i) => {
-    const info = db.prepare('INSERT INTO project_type_tasks (type_id, title, sort_order) VALUES (?, ?, ?)').run(typeId, item.title, i + 1)
+    const info = db.prepare('INSERT INTO project_type_tasks (type_id, title, note, sort_order) VALUES (?, ?, ?, ?)').run(typeId, item.title, item.note ?? null, i + 1)
     item.refs.forEach((ref, j) => refStmt.run(Number(info.lastInsertRowid), ref.title, ref.url, ref.note, j + 1))
   })
 }

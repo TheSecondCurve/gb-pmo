@@ -3,7 +3,7 @@ import { today } from '../db/time.js'
 import { assertValue, label } from './enums.js'
 import { getProject } from './projects.js'
 import { memberName } from './members.js'
-import { HTTP_URL } from './projectTypes.js'
+import { HTTP_URL, normalizeTaskNote } from './projectTypes.js'
 import { addEvent } from './events.js'
 import { audit } from './auth.js'
 
@@ -191,14 +191,16 @@ export function createTask(db, input, by) {
   }
   // S57（v0.62，K40）：任务分类——work=工作（缺省）/ reminder=纯提醒（到期一次性推送后自动完成）
   const kind = input.kind == null || input.kind === '' ? 'work' : assertValue('taskKind', input.kind)
+  // S58（v0.64，K42）：任务备注（≤200 字，记录型字段）
+  const note = normalizeTaskNote(input.note) ?? null
   // S38/K20（v0.42 推翻 D3）：责任人与项目牵头人解耦，缺省=未指派（NULL），不再回填牵头人
   const owner = responsibleMemberId == null || responsibleMemberId === '' ? null : assertActiveMember(db, responsibleMemberId)
   const now = Date.now()
   const info = db.prepare(
-    `INSERT INTO tasks (project_id, title, responsible_member_id, status, plan_start_date, plan_end_date, kind, source, created_at, updated_at)
-     VALUES (?, ?, ?, 'todo', ?, ?, ?, 'manual', ?, ?)`
-  ).run(projectId, title, owner, planStartDate || null, planEndDate || null, kind, now, now)
-  audit(db, { memberId: by, action: 'task.create', objectType: 'task', objectId: info.lastInsertRowid, detail: { kind } })
+    `INSERT INTO tasks (project_id, title, note, responsible_member_id, status, plan_start_date, plan_end_date, kind, source, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'todo', ?, ?, ?, 'manual', ?, ?)`
+  ).run(projectId, title, note, owner, planStartDate || null, planEndDate || null, kind, now, now)
+  audit(db, { memberId: by, action: 'task.create', objectType: 'task', objectId: info.lastInsertRowid, detail: { kind, hasNote: Boolean(note) } })
   return getTask(db, Number(info.lastInsertRowid))
 }
 
@@ -227,6 +229,8 @@ export function updateTask(db, id, patch, by) {
   }
   if ('planStartDate' in patch) fields.plan_start_date = patch.planStartDate || null
   if ('planEndDate' in patch) fields.plan_end_date = patch.planEndDate || null
+  // S58：备注（记录型字段，各通道直生效，K25；空串/null → NULL）
+  if ('note' in patch) fields.note = normalizeTaskNote(patch.note) ?? null
   if ('status' in patch && patch.status !== cur.status) {
     fields.status = assertValue('taskStatus', patch.status)
     if (patch.status === 'done') fields.actual_end_date = today()
@@ -413,7 +417,7 @@ export function deleteTaskRef(db, id, by) {
 export function overdueTasksOf(db, memberId) {
   return camelizeRows(
     db.prepare(
-      `SELECT t.id, t.title, t.plan_end_date, p.id AS project_id, p.name AS project_name
+      `SELECT t.id, t.title, t.note, t.plan_end_date, p.id AS project_id, p.name AS project_name
        FROM tasks t JOIN projects p ON p.id = t.project_id
        WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL AND p.status = 'active'
          AND t.kind = 'work' AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY()`

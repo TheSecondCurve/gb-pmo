@@ -8,6 +8,7 @@
 
 import crypto from 'node:crypto'
 import { INV_MAX_PER_PROJECT } from '../../engine/tasks.js'
+import { MAX_TASK_NOTE } from '../../engine/projectTypes.js'
 
 /** 卡片按钮签名（与 command.js 的 hmac 同构——命令面确认卡与本面建议卡共用一套签名语义）。 */
 function hmac(secret, canonical) {
@@ -40,6 +41,12 @@ export function buildSuggestionCard({ id, summary, projectName, typeLabel }, sec
 export const TABLE_MAX_ROWS = 8
 
 const md = (content) => ({ tag: 'div', text: { tag: 'lark_md', content } })
+
+/** S58 备注展示截断：入库已 ≤MAX_TASK_NOTE（引擎单一真相源），此处护栏历史/手工数据撑爆卡片。 */
+export function noteText(note) {
+  const text = String(note ?? '').trim()
+  return text.length > MAX_TASK_NOTE ? `${text.slice(0, MAX_TASK_NOTE)}…` : text
+}
 
 /** 多列布局表：header 行加粗 + 数据行；weights 为各列权重。 */
 function table(headers, rows, weights) {
@@ -154,6 +161,9 @@ export function buildOverdueAlertCard({ memberName, tasks }) {
     .filter((t) => t.refs?.length)
     .map((t) => `· ${t.title}：${t.refs.map((r) => `[${r.title}](${r.url})`).join('、')}`)
   if (refLines.length) elements.push(md(`**参考**\n${refLines.join('\n')}`))
+  // S58：任务备注「怎么干」与参考同管道渲染（表格外文本行，不挤占 column_set 列宽）
+  const noteLines = tasks.filter((t) => t.note).map((t) => `· ${t.title}：${noteText(t.note)}`)
+  if (noteLines.length) elements.push(md(`**备注**\n${noteLines.join('\n')}`))
   return card('red', `逾期任务预警：${memberName}（${tasks.length} 项）`, elements)
 }
 
@@ -171,9 +181,9 @@ export function buildSilentAlertCard({ projectName, days }) {
   ])
 }
 
-/** S57 纯提醒卡：wathet header ⏰ + 项目/提醒日/责任人；一次性送达语义写在卡片里。 */
-export function buildReminderCard({ title, projectName, planEndDate, responsibleName }) {
+/** S57 纯提醒卡：wathet header ⏰ + 项目/提醒日/责任人/备注（S58）；一次性送达语义写在卡片里。 */
+export function buildReminderCard({ title, projectName, planEndDate, responsibleName, note }) {
   return card('wathet', `⏰ 提醒：${title}`, [
-    md(`项目：**${projectName}**\n提醒日：${planEndDate}${responsibleName ? `\n责任人：**${responsibleName}**` : ''}\n一次性送达，任务已自动标记完成（不追踪状态）。`),
+    md(`项目：**${projectName}**\n提醒日：${planEndDate}${responsibleName ? `\n责任人：**${responsibleName}**` : ''}${note ? `\n备注：${noteText(note)}` : ''}\n一次性送达，任务已自动标记完成（不追踪状态）。`),
   ])
 }

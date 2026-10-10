@@ -578,6 +578,19 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S57-5 | 当创建任务带非法 kind 时拒绝（400）；建提醒入口（web 表单 / 机器人 add_task）透传 kind，缺省 work；抽取/梳理通道不产提醒任务 | `server/test/s57-reminder-tasks.test.mjs` |
 | S57-6 | 追踪口径排除：逾期任务数/逾期率、未指派任务、健康分逾期子口径、关键人负载未完任务数、项目简报任务盘子与完成率、组合页任务进度均不计 kind=reminder；/my 与任务盘点仍可见提醒（盘点行 ⏰ 标注） | `server/test/s57-reminder-tasks.test.mjs` |
 
+## S58（P0）— 全员（web/Agent）+ 系统（大脑·推送）— 任务备注域（v0.64）
+
+任务面新增 `note` 备注（migration 0026，≤200 字）：项目类型内嵌任务清单可配默认备注、立项随任务拷贝（与 S33 参考拷贝同模式）；实例独立编辑不回写类型；纯提醒推送（S57）、逾期预警（S7-1）、个人梳理（S16）/晨报的卡片与正文携带备注。决策见 design.md K42。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S58-1 | 当创建/更新任务带备注时，应保存并回读（getTask/listTasks 返回 note）；备注超 200 字拒绝（400）、空串归一为 NULL；备注变更落 task.update 审计 | `server/test/s58-task-note.test.mjs` |
+| S58-2 | 当类型任务清单配置默认备注时，应随类型保存与读取；立项（模板路径）时默认备注随任务拷贝进实例；立项自定义清单未给备注的任务为空（编辑清单=放弃类型默认）；实例改备注不回写类型 | `server/test/s58-task-note.test.mjs` |
+| S58-3 | 当纯提醒任务到期推送（S57 私聊+专题群）时，卡片与文本正文应携带任务备注；无备注不带空行；超长备注卡片渲染截断 | `server/test/s58-task-note.test.mjs` |
+| S58-4 | 当逾期任务预警推送（S7-1）时，文本与卡片应携带逾期任务备注（同样截断） | `server/test/s58-task-note.test.mjs` |
+| S58-5 | 当个人梳理（S16）/晨报组装任务清单时，任务行应附带备注（与 S23 参考资料随推送同一管道语义） | `server/test/s58-task-note.test.mjs` |
+| S58-6 | 当经机器人/web AI 助手 add_task 建任务带备注时，提议生效透传 note（缺省无备注） | `server/test/s58-task-note.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |
