@@ -398,6 +398,20 @@ client.sh action generate_person_digest '{}'
 | ok | INTEGER | 1 成功 / 0 失败（error 记摘要） |
 | error | TEXT |  |
 
+### im_buffer
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| platform | TEXT |  |
+| group_key | TEXT |  |
+| message_id | TEXT | 全局去重键（网关重复投递/多源汇入幂等） |
+| speaker_id | TEXT |  |
+| speaker_label | TEXT |  |
+| text | TEXT |  |
+| ts | INTEGER | 消息时刻（epoch 毫秒） |
+| consumed_at | INTEGER | 抽取排干时刻；NULL=待消费 |
+
 ## 枚举（值 ↔ 中文 label，双向对齐）
 
 - **memberRole**: admin=系统管理员、member=成员

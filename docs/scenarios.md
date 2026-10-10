@@ -510,6 +510,17 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S51-3 | 当覆盖条目指定了未配 apiKey 的类别时，该用途应回退当前生效类别（功能不被禁用），用量行按实际生效类别记录 | `server/test/s51-purpose-models.test.mjs` |
 | S51-4 | 当无任何覆盖时，各用途行为与 v0.52 完全一致（模型=生效类别配置） | `server/test/s51-purpose-models.test.mjs` |
 
+## S52（P0）— 系统（大脑·IM 抽取/机器人网关）— 事件驱动抽取缓冲（v0.57）
+
+已绑定渠道的非 @ 群消息落 `im_buffer` 缓冲（拒答语义不变）；抽取先排干缓冲再走 API 游标对账，双源按 message_id 去重（重复拉取零 LLM 零重复事件）；消费行 7 天滚动清理。决策见 design.md K35。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S52-1 | 当已绑定渠道（专题/通用）的群收到非 @ 机器人消息时，应在照常拒答（S20-16 语义不变）的同时落 `im_buffer` 行（message_id 去重）；未绑定群/外部群/私聊不落缓冲 | `server/test/s52-event-buffer.test.mjs` |
+| S52-2 | 当抽取运行时，应先排干该渠道缓冲（按消息时刻升序喂既有入库管线）并标记 `consumed_at`；API 对账重拉到已消费 message_id 时应跳过（不重复产事件、不消耗 LLM） | `server/test/s52-event-buffer.test.mjs` |
+| S52-3 | 当缓冲排干过程失败时，行保持未消费（下轮重试）；已消费行超过 7 天滚动清理 | `server/test/s52-event-buffer.test.mjs` |
+| S52-4 | 当消息已被机器人指令处理/回复时（bot_commands 有 message_id 且非「未@忽略」行——忽略行不算已处理，正是缓冲要抽取的内容），既不去重缓冲也不进抽取（S20-10 口径不变）；缓冲消息仍受 S50 噪音预过滤约束 | `server/test/s52-event-buffer.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

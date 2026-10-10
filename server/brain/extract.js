@@ -26,15 +26,25 @@ export async function runExtraction(db, { channelId, projectId } = {}, { llm, se
 
   const results = []
   for (const ch of channels) {
-    const cfg = getSetting(db, `im.${ch.platform}`)
+    const row = { channelId: ch.id, platform: ch.platform }
+    // S52：① 先排干事件流缓冲（独立于 API 拉取；失败不标记、下轮重试）
     try {
+      const drained = await drainBuffer(db, ch, { llm, send })
+      if (drained) Object.assign(row, drained)
+    } catch (e) {
+      row.bufferError = e.message
+    }
+    // ② API 游标对账（既有语义：失败不推进游标）
+    try {
+      const cfg = getSetting(db, `im.${ch.platform}`)
       const { messages, nextCursor } = await CONNECTORS[ch.platform].fetchMessages(cfg, ch, ch.cursor)
       const ingested = await ingestMessages(db, ch, messages, { llm, send })
       db.prepare('UPDATE channels SET cursor = ?, last_pull_at = ? WHERE id = ?').run(nextCursor, Date.now(), ch.id)
-      results.push({ channelId: ch.id, platform: ch.platform, pulled: messages.length, ...ingested })
+      Object.assign(row, { pulled: messages.length, events: (row.events ?? 0) + (ingested.events ?? 0), suggestions: (row.suggestions ?? 0) + (ingested.suggestions ?? 0), unrouted: (row.unrouted ?? 0) + (ingested.unrouted ?? 0), noiseSkipped: (row.noiseSkipped ?? 0) + (ingested.noiseSkipped ?? 0), bufferSkipped: (row.bufferSkipped ?? 0) + (ingested.bufferSkipped ?? 0) })
     } catch (e) {
-      results.push({ channelId: ch.id, platform: ch.platform, error: e.message })
+      row.error = e.message
     }
+    results.push(row)
   }
   // S3-5：采纳率告警（周窗口低于阈值 → 告警管理员）
   const alarm = acceptanceAlarm(db)
@@ -91,14 +101,24 @@ function chunkBatches(items) {
  * S20-10：机器人已处理/已回复的消息（bot_commands 有 message_id）跳过，防同一消息双入库。
  */
 export async function ingestMessages(db, channel, messages, { llm: llmOverride, send } = {}) {
-  const stats = { events: 0, suggestions: 0, unrouted: 0, unknownSpeakers: 0, botProcessed: 0, noiseSkipped: 0 }
-  const botSeen = db.prepare('SELECT 1 FROM bot_commands WHERE message_id = ?')
+  const stats = { events: 0, suggestions: 0, unrouted: 0, unknownSpeakers: 0, botProcessed: 0, noiseSkipped: 0, bufferSkipped: 0 }
+  // S20-10 去重口径（v0.57 修订）：机器人「指令已处理/已回复」的消息跳过；refused_not_mentioned 的
+  // 未@忽略行不算已处理——正是 S52 缓冲要抽取的内容，不排除（否则缓冲排干会被全部误跳）。
+  const botSeen = db.prepare(
+    `SELECT 1 FROM bot_commands WHERE message_id = ? AND (kind = 'bot_reply' OR (kind = 'command' AND result != 'refused_not_mentioned'))`
+  )
+  // S52：API 对账重拉到缓冲已消费的消息 → 跳过（零 LLM 零重复事件）
+  const bufferSeen = db.prepare('SELECT 1 FROM im_buffer WHERE message_id = ? AND consumed_at IS NOT NULL')
 
   // ① 去重 + 噪音预过滤 + 身份映射
   const prepared = []
   for (const msg of messages) {
     if (msg.id && botSeen.get(msg.id)) {
       stats.botProcessed += 1
+      continue
+    }
+    if (msg.id && bufferSeen.get(msg.id)) {
+      stats.bufferSkipped += 1
       continue
     }
     if (isNoiseMessage(msg.text)) {
@@ -204,6 +224,42 @@ export function mapSpeaker(db, platform, speakerId, _fallbackLabel) {
   const col = platform === 'feishu' ? 'feishu_id' : 'wecom_id'
   const row = db.prepare(`SELECT * FROM members WHERE ${col} = ? AND status = 'active'`).get(speakerId)
   return row ? camelizeRow(row) : null
+}
+
+// —— S52（v0.57，K35）事件驱动抽取缓冲 ——
+
+/** 网关落缓冲：仅已绑定渠道（专题/通用）的群消息；message_id 全局去重（INSERT OR IGNORE）。 */
+export function bufferInboundMessage(db, { platform = 'feishu', groupKey, messageId, speakerId, text, ts }) {
+  if (!messageId || !text || !groupKey) return false
+  const bound = db.prepare('SELECT 1 FROM channels WHERE platform = ? AND group_key = ?').get(platform, groupKey)
+  if (!bound) return false
+  db.prepare(
+    'INSERT OR IGNORE INTO im_buffer (platform, group_key, message_id, speaker_id, text, ts, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  ).run(platform, groupKey, messageId, speakerId || null, String(text).slice(0, 2000), ts || Date.now(), Date.now())
+  return true
+}
+
+/** 滚动清理：已消费行保留 7 天供双源去重，超期删除。 */
+export function pruneBuffer(db, { now = Date.now(), keepMs = 7 * 86400000 } = {}) {
+  return db.prepare('DELETE FROM im_buffer WHERE consumed_at IS NOT NULL AND consumed_at < ?').run(now - keepMs).changes
+}
+
+/**
+ * 排干一个渠道的缓冲：按消息时刻升序喂既有入库管线（噪音过滤/分拣/批量全继承），
+ * 成功后整批标记 consumed_at（失败不标记、下轮重试——与渠道游标「失败不推进」同哲学）。
+ */
+export async function drainBuffer(db, channel, opts = {}) {
+  const rows = db
+    .prepare('SELECT * FROM im_buffer WHERE platform = ? AND group_key = ? AND consumed_at IS NULL ORDER BY ts, id')
+    .all(channel.platform, channel.groupKey)
+  if (!rows.length) return null
+  const stats = await ingestMessages(db, channel, rows.map((r) => ({
+    id: r.message_id, speakerId: r.speaker_id, speakerLabel: r.speaker_label, text: r.text, ts: r.ts,
+  })), opts)
+  db.prepare(`UPDATE im_buffer SET consumed_at = ? WHERE id IN (${rows.map(() => '?').join(',')})`)
+    .run(Date.now(), ...rows.map((r) => r.id))
+  pruneBuffer(db)
+  return { buffered: rows.length, ...stats }
 }
 
 // —— S48（v0.53，K31）未分拣池消化出口：列表 / 归挂（重走抽取）/ 忽略 ——

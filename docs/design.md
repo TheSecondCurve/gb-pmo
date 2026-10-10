@@ -213,3 +213,9 @@
 - 决策：`llm` 配置新增 `purposeModels` 覆盖表（`{ <purpose>: { provider?, model } }`，purpose 白名单=extraction/routing/digest/closeout/draft/init_assign/chat，provider 缺省=当前生效类别）。`getLlm` 命中覆盖即用覆盖类别的 apiKey/baseUrl + 覆盖 model；**覆盖类别未配 apiKey 时回退主类别**（功能不被禁用）；无覆盖行为不变。配置台只暴露 extraction/routing 两个高频用途的模型字段，其余经 `put_setting`。
 - 理由：S50 把抽取调用数降下来后，剩下的成本杠杆是「高频路径用便宜模型」——GLM 类别内 glm-5.3 与 glm-5.3-Flash 同端点不同价，模型名覆盖即可吃到差价，无需多供应商编排。覆盖回退而非硬切是为了避免「配了覆盖但目标类别没 key」把抽取整个禁用——分层是省钱手段，不该成为故障面。`llm_calls` 记实际生效 provider/model 使分层效果可经 S47 台账直接验证。
 - 推翻：无（v0.15 按类别存储语义不变，purposeModels 是读取侧的用途级覆盖）。
+
+## K35 事件驱动抽取缓冲：im_buffer 双源去重（S52，v0.57）
+
+- 决策：已绑定渠道的群消息在长连接网关照常拒答的同时落 `im_buffer`（message_id 唯一去重）；定时抽取每轮先排干缓冲（排标 `consumed_at`，行保留 7 天供去重后滚动删）再走 API 游标对账；双源去重 = ingestMessages 跳过「im_buffer 已消费」或「bot_commands 已处理」的 message_id。网关停机缺口由 API 对账兜底；缓冲不挪 channels.cursor（游标语义不变）。
+- 理由：group_msg 权限下事件流本就实时送达全部群消息，丢弃后再每小时拉历史 API 是双重浪费；缓冲表把抽取延迟从「最长一个抽取周期」降到「消息已在库里」，且缓冲命中越多 API 拉取越少（游标推进照常、拉到已消费 id 直接跳过、零 LLM）。行保留供去重（而非即删）是因为 API 对账会重拉同一批消息——没有持久去重标记就会重复产事件；7 天滚动删控制表体积。缓冲失败不标记、下轮重试，与渠道游标「失败不推进」同哲学。
+- 推翻：无（S20-16 拒答语义不变，仅扩展「拒答且落缓冲」；S3-6 游标口径不变）。

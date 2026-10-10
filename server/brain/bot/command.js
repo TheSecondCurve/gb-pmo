@@ -4,7 +4,7 @@
 
 import crypto from 'node:crypto'
 import { getSetting } from '../../engine/settings.js'
-import { mapSpeaker } from '../extract.js'
+import { mapSpeaker, bufferInboundMessage } from '../extract.js'
 import { label } from '../../engine/enums.js'
 import { today } from '../../db/time.js'
 import { confirmEvent, rejectEvent } from '../../engine/events.js'
@@ -130,7 +130,11 @@ export async function handleBotEvent(db, evt, opts = {}) {
 
   // ②b 群消息必须 @ 本机器人（S20-16/v0.26.1）：group_msg 权限下事件推送为群内全部消息，
   // 未 @ 一律忽略（不回复/不产事件/不进 LLM）；mentioned 缺省不判定（私聊与旧调用方兼容）
-  if (evt.chatType === 'group' && evt.mentioned === false) return finish({ result: 'refused_not_mentioned' })
+  // S52（v0.57，K35）：拒答的同时把已绑定渠道的消息落 im_buffer 抽取缓冲（拒答语义不变）
+  if (evt.chatType === 'group' && evt.mentioned === false) {
+    bufferInboundMessage(db, { platform, groupKey: evt.chatId, messageId: evt.messageId, speakerId: evt.senderOpenId, text, ts: evt.ts })
+    return finish({ result: 'refused_not_mentioned' })
+  }
 
   // ③ 身份门禁：只认 members.feishu_id 映射到的在职成员（权限跟人不跟群）
   const member = mapSpeaker(db, platform, evt.senderOpenId)
