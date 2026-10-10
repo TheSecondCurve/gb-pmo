@@ -101,6 +101,8 @@ function TypeEditor({ type, onClose, onDone }: { type: ProjectType | null; onClo
   // 参考按「顺序号-1」挂任务（与 textarea 解析后的非空行一一对应；行数变少时超出的参考保存时丢弃）
   const [refs, setRefs] = useState<DraftRef[][]>(() =>
     type ? type.tasks.map((t) => (t.refs ?? []).map((r) => ({ title: r.title, url: r.url, note: r.note || '' }))) : [])
+  // S58：每条任务的默认备注（按行序与标题对齐，立项随任务拷贝；行数变少时超出备注保存时丢弃）
+  const [notes, setNotes] = useState<string[]>(() => type ? type.tasks.map((t) => t.note || '') : [])
   const [err, setErr] = useState('')
   const [drafting, setDrafting] = useState(false)
 
@@ -115,7 +117,7 @@ function TypeEditor({ type, onClose, onDone }: { type: ProjectType | null; onClo
   }
 
   const parse = () => ({
-    tasks: titles.map((title, i) => ({ title, refs: refs[i] ?? [] })),
+    tasks: titles.map((title, i) => ({ title, note: notes[i]?.trim() || undefined, refs: refs[i] ?? [] })),
   })
 
   /** 客户端轻校验：参考行名称/链接须成对填（半填行提示，空行静默丢弃；完整校验在服务端 400 兜底）。 */
@@ -172,6 +174,13 @@ function TypeEditor({ type, onClose, onDone }: { type: ProjectType | null; onClo
                   <span className="min-w-0 flex-1 truncate" title={title}>{title}</span>
                   {(refs[i]?.length ?? 0) > 0 && <span className="shrink-0 text-[var(--color-ink-soft)]">参考 {refs[i].length}</span>}
                   <Btn small kind="ghost" disabled={(refs[i]?.length ?? 0) >= 10} onClick={() => setLineRefs(i, [...(refs[i] ?? []), { title: '', url: '', note: '' }])}>+ 参考</Btn>
+                </div>
+                {/* S58：每条任务的默认备注——立项随任务拷贝，提醒/预警/梳理推送自动携带 */}
+                <div className="mt-1 flex items-center gap-1 pl-7">
+                  <input className={inputCls + ' min-w-[12rem] flex-1 !text-[12px]'} maxLength={200}
+                    placeholder="默认备注（可选，≤200 字；立项随任务拷贝，提醒/预警推送自动携带）"
+                    value={notes[i] ?? ''}
+                    onChange={(e) => setNotes((prev) => { const cp = [...prev]; cp[i] = e.target.value; return cp })} />
                 </div>
                 {(refs[i] ?? []).map((r, j) => (
                   <div key={j} className="mt-1 flex flex-wrap items-center gap-1 pl-7">

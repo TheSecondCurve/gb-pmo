@@ -142,6 +142,7 @@ client.sh action generate_person_digest '{}'
 | deleted_at | INTEGER |  |
 | kind | TEXT |  |
 | reminded_at | INTEGER |  |
+| note | TEXT |  |
 
 ### milestones
 
@@ -363,6 +364,7 @@ client.sh action generate_person_digest '{}'
 | type_id | INTEGER |  |
 | title | TEXT |  |
 | sort_order | INTEGER |  |
+| note | TEXT |  |
 
 ### bot_context_resets
 

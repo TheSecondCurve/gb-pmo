@@ -392,6 +392,10 @@ function softValidateProposal(db, kind, p) {
     if (p.taskKind === 'reminder' && !p.planEndDate) return { error: '纯提醒任务必须给 planEndDate（提醒日 YYYY-MM-DD，到期推责任人+项目群后自动完成）' }
     if (p.planStartDate && !DATE_OK.test(String(p.planStartDate))) return { error: 'planStartDate 须为 YYYY-MM-DD' }
     if (p.planEndDate && !DATE_OK.test(String(p.planEndDate))) return { error: 'planEndDate 须为 YYYY-MM-DD' }
+    // S58：任务备注（软校验，硬校验在引擎 400 兜底）
+    if (p.note != null && (typeof p.note !== 'string' || !p.note.trim() || p.note.length > 200)) {
+      return { error: 'note 须为 ≤200 字的非空字符串（可省略）' }
+    }
     let owner = null
     if (p.responsibleMemberId != null) {
       owner = db.prepare(`SELECT id, name FROM members WHERE id = ? AND status = 'active'`).get(Number(p.responsibleMemberId))
@@ -401,11 +405,12 @@ function softValidateProposal(db, kind, p) {
       payload: {
         projectId: proj.id, title: title.slice(0, 200),
         ...(p.taskKind ? { taskKind: String(p.taskKind) } : {}),
+        ...(p.note ? { note: String(p.note).trim() } : {}),
         ...(owner ? { responsibleMemberId: owner.id } : {}),
         ...(p.planStartDate ? { planStartDate: String(p.planStartDate) } : {}),
         ...(p.planEndDate ? { planEndDate: String(p.planEndDate) } : {}),
       },
-      summary: `项目「${proj.name}」新增${p.taskKind === 'reminder' ? '纯提醒' : '任务'}「${title.slice(0, 200)}」（责任人 ${owner ? owner.name : '未指派'}${p.planEndDate ? `，${p.taskKind === 'reminder' ? '提醒日' : '截止'} ${p.planEndDate}` : ''}）`,
+      summary: `项目「${proj.name}」新增${p.taskKind === 'reminder' ? '纯提醒' : '任务'}「${title.slice(0, 200)}」（责任人 ${owner ? owner.name : '未指派'}${p.planEndDate ? `，${p.taskKind === 'reminder' ? '提醒日' : '截止'} ${p.planEndDate}` : ''}${p.note ? '，带备注' : ''}）`,
     }
   }
   if (kind === 'add_milestone') {

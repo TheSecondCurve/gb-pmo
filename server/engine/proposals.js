@@ -83,6 +83,7 @@ export const PROPOSAL_KINDS = {
       return tasks.createTask(db, {
         projectId: Number(payload.projectId), title: payload.title,
         ...(payload.taskKind ? { kind: payload.taskKind } : {}), // S57：任务分类（bot 协议字段名 taskKind，避开提议判别符 kind）
+        ...(payload.note ? { note: payload.note } : {}), // S58：任务备注（记录型字段直生效，K25）
         ...(payload.responsibleMemberId != null ? { responsibleMemberId: Number(payload.responsibleMemberId) } : {}),
         ...(payload.planStartDate ? { planStartDate: payload.planStartDate } : {}),
         ...(payload.planEndDate ? { planEndDate: payload.planEndDate } : {}),

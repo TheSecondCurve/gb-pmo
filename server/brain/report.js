@@ -40,7 +40,7 @@ export async function dailyReport(db, { force = false, send } = {}) {
     // 责任人视角：名下任务 + 待确认建议 + 明日到期
     const myTasks = camelizeRows(
       db.prepare(
-        `SELECT t.id, t.title, t.plan_end_date, p.name AS project_name FROM tasks t JOIN projects p ON p.id = t.project_id
+        `SELECT t.id, t.title, t.note, t.plan_end_date, p.name AS project_name FROM tasks t JOIN projects p ON p.id = t.project_id
          WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL`
       ).all(m.id)
     )
@@ -59,6 +59,12 @@ export async function dailyReport(db, { force = false, send } = {}) {
     const withRefs = myTasks.filter((t) => refMap.get(t.id)?.length)
     if (withRefs.length) {
       sections.push(`【参考资料】\n${withRefs.map((t) => `- ${t.title}：${formatTaskRefs(refMap.get(t.id))}`).join('\n')}`)
+    }
+
+    // S58：名下任务带备注的，附带「怎么干」说明（与参考资料同管道语义；无备注不加空段落）
+    const withNotes = myTasks.filter((t) => t.note)
+    if (withNotes.length) {
+      sections.push(`【任务备注】\n${withNotes.map((t) => `- ${t.title}：${t.note}`).join('\n')}`)
     }
 
     // 牵头人视角：所辖项目进展（S6-2：无更新标注而非省略）

@@ -29,14 +29,14 @@ export async function evaluateAlerts(db, { send } = {}) {
     const refMap = taskRefMap(db, ods.map((d) => d.id))
     const lines = ods.map((d) => {
       const refs = formatTaskRefs(refMap.get(d.id))
-      return `- **${d.projectName}**「${d.title}」截止 ${d.planEndDate}，已超期 ${dayDiff(d.planEndDate, todayStr)} 天${refs ? `\n  参考：${refs}` : ''}`
+      return `- **${d.projectName}**「${d.title}」截止 ${d.planEndDate}，已超期 ${dayDiff(d.planEndDate, todayStr)} 天${refs ? `\n  参考：${refs}` : ''}${d.note ? `\n  备注：${d.note}` : ''}` // S58：备注随预警带上
     })
     const body = `你有 **${ods.length}** 项逾期未完任务：\n${lines.join('\n')}`
     const card = buildOverdueAlertCard({
       memberName: m.name,
       tasks: ods.map((d) => ({
         id: d.id, title: d.title, projectName: d.projectName, planEndDate: d.planEndDate,
-        daysOverdue: dayDiff(d.planEndDate, todayStr), refs: refMap.get(d.id),
+        daysOverdue: dayDiff(d.planEndDate, todayStr), refs: refMap.get(d.id), note: d.note,
       })),
     })
     await notifyMember(db, m, { pushType: 'alert', title: `逾期任务预警：${m.name}`, body, card }, { send })
