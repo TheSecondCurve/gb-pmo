@@ -1,5 +1,8 @@
 // 大脑·IM 抽取（S3）：专题渠道直接抽取；通用群先 LLM 分拣（低置信进未分拣池）。
 // 信任边界：记录型自动生效；建议型（状态/日期/责任人）一律 pending 等人确认。
+// S50（v0.55，K33）：噪音确定性预过滤（不进 LLM、不产降级事件）；按项目归组分批抽取
+// （≤8 条且 ≤3000 字一批一次调用，事件按 msgIndex 归因源消息，缺省归批次末条）；
+// 通用群分拣维持逐条（合并判定会跨消息污染）。
 
 import { camelizeRows, camelizeRow } from '../db/index.mjs'
 import { getSetting } from '../engine/settings.js'
@@ -47,65 +50,124 @@ export async function runExtraction(db, { channelId, projectId } = {}, { llm, se
 }
 
 /**
+ * S50 噪音预过滤（确定性，先于分拣/抽取/降级）：只滤「绝不可能是项目信息」的——
+ * 空文本、纯表情/标点/符号、精确命中的应酬白名单、单字符。含实义的短消息（「完成了」）必须放行。
+ */
+const NOISE_ACKS = new Set(['收到', '好的', '好', 'ok', 'okay', '👌', '👍', '谢谢', '感谢', '嗯', '嗯嗯', '了解', '明白', '+1', '666', '哈哈', '哈哈哈', '辛苦了', '可以', '行', '对', '是的'])
+export function isNoiseMessage(text) {
+  const t = String(text || '').trim()
+  if (!t) return true
+  if (t.length <= 1) return true
+  if (NOISE_ACKS.has(t.toLowerCase()) || NOISE_ACKS.has(t)) return true
+  return /^[\p{Emoji}\p{P}\p{S}\s]+$/u.test(t) // 纯表情/标点/符号
+}
+
+// S50 批量护栏：每批 ≤8 条且消息累计 ≤3000 字（成本与上下文预算，代码常量）
+const BATCH_MAX_MESSAGES = 8
+const BATCH_MAX_CHARS = 3000
+
+/** 把同项目消息切成批次（保序）。 */
+function chunkBatches(items) {
+  const batches = []
+  let cur = []
+  let chars = 0
+  for (const item of items) {
+    const len = String(item.msg.text || '').length
+    if (cur.length && (cur.length >= BATCH_MAX_MESSAGES || chars + len > BATCH_MAX_CHARS)) {
+      batches.push(cur)
+      cur = []
+      chars = 0
+    }
+    cur.push(item)
+    chars += len
+  }
+  if (cur.length) batches.push(cur)
+  return batches
+}
+
+/**
  * 消息批量入库（测试直调；连接器喂数据的统一通道）。
- * 每条消息：身份映射 → （通用群）分拣 → LLM 抽取 → 事件写入。
+ * 流程：机器人去重 → 噪音预过滤 → 身份映射 →（通用群）逐条分拣 → 按项目归组分批抽取 → 事件写入。
  * S20-10：机器人已处理/已回复的消息（bot_commands 有 message_id）跳过，防同一消息双入库。
  */
 export async function ingestMessages(db, channel, messages, { llm: llmOverride, send } = {}) {
-  // S47（v0.52，K30）：按用途分别解析适配器——分拣与抽取各自记账；抽取带渠道绑定项目 id
-  const llm = getLlm(db, llmOverride, { purpose: 'extraction', projectId: channel.projectId ?? null })
-  const stats = { events: 0, suggestions: 0, unrouted: 0, unknownSpeakers: 0, botProcessed: 0 }
+  const stats = { events: 0, suggestions: 0, unrouted: 0, unknownSpeakers: 0, botProcessed: 0, noiseSkipped: 0 }
   const botSeen = db.prepare('SELECT 1 FROM bot_commands WHERE message_id = ?')
+
+  // ① 去重 + 噪音预过滤 + 身份映射
+  const prepared = []
   for (const msg of messages) {
     if (msg.id && botSeen.get(msg.id)) {
       stats.botProcessed += 1
       continue
     }
+    if (isNoiseMessage(msg.text)) {
+      stats.noiseSkipped += 1
+      continue
+    }
     const speaker = mapSpeaker(db, channel.platform, msg.speakerId, msg.speakerLabel)
     if (!speaker) stats.unknownSpeakers += 1
+    prepared.push({ msg: { ...msg, speakerMemberId: speaker?.id ?? null, speakerName: speaker?.name || '未识别发言人' }, speaker })
+  }
 
+  // ② 通用群逐条分拣（不合并：跨消息判定会互相污染，K33）；专题渠道直接落定
+  const settled = [] // { msg, speaker, projectId }
+  for (const item of prepared) {
     let projectId = channel.channelType === 'dedicated' ? channel.projectId : null
     if (channel.channelType === 'general') {
-      const routed = await routeMessage(db, { ...msg, speakerLabel: speaker?.name }, { llm })
+      const routed = await routeMessage(db, { ...item.msg, speakerLabel: item.speaker?.name }, { llm: llmOverride })
       const th = getSetting(db, 'thresholds')
       if (!routed.projectId || routed.confidence < th.routingConfidence) {
         db.prepare(
           'INSERT INTO unrouted_messages (platform, group_key, business_time, speaker_label, content, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-        ).run(channel.platform, channel.groupKey, msg.ts, speaker?.name || msg.speakerLabel || '未识别', msg.text, 'open', Date.now())
+        ).run(channel.platform, channel.groupKey, item.msg.ts, item.speaker?.name || item.msg.speakerLabel || '未识别', item.msg.text, 'open', Date.now())
         stats.unrouted += 1
         continue
       }
       projectId = routed.projectId
     }
-    if (!projectId) continue
+    if (projectId) settled.push({ ...item, projectId })
+  }
 
-    const extracted = await extractEvents(llm, db, projectId, [{ ...msg, speakerMemberId: speaker?.id ?? null, speakerName: speaker?.name || '未识别发言人' }])
-    for (const evt of extracted) {
-      // S3-3：未识别发言人不得产生针对具体人的任务建议
-      if (!speaker && evt.nature === 'suggestion' && evt.targetField === 'responsible_member_id') continue
-      const created = addEvent(db, {
-        projectId,
-        businessTime: msg.ts,
-        nature: evt.nature,
-        eventType: evt.eventType,
-        summary: evt.summary,
-        rawSnapshot: msg.text,
-        sourcePlatform: channel.platform,
-        sourceRef: msg.id,
-        speakerMemberId: speaker?.id ?? null,
-        speakerLabel: speaker?.name || '未识别发言人',
-        confidence: evt.confidence ?? null,
-        targetObject: evt.targetObject || 'task',
-        targetTaskId: evt.targetTaskId ?? null,
-        targetField: evt.targetField ?? null,
-        targetValue: evt.targetValue !== undefined ? String(evt.targetValue) : null,
-        generatedBy: 'extraction',
-      })
-      if (created.status === 'pending') {
-        stats.suggestions += 1
-        await pushSuggestion(db, created, { send })
-      } else {
-        stats.events += 1
+  // ③ 按项目归组、分批抽取（S47：按用途记账，项目 id 随行）
+  const byProject = new Map()
+  for (const item of settled) {
+    const list = byProject.get(item.projectId) || []
+    list.push(item)
+    byProject.set(item.projectId, list)
+  }
+  for (const [projectId, items] of byProject) {
+    const llm = getLlm(db, llmOverride, { purpose: 'extraction', projectId })
+    for (const batch of chunkBatches(items)) {
+      const extracted = await extractEvents(llm, db, projectId, batch.map((i) => i.msg))
+      for (const evt of extracted) {
+        const source = evt.sourceMsg || batch[batch.length - 1].msg
+        // S3-3：未识别发言人不得产生针对具体人的任务建议（按事件的源消息发言人判定，S50 批量延伸）
+        if (evt.nature === 'suggestion' && evt.targetField === 'responsible_member_id' && !source.speakerMemberId) continue
+        const created = addEvent(db, {
+          projectId,
+          businessTime: source.ts,
+          nature: evt.nature,
+          eventType: evt.eventType,
+          summary: evt.summary,
+          rawSnapshot: source.text,
+          sourcePlatform: channel.platform,
+          sourceRef: source.id,
+          speakerMemberId: source.speakerMemberId,
+          speakerLabel: source.speakerName,
+          confidence: evt.confidence ?? null,
+          targetObject: evt.targetObject || 'task',
+          targetTaskId: evt.targetTaskId ?? null,
+          targetField: evt.targetField ?? null,
+          targetValue: evt.targetValue !== undefined ? String(evt.targetValue) : null,
+          generatedBy: 'extraction',
+        })
+        if (created.status === 'pending') {
+          stats.suggestions += 1
+          await pushSuggestion(db, created, { send })
+        } else {
+          stats.events += 1
+        }
       }
     }
   }
@@ -192,8 +254,9 @@ export async function routeUnrouted(db, id, projectId, { llm: llmOverride, send 
 }
 
 /**
- * LLM 抽取：项目上下文 + 消息 → 事件数组。LLM 未配置时确定性降级：
- * 只产记录型进展事件（绝不自动改任务面，信任边界兜底）。
+ * LLM 抽取：项目上下文 + 消息（可多条，S50 批量） → 事件数组（每条附 sourceMsg 源消息）。
+ * 多条时 prompt 追加 msgIndex 归因约定；LLM 缺省/越界时归批次末条（LLM 答复通常针对最新消息）。
+ * LLM 未配置时确定性降级：只产记录型进展事件（绝不自动改任务面，信任边界兜底）。
  */
 export async function extractEvents(llm, db, projectId, messages) {
   if (!messages.length) return []
@@ -203,6 +266,7 @@ export async function extractEvents(llm, db, projectId, messages) {
       eventType: 'progress',
       summary: `${m.speakerName}：${m.text.slice(0, 120)}`,
       confidence: 0.3,
+      sourceMsg: m,
     }))
   }
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId)
@@ -214,6 +278,7 @@ export async function extractEvents(llm, db, projectId, messages) {
   const taskList = tasks.map((t) => `#${t.id} ${t.title} [${t.status}${t.plan_end_date ? ` 截止${t.plan_end_date}` : ''}${t.owner ? ` 负责:${t.owner}` : ''}]`).join('\n') || '（无未完任务）'
   const msList = milestones.map((m) => `#${m.id} ${m.name} ${m.plan_date || ''}`).join('\n') || '（无里程碑）'
   const msgList = messages.map((m, i) => `[${i}] ${m.speakerName}: ${m.text}`).join('\n')
+  const multi = messages.length > 1 // S50：多条时启用 msgIndex 归因约定
 
   const out = await llm.complete(
     [
@@ -222,7 +287,7 @@ export async function extractEvents(llm, db, projectId, messages) {
         content: `你是企业项目大脑的抽取器。从群聊消息中抽取项目事件，输出 JSON {"events":[...]}。
 每条事件：{"nature":"record"|"suggestion","eventType":"progress|risk|decision|blocker|finance|schedule_change|status_change|owner_change","summary":"一句中文摘要","confidence":0~1,
 "suggestion 时必填":"targetTaskId(上面任务清单里的#id)","targetField":"status|plan_end_date|plan_start_date","targetValue":"对应值(日期用YYYY-MM-DD)"}。
-规则：纯进展/风险/决策/财务事实描述 → record（财务类消息如回款/开票/费用沟通 eventType=finance，仅记录、不含金额字段）；明确的任务完成/日期变化信号 → suggestion（如"已上线/完成了" → status=done，"推迟到X" → plan_end_date）；与项目无关的寒暄不要产出；没有把握不要编 targetTaskId。只输出 JSON。`,
+规则：纯进展/风险/决策/财务事实描述 → record（财务类消息如回款/开票/费用沟通 eventType=finance，仅记录、不含金额字段）；明确的任务完成/日期变化信号 → suggestion（如"已上线/完成了" → status=done，"推迟到X" → plan_end_date）；与项目无关的寒暄不要产出；没有把握不要编 targetTaskId。${multi ? '每条事件附 "msgIndex"（消息编号 [i] 的 i，0 基）指明来源消息；无法确定时省略。' : ''}只输出 JSON。`,
       },
       {
         role: 'user',
@@ -237,13 +302,17 @@ export async function extractEvents(llm, db, projectId, messages) {
   return parsed.events
     .filter((e) => e && e.summary && e.eventType)
     .filter((e) => e.nature !== 'suggestion' || (e.targetTaskId && validTasks.has(Number(e.targetTaskId)) && e.targetField && e.targetValue !== undefined))
-    .map((e) => ({
-      nature: e.nature === 'suggestion' ? 'suggestion' : 'record',
-      eventType: String(e.eventType),
-      summary: String(e.summary).slice(0, 200),
-      confidence: Number(e.confidence) || null,
-      targetTaskId: e.targetTaskId ? Number(e.targetTaskId) : null,
-      targetField: e.targetField || null,
-      targetValue: e.targetValue,
-    }))
+    .map((e) => {
+      const idx = Number.isInteger(e.msgIndex) && e.msgIndex >= 0 && e.msgIndex < messages.length ? e.msgIndex : messages.length - 1
+      return {
+        nature: e.nature === 'suggestion' ? 'suggestion' : 'record',
+        eventType: String(e.eventType),
+        summary: String(e.summary).slice(0, 200),
+        confidence: Number(e.confidence) || null,
+        targetTaskId: e.targetTaskId ? Number(e.targetTaskId) : null,
+        targetField: e.targetField || null,
+        targetValue: e.targetValue,
+        sourceMsg: messages[idx], // S50：事件归因源消息（缺省/越界归批次末条）
+      }
+    })
 }
