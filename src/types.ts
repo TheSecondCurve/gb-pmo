@@ -58,6 +58,11 @@ export interface ChannelRow {
   id: number; platform: 'feishu' | 'wecom'; groupKey: string; name?: string | null
   channelType: 'dedicated' | 'general'; projectId?: number | null; projectName?: string | null
 }
+/** S61（v0.66）：项目 ↔ 飞书知识库页面绑定。 */
+export interface WikiBinding {
+  id: number; projectId: number; spaceId: string; nodeToken: string; objToken: string
+  title?: string | null; createdBy?: number | null; createdAt: number; updatedAt: number
+}
 export interface ProjectDetail extends ProjectRow {
   tasks: TaskRow[]
   milestones: MilestoneRow[]
