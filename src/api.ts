@@ -122,6 +122,10 @@ export const api = {
   upsertChannel: (p: Record<string, unknown>) => req('POST', '/api/v1/channels', p),
   deleteChannel: (id: number) => req('DELETE', `/api/v1/channels/${id}`),
 
+  // S61（v0.66）：项目知识库绑定
+  projectWiki: (id: number) => req<{ wiki: import('./types').WikiBinding | null }>('GET', `/api/v1/projects/${id}/wiki`),
+  bindProjectWiki: (id: number, p: Record<string, unknown>) => req<import('./types').WikiBinding>('POST', `/api/v1/projects/${id}/wiki`, p),
+
   // S48（v0.53）：未分拣池消化（仅管理员）
   unrouted: () => req<{ messages: { id: number; platform: string; groupKey: string; businessTime: number; speakerLabel: string | null; content: string }[] }>('GET', '/api/v1/admin/unrouted'),
   routeUnrouted: (id: number, projectId: number) =>

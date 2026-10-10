@@ -290,3 +290,61 @@ export async function patchEvent(cfg, calendarId, eventId, content) {
   })
   return { eventId }
 }
+
+// —— S61（v0.66，K45）知识库 Wiki/Docx：通用请求助手 + 绑定/建页/写内容 ——
+
+/**
+ * 通用飞书 API 助手（wiki/docx 共用）：tenant_token 鉴权，支持 query string。
+ * 权限不足（403 / 131006）统一翻成中文指引——机器人需先被加进知识库。
+ */
+export async function feishuApi(cfg, path, { method = 'GET', body, query } = {}) {
+  const token = await tenantToken(cfg)
+  const qs = query ? `?${new URLSearchParams(query).toString()}` : ''
+  const res = await fetch(`https://open.feishu.cn/open-apis${path}${qs}`, {
+    method,
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  })
+  let data = null
+  try { data = await res.json() } catch { /* 非 JSON */ }
+  if (!res.ok || (data && data.code !== 0)) {
+    const code = data?.code ?? res.status
+    const msg = data?.msg || ''
+    // 权限类错误给可执行指引（知识库资源授权是硬前提，K45）
+    const permHint = res.status === 403 || code === 131006 || code === 131004
+      ? '——请知识库管理员把机器人加进知识库（知识库设置→成员设置→添加成员/管理员），或对目标页面单独授权'
+      : ''
+    throw Object.assign(new Error(`飞书知识库失败(${code}): ${msg}${permHint}`), { statusCode: 502 })
+  }
+  return data?.data || {}
+}
+
+/** 用 node_token 换节点详情（验证存在 + 换出 obj_token=document_id）。 */
+export async function getWikiNode(cfg, nodeToken) {
+  const data = await feishuApi(cfg, '/wiki/v2/spaces/get_node', { query: { token: nodeToken } })
+  return data.node || null // { nodeToken, objToken, objType, title, spaceId, ... }
+}
+
+/** 列出空间某父节点下的子节点（新建子页前定位父节点用；省略 parentNodeToken = 空间根）。 */
+export async function listWikiNodes(cfg, spaceId, parentNodeToken) {
+  const query = { page_size: '50' }
+  if (parentNodeToken) query.parent_node_token = parentNodeToken
+  const data = await feishuApi(cfg, `/wiki/v2/spaces/${spaceId}/nodes`, { query })
+  return data.items || []
+}
+
+/** 在指定父节点下新建 docx 子页（父节点缺省 = 空间根）。返回新节点（含 nodeToken/objToken）。 */
+export async function createWikiNode(cfg, spaceId, { parentNodeToken, title } = {}) {
+  const body = { obj_type: 'docx', node_type: 'origin' }
+  if (parentNodeToken) body.parent_node_token = parentNodeToken
+  if (title) body.title = title
+  const data = await feishuApi(cfg, `/wiki/v2/spaces/${spaceId}/nodes`, { method: 'POST', body })
+  return data.node || null
+}
+
+/** 往 docx 文档根追加一组 block（heading/text 等）；document_id 即 wiki 节点的 obj_token。 */
+export async function appendDocBlocks(cfg, documentId, blocks) {
+  return feishuApi(cfg, `/docx/v1/documents/${documentId}/blocks/${documentId}/children`, {
+    method: 'POST', body: { children: blocks },
+  })
+}
