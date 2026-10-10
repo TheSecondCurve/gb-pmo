@@ -92,6 +92,11 @@ export const api = {
   pushes: (limit?: number) =>
     req<{ pushes: import('./types').PushRow[] }>('GET', `/api/v1/pushes${limit ? `?limit=${limit}` : ''}`),
 
+  // S47（v0.52）：LLM 用量聚合（仅管理员）
+  llmUsage: (days = 7) =>
+    req<{ days: number; byPurpose: { purpose: string; calls: number; promptTokens: number; completionTokens: number; avgDurationMs: number | null; errors: number }[]; byDay: { day: string; calls: number; tokens: number; errors: number }[] }>(
+      'GET', `/api/v1/admin/llm-usage?days=${days}`),
+
   // S25 通用提议：确认/驳回（与飞书卡片同一口子，权限矩阵在 engine）
   confirmProposal: (id: number) => req('POST', `/api/v1/proposals/${id}/confirm`, {}),
   rejectProposal: (id: number) => req('POST', `/api/v1/proposals/${id}/reject`, {}),

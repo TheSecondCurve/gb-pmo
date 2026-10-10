@@ -36,6 +36,7 @@ function LlmCard() {
   const [cfg, setCfg] = useState<LlmCfg | null>(null)
   const [active, setActive] = useState('deepseek') // 当前编辑/测试的类别；「保存」后成为生效类别
   const [result, setResult] = useState('')
+  const [usage, setUsage] = useState<Awaited<ReturnType<typeof api.llmUsage>> | null>(null)
   useEffect(() => {
     void (async () => {
       const s = await api.settings()
@@ -48,6 +49,7 @@ function LlmCard() {
       }
       setCfg(backfilled as unknown as LlmCfg)
       setActive(llm.provider || 'deepseek')
+      setUsage(await api.llmUsage(7).catch(() => null)) // S47：近 7 天用量摘要（失败不阻塞卡片）
     })()
   }, [])
   if (!cfg) return <Spinner />
@@ -87,6 +89,29 @@ function LlmCard() {
         }}>测试连接（当前类别，S17-4）</Btn>
         {result && <span className="text-[12px]">{result}</span>}
       </div>
+      {/* S47（v0.52，K30）：近 7 天 LLM 用量摘要（用途×调用数/token/失败）——成本优化的数据依据 */}
+      {usage && (
+        <div className="mt-3 border-t border-[var(--color-line)] pt-2" data-testid="llm-usage">
+          <div className="mb-1 text-[12px] text-[var(--color-ink-soft)]">近 7 天用量（按用途）</div>
+          {usage.byPurpose.length === 0 ? (
+            <div className="text-[12px] text-[var(--color-ink-soft)]">暂无 LLM 调用记录</div>
+          ) : (
+            <table className="w-full text-[12px]">
+              <thead><tr className="text-left text-[var(--color-ink-soft)]"><th className="py-0.5">用途</th><th>调用</th><th>Token（入/出）</th><th>失败</th></tr></thead>
+              <tbody>
+                {usage.byPurpose.map((r) => (
+                  <tr key={r.purpose} className="border-t border-[var(--color-line)]">
+                    <td className="py-0.5">{r.purpose}</td>
+                    <td className="num">{r.calls}</td>
+                    <td className="num">{r.promptTokens}/{r.completionTokens}</td>
+                    <td className={`num ${r.errors ? 'text-[var(--color-bad)]' : ''}`}>{r.errors}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
     </Card>
   )
 }

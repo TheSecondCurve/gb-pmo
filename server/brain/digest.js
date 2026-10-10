@@ -13,7 +13,7 @@ const DAY = 86400000
 
 /** S15 项目梳理：任务面 + 讨论面双来源汇总，每条结论带依据引用。 */
 export async function projectDigest(db, projectId, { llm: llmOverride, windowDays = 7, send } = {}) {
-  const llm = getLlm(db, llmOverride)
+  const llm = getLlm(db, llmOverride, { purpose: 'digest', projectId })
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId)
   if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
   const th = getSetting(db, 'thresholds')
@@ -88,7 +88,7 @@ export async function projectDigest(db, projectId, { llm: llmOverride, windowDay
 
 /** S16 员工梳理：跨项目任务 + 被依赖 + 排期冲突 + 超时待确认置顶。 */
 export async function personDigest(db, memberId, { llm: llmOverride, send } = {}) {
-  const llm = getLlm(db, llmOverride)
+  const llm = getLlm(db, llmOverride, { purpose: 'digest' })
   const member = db.prepare('SELECT * FROM members WHERE id = ?').get(memberId)
   if (!member) throw Object.assign(new Error('成员不存在'), { statusCode: 404 })
   const th = getSetting(db, 'thresholds')
@@ -142,7 +142,7 @@ export async function personDigest(db, memberId, { llm: llmOverride, send } = {}
 
 /** S8-2 结项复盘摘要：基于事件流的确定性生成（LLM 可增强，人工可改后作为 closeProject 入参）。 */
 export async function closeoutSummary(db, projectId, { llm: llmOverride } = {}) {
-  const llm = getLlm(db, llmOverride)
+  const llm = getLlm(db, llmOverride, { purpose: 'closeout', projectId })
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId)
   const events = camelizeRows(
     db.prepare('SELECT event_type, summary, business_time FROM project_events WHERE project_id = ? ORDER BY business_time').all(projectId)

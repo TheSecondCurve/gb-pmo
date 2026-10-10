@@ -383,6 +383,21 @@ client.sh action generate_person_digest '{}'
 | note | TEXT | 备注（可选：适用时机/范围） |
 | sort_order | INTEGER |  |
 
+### llm_calls
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| purpose | TEXT | extraction|routing|digest|closeout|draft|init_assign|chat（自由文本约定值） |
+| project_id | INTEGER | 关联项目（可空；对话面/个人梳理无单项目语义） |
+| provider | TEXT | 生效类别（deepseek|glm-coding；fake 注入时为适配器名） |
+| model | TEXT |  |
+| prompt_tokens | INTEGER | 上游 usage 返回时记录，无则 NULL |
+| completion_tokens | INTEGER |  |
+| duration_ms | INTEGER |  |
+| ok | INTEGER | 1 成功 / 0 失败（error 记摘要） |
+| error | TEXT |  |
+
 ## 枚举（值 ↔ 中文 label，双向对齐）
 
 - **memberRole**: admin=系统管理员、member=成员

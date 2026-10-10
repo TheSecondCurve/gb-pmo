@@ -455,6 +455,18 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S46-4 | 当成员打开 web「通知」页（#/pushes）时，应看到自己的推送记录（类型中文标签/标题/正文/北京时刻/投递状态），接口仅返回本人数据；IM 未配置时收件箱仍可读 | `server/test/s46-push-delivery.test.mjs` + `src/smoke.test.tsx`（前端冒烟） |
 | S46-5 | 当日报/预警/梳理/建议通知链路产出推送时，应全部经过同一投递层（三态落行语义一致），不再只写库不发送 | `server/test/s46-push-delivery.test.mjs` |
 
+## S47（P0）— 系统（大脑·LLM 适配层）/管理员 — LLM 用量记账（v0.52）
+
+`getLlm` 返回的适配器统一包裹记账层：每次逻辑调用落一行 `llm_calls`（用途/项目/provider/model/token/耗时/成败），一次调用一行（内部重试不重复计）；管理端按用途聚合 + 按日汇总，配置台 LLM 卡片展示近 7 天摘要。决策见 design.md K30。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S47-1 | 当任一大脑模块经 `getLlm` 发起调用时，应落一行 `llm_calls`（purpose/projectId/provider/model/prompt_tokens/completion_tokens/duration_ms/ok/error）；一次逻辑调用只落一行（S40 内部重试不重复计）；注入的 fake 适配器经 getLlm 包装后同样落行 | `server/test/s47-llm-usage.test.mjs` |
+| S47-2 | 当调用失败（上游报错/超时）时，该行应落 `ok=0` 与 error 摘要；成功行应携带上游返回的 token 数（无 usage 字段时容忍为空） | `server/test/s47-llm-usage.test.mjs` |
+| S47-3 | 当管理员调 `GET /api/v1/admin/llm-usage?days=7` 时，应返回按用途聚合（调用数/token 合计/平均耗时/失败数）与按日汇总；普通成员 403 | `server/test/s47-llm-usage.test.mjs` |
+| S47-4 | 当打开配置台「外部依赖→LLM」时，应展示近 7 天用量摘要（各用途调用数与 token） | `src/smoke.test.tsx`（前端冒烟） |
+| S47-5 | 当 LLM 未配置（getLlm 返回 null）时，大脑走确定性降级且不产生用量行；记账层不改变超时重试/JSON 降级等既有协议行为（S40 语义不变） | `server/test/s47-llm-usage.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

@@ -183,3 +183,9 @@
 - 决策：`notifyMember` 从「只写 `pushes` 表」升格为「投递 + 落库」的统一投递层——接收人有 feishu_id 且 `im.feishu` 凭证齐备即经应用机器人 open_id 私聊真实下发（`receive_id_type=open_id` 纯出站 REST，与长连接开关解耦），正文复用 S45 `richPost` 分流 post/text；三态落行 sent（记 message_id）/ failed（记 error，不抛给调用方）/ skipped（error 写明原因）。`pushes` 加 `error`/`message_id` 列（migration 0022）。web 新增「通知」收件箱页（#/pushes，`GET /api/v1/pushes` 仅本人），接通既有 `listPushes`。企微侧维持只落库不投递（连接器只读，K6）。
 - 理由：日报/预警/梳理/建议通知此前全部只落库不投递（`listPushes` 零调用、status='sent' 名不副实），proactive 智能的真实触达率为零——大脑的「推送半边」形同虚设；发送能力机器人回复已在用（同一 postMessage 通道），缺的只是接收人为成员的 open_id 私聊形态与投递结果留痕。投递失败不抛给调用方是因为推送是通知语义，日报主流程不该被单个接收人的 IM 故障打断；三态落行使「没收到」可排障（对照 pushes 行即知是哪段断了）。web 收件箱让 IM 未配置的部署形态下推送仍可读，且零 IM 依赖可测。
 - 推翻：v0.50 S45 明确不做条款「不做定时日报的飞书真实投递（仍只落 pushes 表）」——当时排除的范围本次补上（v0.50 的排除是范围裁剪，非「不该做」的决策）。
+
+## K30 LLM 用量记账 = 适配层统一包裹 + llm_calls 台账（S47，v0.52）
+
+- 决策：`getLlm(db, override, { purpose, projectId })` 第三参带用途元信息，返回的适配器（真实或注入 fake）统一包一层记账——每次 `complete()` 落一行 `llm_calls`（migration 0023：用途/项目/provider/model/prompt+completion tokens/耗时/ok/error）；一次逻辑调用一行（S40 的内部重试不重复计）；未配置 apiKey（返回 null）不经过记账层；记账写库失败只记日志不阻塞主调用。管理端 `GET /api/v1/admin/llm-usage` 按用途聚合 + 按日汇总，配置台 LLM 卡片展示近 7 天摘要；Agent 面不新增工具——`llm_calls` 进 schema 内省，SQL 端点直接可查。
+- 理由：PRD §7.2 自始承诺「每次调用记录用途与关联项目——费用审计」，但从未实现——没有台账就谈不上「更低成本」：模型分层、批量抽取等优化都无数据依据。记账放适配层而非各调用点，是因为大脑全部 LLM 流量必经 getLlm（v0.15 起动态解析），单点包裹零遗漏、调用方零改动（只需声明用途）；包裹 fake 适配器使测试无需真实上游即可断言台账语义。按「逻辑调用」而非「HTTP 尝试」计行，是因为费用与语义都按逻辑调用理解，重试是可靠性实现细节。
+- 推翻：无（PRD §7.2 承诺的实现补全；v0.43 S40 协议行为不变）。

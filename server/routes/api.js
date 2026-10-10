@@ -11,6 +11,7 @@ import { getAllSettings, setSetting, getSetting } from '../engine/settings.js'
 import { queryMetric, listMetrics } from '../engine/metrics.js'
 import { assertValue } from '../engine/enums.js'
 import { listPushes } from '../brain/push.js' // S46 通知收件箱
+import { llmUsage } from '../engine/llmUsage.js' // S47 LLM 用量
 
 export function registerApiRoutes(app) {
   const db = app.db
@@ -373,6 +374,12 @@ export function registerApiRoutes(app) {
       model: body.model ?? sub.model,
       timeoutMs: saved.timeoutMs,
     })
+  })
+
+  // S47（v0.52，K30）：LLM 用量聚合——按用途（调用数/token/平均耗时/失败数）+ 按北京日汇总
+  app.get('/api/v1/admin/llm-usage', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    return llmUsage(db, { days: Number(req.query.days) || 7 })
   })
 
   // S17-5：IM 连通性验证（企微未部署 SDK 时给出明确指引错误）

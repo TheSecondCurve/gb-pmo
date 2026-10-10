@@ -1,9 +1,11 @@
 // 通用群分拣（D5 / S3-2）：LLM 结合在跑项目上下文给出候选项目与置信度；
 // 低于阈值进未分拣池。LLM 未配置时用确定性降级（项目名/客户名关键词匹配，置信度 0.5）。
+// S47（v0.52，K30）：本模块自带用途记账（purpose=routing），调用方传 llmOverride 而非已解析实例。
 
-import { parseJsonLoose } from './llm.js'
+import { getLlm, parseJsonLoose } from './llm.js'
 
-export async function routeMessage(db, msg, { llm } = {}) {
+export async function routeMessage(db, msg, { llm: llmOverride } = {}) {
+  const llm = getLlm(db, llmOverride, { purpose: 'routing' })
   const projects = db
     .prepare(
       `SELECT p.id, p.name, p.client_name FROM projects p WHERE p.status = 'active'`

@@ -1,5 +1,7 @@
 # 需求初稿（PRD）— 企业项目大脑（Project Brain）
 
+> **v0.52**（2026-10-10）：**LLM 用量记账（S47，design.md K30）**——PRD §7.2 承诺「每次调用记录用途与关联项目——费用审计」，但适配层从未落任何调用台账：不知道钱花在哪，「更低成本」无从管理（全链路评估发现）。新增 `llm_calls` 表（migration 0023）：`getLlm(db, override, {purpose, projectId})` 返回的适配器统一包裹记账层——每次 `complete()` 落一行（用途/关联项目/provider/model/prompt+completion tokens（上游返回时）/耗时/成败/错误信息），**一次逻辑调用一行**（S40 的超时重试与 JSON 400 去参重试是内部重试，不重复落行）；注入的测试 fake 适配器同样被包裹（用量语义与供应商无关）；无 apiKey 返回 null 时不落行。管理端 `GET /api/v1/admin/llm-usage?days=N` 按用途聚合（调用数/token 合计/平均耗时/失败数）+ 按日汇总；配置台 LLM 卡片展示近 7 天用量摘要。协议行为零改动（超时重试/降级语义不变）。
+>
 > **v0.51**（2026-10-10）：**推送链路真实投递 + web 通知收件箱（S46，design.md K29）**——大脑的定时智能产物（日报 S6、预警 S7、项目/个人梳理 S15/S16、待确认建议通知 S3-4）此前只 INSERT 进 `pushes` 表即结束：成员有 IM id 即标 `sent` 但从未调用任何 IM 发送接口，`listPushes` 全仓零调用、web 也无收件箱——proactive 推送真实触达率为零（全链路评估发现）。本版本接通投递：①**飞书私聊真实下发**——接收人已绑定 feishu_id 且应用凭证齐备（appId/appSecret）时，经应用机器人以 `receive_id_type=open_id` 私聊投递（纯出站 REST，与长连接开关解耦）；正文复用 S45 `richPost` 确定性转换（多行/粗体/链接走 post，单行短文本走 text）；投递成功 `status='sent'` 并记录飞书 `message_id`，失败 `status='failed'` 记录 error 且**不阻塞其余接收人与调用方主流程**，无 IM 身份/凭证未配置 `status='skipped'` 并写明原因；企微侧维持只落库不投递（连接器为只读骨架，K6）。②**web 通知收件箱**——顶级导航「通知」（#/pushes）展示本人推送记录（类型/标题/正文/北京时刻/投递状态），IM 未配置时推送内容仍可读。`pushes` 表加 `error`/`message_id` 两列（migration 0022）。
 >
 > **v0.50**（2026-10-09）：**机器人飞书输出富格式化（S45，design.md K28）**——机器人在飞书群的全部答复此前走 `msg_type=text` 纯文本，只有换行，LLM 答复里的 `**粗体**` 原样显示星号，晨报/任务盘点这类重输出是一整面文字墙（用户 2026-10-09 反馈展示效果差）。按输出类型分流三层：①**文本答复走 post 富文本**——多行/含 `**`/含链接的答复（LLM 自由答复、/help 等）经确定性「文本→post」转换器渲染为段落/粗体/可点链接，单行短回执维持 text；私聊占位消息按同类型原地编辑（text→text、post→post，S20-19 语义不变）。②**晨报/任务盘点卡片化**——斜杠命令出口渲染消息卡片（标题栏配色 + 分项目 section）；单项目域（专题群=群聊主场景）任务清单以多列布局呈现「任务/状态·截止/责任人」表，多项目域与超长段落退化为分节文本行（元素预算护栏）；web 端同一命令仍收纯文本（K12 管线双入口契约不变，卡片是 IM 适配器层的渲染关注点）。③**必达兜底**——卡片/post 发送失败降级为纯文本补发；bot_reply 审计与多轮上下文继续落引擎产出的完整纯文本（卡片只是展示层）。LLM 只产文本，卡片结构不交给模型自由发挥（信任边界口径不变）；定时日报仍只落 pushes 表不真实投递，不在本次范围。
@@ -680,6 +682,19 @@
 >   - S46-4 当成员打开 web「通知」页（#/pushes）时，应看到自己的推送记录（类型中文标签/标题/正文/北京时刻/投递状态），接口仅返回本人数据；IM 未配置时收件箱仍可读。
 >   - S46-5 当日报/预警/梳理/建议通知链路产出推送时，应全部经过同一投递层（三态落行语义一致），不再只写库不发送。
 
+> **场景 S47（P0）— 系统（大脑·LLM 适配层）/管理员 — 全线（v0.52）**
+> - 触发时机：大脑任一模块发起 LLM 调用时；管理员查看配置台 LLM 卡片或调 `GET /api/v1/admin/llm-usage`。
+> - 操作内容：每次 LLM 调用落一行台账（用途/关联项目/provider/model/token/耗时/成败/错误）；管理端按用途聚合 + 按日汇总查看用量。
+> - 产生/变更的记录：`llm_calls` 表（migration 0023）。
+> - 完成标志：能回答「昨天抽取/分拣/梳理/问答各花了多少 token、失败几次」；成本优化（模型分层等）有数据依据。
+> - 审批/协作：仅系统管理员可见用量（普通成员 403）。
+> - 验收标准：
+>   - S47-1 当任一大脑模块经 `getLlm` 发起调用时，应落一行 `llm_calls`（purpose/projectId/provider/model/prompt_tokens/completion_tokens/duration_ms/ok/error）；一次逻辑调用只落一行（S40 内部重试不重复计）；注入的 fake 适配器经 getLlm 包装后同样落行。
+>   - S47-2 当调用失败（上游报错/超时）时，该行应落 `ok=0` 与 error 摘要；成功行应携带上游返回的 token 数（无 usage 字段时容忍为空）。
+>   - S47-3 当管理员调 `GET /api/v1/admin/llm-usage?days=7` 时，应返回按用途聚合（调用数/token 合计/平均耗时/失败数）与按日汇总；普通成员 403。
+>   - S47-4 当打开配置台「外部依赖→LLM」时，应展示近 7 天用量摘要（各用途调用数与 token）。
+>   - S47-5 当 LLM 未配置（getLlm 返回 null）时，大脑走确定性降级且不产生用量行；记账层不改变超时重试/JSON 降级等既有协议行为（S40 语义不变）。
+
 **P1/P2 场景（编号预分配，细节在晋级时补全）：**
 
 | 编号 | 级别 | 场景 | 一句话说明 |
@@ -976,6 +991,12 @@ Interactive dashboard 是 P0 标配交付（见 analytics-design.md）。**维�
 - **投递层**（`brain/push.js`）：`notifyMember` 从「只落库」升格为「投递 + 落库」——接收人有 feishu_id 且 `im.feishu` 凭证齐备（appId/appSecret）即经应用机器人以 `receive_id_type=open_id` 私聊下发（`connectors/feishu.js` 新增 `sendTextToUser`/`sendPostToUser`；正文经 S45 `richPost` 确定性分流 post/text）。三态落行：`sent`（记 `message_id`）/ `failed`（记 `error`，**不抛给调用方**——推送失败不阻塞日报/预警/梳理主流程）/ `skipped`（`error` 写明原因：无 IM 身份 / 飞书凭证未配置 / 企微通道未接线）。发送是纯出站 REST（tenant_access_token），与 `botEnabled` 长连接开关解耦（收消息才需要长连接）；需应用具备 `im:message:send_as_bot` 权限（附录 A.1 第 7 步已含）。测试经 `send` 注入点喂假发送器（与 S34 backupFetch 同模式），调度器/引擎生产路径不注入时走真实连接器。
 - **收件箱**：`GET /api/v1/pushes?limit=` 仅返回本人推送（session 成员过滤）；web 顶级导航新增「通知」（#/pushes）——既有 `listPushes` 函数接通为页面数据源，列表展示类型中文标签/标题/正文/北京时刻/投递状态。投递状态中文映射：sent=已送达、failed=投递失败、skipped=未投递（原因）。
 - **边界**：企微推送维持不落（会话存档连接器只读，K6；企微下发需另开应用消息通道，不在本期）；推送类型清单不变（日报/预警/梳理/建议通知），不新增推送品类；收件箱为纯只读列表，不做已读状态管理。
+
+### 7.25 LLM 用量记账（S47，v0.52）
+
+- **台账**：`llm_calls` 表（purpose / project_id / provider / model / prompt_tokens / completion_tokens / duration_ms / ok / error / created_at）。记账点在适配层：`getLlm(db, override, { purpose, projectId })` 把返回的适配器包一层——`complete()` 计时、取 `data.usage`（上游有则记 token）、成败与错误摘要落行；**一次逻辑调用一行**（S40 超时重试与 JSON 400 去参重试属内部重试，以最终结果计一行）；fake 注入适配器同样被包裹（用量语义与供应商无关，测试可断言）；未配置 apiKey 返回 null 不经过记账层。记账写库失败只记日志不阻塞调用（台账是旁观语义）。
+- **用途枚举**（自由文本列，约定取值）：extraction（S3 抽取）/ routing（通用群分拣）/ digest（S15/S16 梳理）/ closeout（S8-2 复盘草稿）/ draft（S17-9 任务清单起草）/ init_assign（S39 初始分配）/ chat（S20/S24 对话面有界循环）/ test（测试连接，不落库）。
+- **查看**：`GET /api/v1/admin/llm-usage?days=N`（默认 7，≤90）——`byPurpose` 聚合（calls/tokens/avgDurationMs/errors）+ `byDay` 汇总（北京日）；仅管理员。配置台「外部依赖→LLM」卡片内嵌近 7 天摘要表。Agent 面零新增工具——`llm_calls` 进 schema 内省摘要，机器人/Agent SQL 直接可查（与「schema 内省零新增工具」同哲学）。
 
 ### 7.3 偏离记录（须写入项目实例文档）
 

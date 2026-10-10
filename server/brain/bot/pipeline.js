@@ -241,8 +241,8 @@ export async function runConversation(db, env, opts = {}) {
     return await opts.reply(`今天的指令额度（${limit} 条）已用完，明天再来找我吧。`, { memberId: env.member.id, intent: 'gate', result: 'refused_quota' })
   }
 
-  // ③ LLM 解析（未配置降级指引，斜杠命令已在上一步先行可用）
-  const llm = getLlm(db, opts.llm)
+  // ③ LLM 解析（未配置降级指引，斜杠命令已在上一步先行可用）；S47：对话面用途记账 purpose=chat
+  const llm = getLlm(db, opts.llm, { purpose: 'chat' })
   if (!llm) return await opts.reply(noLlmText(env.surface), { memberId: env.member.id, intent: 'gate', result: 'no_llm' })
 
   // ③b S20-19 慢路径开始：适配器回调（飞书私聊发「正在处理」占位）——毫秒级出口（斜杠/限额/未配置）

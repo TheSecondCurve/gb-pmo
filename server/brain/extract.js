@@ -52,7 +52,8 @@ export async function runExtraction(db, { channelId, projectId } = {}, { llm, se
  * S20-10：机器人已处理/已回复的消息（bot_commands 有 message_id）跳过，防同一消息双入库。
  */
 export async function ingestMessages(db, channel, messages, { llm: llmOverride, send } = {}) {
-  const llm = getLlm(db, llmOverride)
+  // S47（v0.52，K30）：按用途分别解析适配器——分拣与抽取各自记账；抽取带渠道绑定项目 id
+  const llm = getLlm(db, llmOverride, { purpose: 'extraction', projectId: channel.projectId ?? null })
   const stats = { events: 0, suggestions: 0, unrouted: 0, unknownSpeakers: 0, botProcessed: 0 }
   const botSeen = db.prepare('SELECT 1 FROM bot_commands WHERE message_id = ?')
   for (const msg of messages) {
