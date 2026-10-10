@@ -478,6 +478,16 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S48-3 | 当管理员忽略一条未分拣消息时，应落 `status='discarded'` 并从 open 列表消失 | `server/test/s48-unrouted-silent.test.mjs` |
 | S48-4 | 当在跑项目连续 silentDays 天无已生效事件且窗口内无任务变动时，预警巡检应推送牵头人与管理员（列出项目名与沉默天数）；同一项目在同一沉默窗口内不重复推送（节流）；刚发生事件或任务有变动的项目不预警 | `server/test/s48-unrouted-silent.test.mjs` |
 
+## S49（P0）— 系统（大脑·调度）/老板 — 每周定时梳理与老板周报简报（v0.54）
+
+调度器第六任务 `digest`（默认周一 09:00）：全部在跑项目跑项目梳理推牵头人 + 组合级周报推管理员（本周新增/结项、逾期、沉默、交付临近、过载；LLM 综述可选）。周级幂等：本周已有周报推送行则整轮跳过。决策见 design.md K32。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S49-1 | 当 digestCron 到点时，应对全部在跑项目跑项目梳理并推送牵头人；`digestCron`/`digestEnabled` 进配置台「阈值与推送」（非法 cron 400、开关停跑，与既有调度任务同构） | `server/test/s49-weekly-digest.test.mjs` |
+| S49-2 | 当周报推送时，正文应含本周新增/结项计数、逾期项目清单（含逾期数）、沉默项目清单、未来 14 天交付临近清单、关键人过载清单（数据确定性组装，北京时区）；LLM 配置时应有综述段，未配置时降级为纯数据文本不报错 | `server/test/s49-weekly-digest.test.mjs` |
+| S49-3 | 当同一自然周内 digest 任务再次触发时（如进程重启跨过 cron 时点），应整轮跳过（本周已有周报推送行），不重复产梳理建议与周报推送 | `server/test/s49-weekly-digest.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

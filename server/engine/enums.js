@@ -91,6 +91,8 @@ export const DEFAULT_SETTINGS = {
     calendarSyncEnabled: true,
     backupCron: '30 3 * * *',          // 数据库异地备份（S34，默认每日 03:30 避开整点；存储未配全时静默跳过）
     backupEnabled: true,
+    digestCron: '0 9 * * 1',           // 每周梳理 + 老板周报（S49，默认周一 09:00；周级幂等——本周已推周报则整轮跳过）
+    digestEnabled: true,
   },
   // S22 项目日历：feishuCalendarId 空=未初始化（配置台「外部依赖→飞书」初始化写入；同步任务静默跳过）
   calendar: { feishuCalendarId: '' },

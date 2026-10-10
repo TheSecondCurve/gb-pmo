@@ -1,7 +1,7 @@
-// 调度器（S18，v0.7）：五项定时任务（信息更新对齐 / 预警 / 日报 / 项目日历同步 / 数据库备份）由 settings.scheduler 的
-// cron + 每任务 enabled 开关驱动。调度器随进程默认运行（原 ENABLE_SCHEDULER 环境变量已删除）；心跳每分钟读配置判定
-//（改配置保存即生效，无需重启）；判定语义 =「上次运行之后到现在」窗口内存在 cron 匹配分钟（isDue）。测试不启动调度器
-//（测试只走 buildApp；心跳行为用注入 runners 直测）。
+// 调度器（S18，v0.7）：六项定时任务（信息更新对齐 / 预警 / 日报 / 项目日历同步 / 数据库备份 / 每周梳理与周报〔S49〕）
+// 由 settings.scheduler 的 cron + 每任务 enabled 开关驱动。调度器随进程默认运行（原 ENABLE_SCHEDULER 环境变量已删除）；
+// 心跳每分钟读配置判定（改配置保存即生效，无需重启）；判定语义 =「上次运行之后到现在」窗口内存在 cron 匹配分钟（isDue）。
+// 测试不启动调度器（测试只走 buildApp；心跳行为用注入 runners 直测）。
 
 import { getSetting } from '../engine/settings.js'
 import { bjDayStartMs } from '../db/time.js'
@@ -12,8 +12,9 @@ export const TASKS = [
   { key: 'extraction', cronKey: 'extractionCron', enabledKey: 'extractionEnabled' },
   { key: 'alerts', cronKey: 'alertCron', enabledKey: 'alertEnabled' },
   { key: 'report', cronKey: 'reportCron', enabledKey: 'reportEnabled' },
-  { key: 'calendarSync', cronKey: 'calendarSyncCron', enabledKey: 'calendarSyncEnabled' }, // S22 项目日历对账
+  { key: 'calendarSync', cronKey: 'calendarSyncCron', enabledKey: 'calendarSyncEnabled' },
   { key: 'backup', cronKey: 'backupCron', enabledKey: 'backupEnabled' }, // S34 数据库异地备份（存储未配全时 runner 内部跳过）
+  { key: 'digest', cronKey: 'digestCron', enabledKey: 'digestEnabled' }, // S49 每周梳理 + 老板周报（runner 内周级幂等）
 ]
 
 const DEFAULT_RUNNERS = {
@@ -22,6 +23,7 @@ const DEFAULT_RUNNERS = {
   report: async (db) => (await import('./report.js')).dailyReport(db, { force: false }),
   calendarSync: async (db) => (await import('./calendar.js')).syncProjectCalendar(db),
   backup: async (db) => (await import('../engine/backup.js')).runBackup(db),
+  digest: async (db, { llm }) => (await import('./digest.js')).weeklyDigestRun(db, { llm }),
 }
 
 /** 纯判定：给定调度配置（含 cron 与 enabled）与各任务上次运行时刻，返回此刻应跑的任务 key 数组。
@@ -35,9 +37,12 @@ export function dueTasks(cfg, lastRuns, nowMs) {
 
 /**
  * 冷启动锚点：report 锚定 max(今日 00:00, 最近一次日报推送时刻) —— 停机跨过时点当日补发、
- * 已发不重发由窗口语义 + dailyReport 当日去重兜底；其余任务锚定当前时刻（游标/预警本身幂等增量）。
+ * 已发不重发由窗口语义 + dailyReport 当日去重兜底；digest（S49 周任务）锚定今日 00:00——
+ * 周一跨过 cron 时点的重启可补跑，周级幂等由 weeklyDigestRun 的周报推送行判重兜底；
+ * 其余任务锚定当前时刻（游标/预警本身幂等增量）。
  */
 export function initialLastRun(db, taskKey, nowMs) {
+  if (taskKey === 'digest') return bjDayStartMs(nowMs)
   if (taskKey !== 'report') return nowMs
   const dayStart = bjDayStartMs(nowMs) // 「今日」按北京日（S19）
   const lastPush = db

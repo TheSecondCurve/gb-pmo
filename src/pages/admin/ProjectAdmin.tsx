@@ -357,6 +357,7 @@ interface SchedulerCfg {
   reportCron: string; reportEnabled: boolean
   calendarSyncCron: string; calendarSyncEnabled: boolean
   backupCron: string; backupEnabled: boolean
+  digestCron: string; digestEnabled: boolean
 }
 
 function ParamsTab() {
@@ -376,7 +377,7 @@ function ParamsTab() {
   const num = (k: keyof Thresholds) => (
     <input type="number" step="0.05" className={inputCls} value={thresholds[k]} onChange={(e) => setThresholds({ ...thresholds, [k]: Number(e.target.value) })} />
   )
-  const task = (cronKey: 'extractionCron' | 'alertCron' | 'reportCron' | 'calendarSyncCron' | 'backupCron', enabledKey: 'extractionEnabled' | 'alertEnabled' | 'reportEnabled' | 'calendarSyncEnabled' | 'backupEnabled', label: string) => (
+  const task = (cronKey: 'extractionCron' | 'alertCron' | 'reportCron' | 'calendarSyncCron' | 'backupCron' | 'digestCron', enabledKey: 'extractionEnabled' | 'alertEnabled' | 'reportEnabled' | 'calendarSyncEnabled' | 'backupEnabled' | 'digestEnabled', label: string) => (
     <div className="flex items-end gap-2">
       <Field label={label}>
         <input className={inputCls + ' font-mono !w-40'} value={sched[cronKey]} onChange={(e) => setSched({ ...sched, [cronKey]: e.target.value })} />
@@ -415,6 +416,7 @@ function ParamsTab() {
           {task('reportCron', 'reportEnabled', '日报提醒')}
           {task('calendarSyncCron', 'calendarSyncEnabled', '项目日历同步')}
           {task('backupCron', 'backupEnabled', '数据库备份')}
+          {task('digestCron', 'digestEnabled', '每周梳理与周报')}
           <Btn kind="primary" onClick={async () => {
             try {
               await api.putSetting('scheduler', sched)
