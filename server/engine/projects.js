@@ -80,10 +80,11 @@ export function createProject(db, input, by) {
     const refStmt = db.prepare('INSERT INTO task_refs (task_id, title, url, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)')
     items.forEach((item, i) => {
       const win = schedule?.[i]
+      // S58：默认备注随任务拷贝（模板路径来自类型清单；自定义路径 normalizeTypeTasks 归一，未给为 NULL）
       const taskInfo = db.prepare(
-        `INSERT INTO tasks (project_id, title, responsible_member_id, status, plan_start_date, plan_end_date, source, created_at, updated_at)
-         VALUES (?, ?, NULL, 'todo', ?, ?, ?, ?, ?)`
-      ).run(projectId, item.title, win ? win.planStartDate : (planStartDate || today()), win ? win.planEndDate : null, source, now, now)
+        `INSERT INTO tasks (project_id, title, note, responsible_member_id, status, plan_start_date, plan_end_date, source, created_at, updated_at)
+         VALUES (?, ?, ?, NULL, 'todo', ?, ?, ?, ?, ?)`
+      ).run(projectId, item.title, item.note ?? null, win ? win.planStartDate : (planStartDate || today()), win ? win.planEndDate : null, source, now, now)
       // S33：模板/自定义任务的参考随标题拷贝进 task_refs（创建人=立项人；落表即被 S23 全套能力接管）
       item.refs.forEach((ref) => refStmt.run(Number(taskInfo.lastInsertRowid), ref.title, ref.url, ref.note, by ?? null, now))
     })

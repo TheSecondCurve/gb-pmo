@@ -27,10 +27,11 @@ export async function evaluateReminders(db, { send, now = Date.now } = {}) {
       pushType: 'reminder', projectId: t.projectId,
       title: `⏰ 提醒：${t.title}`,
       body: `「**${t.projectName}**」的纯提醒事项「**${t.title}**」提醒日（${t.planEndDate}）到了` +
-        `${ownerActive ? `，责任人 **${t.responsibleName}**` : ''}。一次性送达，任务已自动标记完成（不追踪状态）。`,
+        `${ownerActive ? `，责任人 **${t.responsibleName}**` : ''}。一次性送达，任务已自动标记完成（不追踪状态）。` +
+        `${t.note ? `\n备注：${t.note}` : ''}`, // S58：备注「怎么干」随提醒带上
       card: buildReminderCard({
         title: t.title, projectName: t.projectName, planEndDate: t.planEndDate,
-        responsibleName: ownerActive ? t.responsibleName : null,
+        responsibleName: ownerActive ? t.responsibleName : null, note: t.note,
       }),
     }
     // 责任人私聊（未指派/离职跳过——群侧兜底触达）

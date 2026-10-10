@@ -98,7 +98,7 @@ export async function personDigest(db, memberId, { llm: llmOverride, send } = {}
 
   const tasks = camelizeRows(
     db.prepare(
-      `SELECT t.id, t.title, t.status, t.plan_start_date, t.plan_end_date, p.name AS project_name, p.id AS project_id
+      `SELECT t.id, t.title, t.note, t.status, t.plan_start_date, t.plan_end_date, p.name AS project_name, p.id AS project_id
        FROM tasks t JOIN projects p ON p.id = t.project_id
        WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL AND p.status = 'active' ORDER BY t.plan_end_date`
     ).all(memberId)
@@ -119,11 +119,11 @@ export async function personDigest(db, memberId, { llm: llmOverride, send } = {}
     }
   }
 
-  // S23：任务行附带参考资料（SOP/知识库链接），执行人拿到完整信息
+  // S23：任务行附带参考资料（SOP/知识库链接）+ S58 备注（怎么干），执行人拿到完整信息
   const refMap = taskRefMap(db, tasks.map((t) => t.id))
   const taskLines = tasks.map((t) => {
     const refs = formatTaskRefs(refMap.get(t.id))
-    return `- ${t.project_name} #${t.id} ${t.title} [${t.status}]${t.planEndDate ? ` 截止${t.planEndDate}${t.planEndDate < today() ? '（逾期）' : ''}` : ''}${refs ? `\n  参考：${refs}` : ''}`
+    return `- ${t.project_name} #${t.id} ${t.title} [${t.status}]${t.planEndDate ? ` 截止${t.planEndDate}${t.planEndDate < today() ? '（逾期）' : ''}` : ''}${refs ? `\n  参考：${refs}` : ''}${t.note ? `\n  备注：${t.note}` : ''}`
   }).join('\n') || '（无未完任务）'
   let narrative
   if (llm) {
