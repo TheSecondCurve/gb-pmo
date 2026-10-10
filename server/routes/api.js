@@ -382,6 +382,31 @@ export function registerApiRoutes(app) {
     return llmUsage(db, { days: Number(req.query.days) || 7 })
   })
 
+  // S48（v0.53，K31）：未分拣池消化——列表 / 归挂到项目（重走抽取）/ 忽略（仅管理员）
+  app.get('/api/v1/admin/unrouted', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { listUnrouted } = await import('../brain/extract.js')
+    return { messages: listUnrouted(db) }
+  })
+
+  app.post('/api/v1/admin/unrouted/:id/route', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const projectId = Number(req.body?.projectId)
+    if (!Number.isInteger(projectId)) return reply.status(400).send({ message: 'projectId 必填（整数）' })
+    const { routeUnrouted } = await import('../brain/extract.js')
+    const out = await routeUnrouted(db, Number(req.params.id), projectId, { llm: app.llm ?? undefined })
+    auth.audit(db, { memberId: req.member.id, action: 'unrouted.route', objectType: 'unrouted_message', objectId: Number(req.params.id), detail: { projectId } })
+    return out
+  })
+
+  app.post('/api/v1/admin/unrouted/:id/discard', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { discardUnrouted } = await import('../brain/extract.js')
+    const out = discardUnrouted(db, Number(req.params.id))
+    auth.audit(db, { memberId: req.member.id, action: 'unrouted.discard', objectType: 'unrouted_message', objectId: Number(req.params.id) })
+    return out
+  })
+
   // S17-5：IM 连通性验证（企微未部署 SDK 时给出明确指引错误）
   app.post('/api/v1/admin/test-im/:platform', async (req, reply) => {
     if (!requireAdmin(req, reply)) return

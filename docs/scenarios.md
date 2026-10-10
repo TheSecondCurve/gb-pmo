@@ -467,6 +467,17 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S47-4 | 当打开配置台「外部依赖→LLM」时，应展示近 7 天用量摘要（各用途调用数与 token） | `src/smoke.test.tsx`（前端冒烟） |
 | S47-5 | 当 LLM 未配置（getLlm 返回 null）时，大脑走确定性降级且不产生用量行；记账层不改变超时重试/JSON 降级等既有协议行为（S40 语义不变） | `server/test/s47-llm-usage.test.mjs` |
 
+## S48（P0）— 管理员/系统（大脑·预警）— 未分拣池出口与沉默项目预警（v0.53）
+
+未分拣消息池从「只写不读」接通管理员消化出口（列表/归挂重走抽取/忽略，仅管理员）；沉默项目（连续 silentDays 天无已生效事件且无任务变动）由预警巡检主动推牵头人+管理员，同窗口节流。决策见 design.md K31。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S48-1 | 当管理员打开未分拣列表时，应看到 open 状态消息（群/发言人/内容摘要/北京时刻）；普通成员 403 | `server/test/s48-unrouted-silent.test.mjs` |
+| S48-2 | 当管理员将一条未分拣消息归挂到项目时，应落 `status='routed'` + `routed_project_id`，并以原消息时刻/原文对该消息重走抽取（产出事件归属该项目，发言人归因保留原标签、不映射成员）；项目不存在 404，消息非 open 状态 409 | `server/test/s48-unrouted-silent.test.mjs` |
+| S48-3 | 当管理员忽略一条未分拣消息时，应落 `status='discarded'` 并从 open 列表消失 | `server/test/s48-unrouted-silent.test.mjs` |
+| S48-4 | 当在跑项目连续 silentDays 天无已生效事件且窗口内无任务变动时，预警巡检应推送牵头人与管理员（列出项目名与沉默天数）；同一项目在同一沉默窗口内不重复推送（节流）；刚发生事件或任务有变动的项目不预警 | `server/test/s48-unrouted-silent.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

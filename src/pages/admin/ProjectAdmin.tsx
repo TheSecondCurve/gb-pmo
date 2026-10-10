@@ -2,7 +2,11 @@ import { useEffect, useState } from 'react'
 import { api } from '../../api'
 import { useStore } from '../../store'
 import { Badge, Btn, Card, Empty, Field, InlineText, Modal, Spinner, Tabs, inputCls } from '../../components/ui'
-import type { ChannelRow, ProjectType } from '../../types'
+import { fmtDateTime } from '../../fmt'
+import type { ChannelRow, ProjectRow, ProjectType } from '../../types'
+
+// S48（v0.53）：未分拣消息行（通用群低置信池）
+interface UnroutedRow { id: number; platform: string; groupKey: string; businessTime: number; speakerLabel: string | null; content: string }
 import { ADMIN_SECTIONS } from './sections'
 
 const TABS = ADMIN_SECTIONS[0].tabs
@@ -212,12 +216,12 @@ function TypeEditor({ type, onClose, onDone }: { type: ProjectType | null; onClo
 function ChannelsTab() {
   const [channels, setChannels] = useState<ChannelRow[] | null>(null)
   const [todo, setTodo] = useState<{ id: number; name: string; leadName: string }[]>([])
-  useEffect(() => {
-    void (async () => {
-      const [c, t] = await Promise.all([api.channels(), api.adminTodo()])
-      setChannels(c.channels); setTodo(t.projects)
-    })()
-  }, [])
+  const [unrouted, setUnrouted] = useState<UnroutedRow[] | null>(null)
+  const reload = async () => {
+    const [c, t, u] = await Promise.all([api.channels(), api.adminTodo(), api.unrouted()])
+    setChannels(c.channels); setTodo(t.projects); setUnrouted(u.messages)
+  }
+  useEffect(() => { void reload() }, [])
   if (!channels) return <Spinner />
   return (
     <div className="space-y-4">
@@ -228,8 +232,46 @@ function ChannelsTab() {
           </ul>
         </Card>
       )}
-      <ChannelsCard channels={channels} onDone={async () => { const c = await api.channels(); setChannels(c.channels); const t = await api.adminTodo(); setTodo(t.projects) }} />
+      <ChannelsCard channels={channels} onDone={reload} />
+      {/* S48（v0.53，K31）：未分拣池消化——通用群低置信消息归挂到项目（重走抽取）或忽略 */}
+      {unrouted && unrouted.length > 0 && <UnroutedCard messages={unrouted} onDone={reload} />}
     </div>
+  )
+}
+
+// S48：未分拣消息卡片（仅管理员能进本页，接口同样仅管理员）
+function UnroutedCard({ messages, onDone }: { messages: UnroutedRow[]; onDone: () => Promise<void> }) {
+  const { toast } = useStore()
+  const [projects, setProjects] = useState<ProjectRow[]>([])
+  const [pick, setPick] = useState<Record<number, number>>({})
+  useEffect(() => { void (async () => setProjects((await api.projects(['active'])).projects))() }, [])
+  const route = async (id: number) => {
+    const projectId = pick[id]
+    if (!projectId) { toast('先选择要归挂的项目', 'bad'); return }
+    const r = await api.routeUnrouted(id, projectId)
+    toast(`已归挂到「${r.projectName}」：事件 ${r.events} 条、待确认建议 ${r.suggestions} 条`)
+    await onDone()
+  }
+  return (
+    <Card title={`未分拣消息（${messages.length}）：通用群低置信消息，归挂后重走抽取`}>
+      <ul className="space-y-2 text-[13px]">
+        {messages.map((m) => (
+          <li key={m.id} className="border-b border-[var(--color-line)] pb-2" data-testid={`unrouted-${m.id}`}>
+            <div className="text-[12px] text-[var(--color-ink-soft)]">{fmtDateTime(m.businessTime)} · {m.speakerLabel} · 群 {m.groupKey}</div>
+            <div className="my-1">{m.content}</div>
+            <div className="flex items-center gap-2">
+              <select className={inputCls} value={pick[m.id] ?? ''} aria-label={`归挂项目（消息 ${m.id}）`}
+                onChange={(e) => setPick({ ...pick, [m.id]: Number(e.target.value) })}>
+                <option value="">选择项目…</option>
+                {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              </select>
+              <Btn small kind="primary" onClick={() => void route(m.id)}>归挂到项目</Btn>
+              <Btn small kind="ghost" onClick={async () => { await api.discardUnrouted(m.id); toast('已忽略'); await onDone() }}>忽略</Btn>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </Card>
   )
 }
 

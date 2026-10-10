@@ -1,5 +1,7 @@
 # 需求初稿（PRD）— 企业项目大脑（Project Brain）
 
+> **v0.53**（2026-10-10）：**未分拣池消化出口 + 沉默项目主动预警（S48，design.md K31）**——两个治理闭环补全：①通用群分拣置信度不足的消息落 `unrouted_messages` 后**没有任何出口**（无列表、无归挂、无忽略，全仓零读取）——S3-2 承诺的「进未分拣池」成为死胡同。新增管理员出口：配置台「渠道」页未分拣列表（内容/群/发言人/北京时刻），逐条「归挂到项目」（重走抽取产事件，status=routed）或「忽略」（status=discarded）；接口 `GET /api/v1/admin/unrouted` + `POST …/unrouted/:id/route|discard`（仅管理员）。②**沉默项目主动预警**：沉默检测此前只在梳理报告里标注（被动），预警巡检（S7）不覆盖——沉默超阈值（`thresholds.silentDays`）且无任务变动的在跑项目，现在由 `evaluateAlerts` 主动推给牵头人 + 管理员；同一项目在同一沉默窗口内不重复推送（按 pushes 既有行节流）。纯确定性逻辑，零 LLM 成本。
+>
 > **v0.52**（2026-10-10）：**LLM 用量记账（S47，design.md K30）**——PRD §7.2 承诺「每次调用记录用途与关联项目——费用审计」，但适配层从未落任何调用台账：不知道钱花在哪，「更低成本」无从管理（全链路评估发现）。新增 `llm_calls` 表（migration 0023）：`getLlm(db, override, {purpose, projectId})` 返回的适配器统一包裹记账层——每次 `complete()` 落一行（用途/关联项目/provider/model/prompt+completion tokens（上游返回时）/耗时/成败/错误信息），**一次逻辑调用一行**（S40 的超时重试与 JSON 400 去参重试是内部重试，不重复落行）；注入的测试 fake 适配器同样被包裹（用量语义与供应商无关）；无 apiKey 返回 null 时不落行。管理端 `GET /api/v1/admin/llm-usage?days=N` 按用途聚合（调用数/token 合计/平均耗时/失败数）+ 按日汇总；配置台 LLM 卡片展示近 7 天用量摘要。协议行为零改动（超时重试/降级语义不变）。
 >
 > **v0.51**（2026-10-10）：**推送链路真实投递 + web 通知收件箱（S46，design.md K29）**——大脑的定时智能产物（日报 S6、预警 S7、项目/个人梳理 S15/S16、待确认建议通知 S3-4）此前只 INSERT 进 `pushes` 表即结束：成员有 IM id 即标 `sent` 但从未调用任何 IM 发送接口，`listPushes` 全仓零调用、web 也无收件箱——proactive 推送真实触达率为零（全链路评估发现）。本版本接通投递：①**飞书私聊真实下发**——接收人已绑定 feishu_id 且应用凭证齐备（appId/appSecret）时，经应用机器人以 `receive_id_type=open_id` 私聊投递（纯出站 REST，与长连接开关解耦）；正文复用 S45 `richPost` 确定性转换（多行/粗体/链接走 post，单行短文本走 text）；投递成功 `status='sent'` 并记录飞书 `message_id`，失败 `status='failed'` 记录 error 且**不阻塞其余接收人与调用方主流程**，无 IM 身份/凭证未配置 `status='skipped'` 并写明原因；企微侧维持只落库不投递（连接器为只读骨架，K6）。②**web 通知收件箱**——顶级导航「通知」（#/pushes）展示本人推送记录（类型/标题/正文/北京时刻/投递状态），IM 未配置时推送内容仍可读。`pushes` 表加 `error`/`message_id` 两列（migration 0022）。
@@ -695,6 +697,18 @@
 >   - S47-4 当打开配置台「外部依赖→LLM」时，应展示近 7 天用量摘要（各用途调用数与 token）。
 >   - S47-5 当 LLM 未配置（getLlm 返回 null）时，大脑走确定性降级且不产生用量行；记账层不改变超时重试/JSON 降级等既有协议行为（S40 语义不变）。
 
+> **场景 S48（P0）— 管理员/系统（大脑·预警）— 全线（v0.53）**
+> - 触发时机：通用群消息分拣置信度不足落未分拣池后，管理员在配置台「渠道」页消化；预警巡检（S7 周期）发现沉默在跑项目。
+> - 操作内容：①未分拣池消化——列表查看 open 状态的未分拣消息，逐条「归挂到项目」（按原消息时刻与原文重走抽取，事件落到所选项目，发言人保留原标签）或「忽略」。②沉默项目预警——在跑项目连续 `silentDays` 天无已生效事件且无任务变动时，推送牵头人与管理员；同窗口内不重复推。
+> - 产生/变更的记录：`unrouted_messages` 状态流转（open→routed/discarded，归挂记 routed_project_id）；预警推送记录。
+> - 完成标志：未分拣消息不再沉默堆积；沉默项目主动浮出水面到牵头人 IM/收件箱。
+> - 审批/协作：未分拣池消化仅系统管理员（通用群配置本就仅管理员，S17-12）。
+> - 验收标准：
+>   - S48-1 当管理员打开未分拣列表时，应看到 open 状态消息（群/发言人/内容摘要/北京时刻）；普通成员 403。
+>   - S48-2 当管理员将一条未分拣消息归挂到项目时，应落 `status='routed'` + `routed_project_id`，并以原消息时刻/原文对该消息重走抽取（产出事件归属该项目，发言人归因保留原标签、不映射成员——无发送者 id 可映射）；项目不存在 404，消息非 open 状态 409。
+>   - S48-3 当管理员忽略一条未分拣消息时，应落 `status='discarded'` 并从 open 列表消失。
+>   - S48-4 当在跑项目连续 silentDays 天无已生效事件且窗口内无任务变动时，预警巡检应推送牵头人与管理员（列出项目名与沉默天数）；同一项目在同一沉默窗口内不重复推送（节流）；刚发生事件或任务有变动的项目不预警。
+
 **P1/P2 场景（编号预分配，细节在晋级时补全）：**
 
 | 编号 | 级别 | 场景 | 一句话说明 |
@@ -997,6 +1011,11 @@ Interactive dashboard 是 P0 标配交付（见 analytics-design.md）。**维�
 - **台账**：`llm_calls` 表（purpose / project_id / provider / model / prompt_tokens / completion_tokens / duration_ms / ok / error / created_at）。记账点在适配层：`getLlm(db, override, { purpose, projectId })` 把返回的适配器包一层——`complete()` 计时、取 `data.usage`（上游有则记 token）、成败与错误摘要落行；**一次逻辑调用一行**（S40 超时重试与 JSON 400 去参重试属内部重试，以最终结果计一行）；fake 注入适配器同样被包裹（用量语义与供应商无关，测试可断言）；未配置 apiKey 返回 null 不经过记账层。记账写库失败只记日志不阻塞调用（台账是旁观语义）。
 - **用途枚举**（自由文本列，约定取值）：extraction（S3 抽取）/ routing（通用群分拣）/ digest（S15/S16 梳理）/ closeout（S8-2 复盘草稿）/ draft（S17-9 任务清单起草）/ init_assign（S39 初始分配）/ chat（S20/S24 对话面有界循环）/ test（测试连接，不落库）。
 - **查看**：`GET /api/v1/admin/llm-usage?days=N`（默认 7，≤90）——`byPurpose` 聚合（calls/tokens/avgDurationMs/errors）+ `byDay` 汇总（北京日）；仅管理员。配置台「外部依赖→LLM」卡片内嵌近 7 天摘要表。Agent 面零新增工具——`llm_calls` 进 schema 内省摘要，机器人/Agent SQL 直接可查（与「schema 内省零新增工具」同哲学）。
+
+### 7.26 未分拣池出口与沉默项目预警（S48，v0.53）
+
+- **未分拣池消化**：`unrouted_messages` 从「只写不读」接通为管理员工单——`GET /api/v1/admin/unrouted`（仅 open，倒序 ≤100）+ `POST …/unrouted/:id/route {projectId}`（重走抽取：以原 business_time/原文/发言人标签调 `extractEvents` 产事件，发言人**不映射成员**——池内消息只存了标签没存平台 id，保守不产针对具体人的建议，与 S3-3 同口径；落 status='routed' + routed_project_id）+ `POST …/unrouted/:id/discard`（status='discarded'）。仅管理员。配置台「项目管理→渠道」页加未分拣卡片（列表 + 项目下拉归挂 + 忽略按钮）。
+- **沉默项目预警**（`brain/alert.js` 新分支，纯确定性零 LLM）：在跑项目满足「最近已生效事件早于 silentDays 天前（或从未有事件且立项早于窗口）且窗口内无任务更新」→ 推牵头人 + 管理员（pushType='alert'，标题 `沉默项目预警：项目名`，正文带沉默天数）。节流：同项目同标题的推送在 silentDays 窗口内已存在即跳过（查 pushes 既有行，预警周期 15 分钟不会刷屏）。终态项目/任务变动活跃的项目天然不满足条件。
 
 ### 7.3 偏离记录（须写入项目实例文档）
 

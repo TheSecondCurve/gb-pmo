@@ -144,6 +144,53 @@ export function mapSpeaker(db, platform, speakerId, _fallbackLabel) {
   return row ? camelizeRow(row) : null
 }
 
+// —— S48（v0.53，K31）未分拣池消化出口：列表 / 归挂（重走抽取）/ 忽略 ——
+
+export function listUnrouted(db, { limit = 100 } = {}) {
+  return camelizeRows(
+    db.prepare(`SELECT * FROM unrouted_messages WHERE status = 'open' ORDER BY business_time DESC LIMIT ?`).all(limit)
+  )
+}
+
+export function discardUnrouted(db, id) {
+  const row = db.prepare('SELECT * FROM unrouted_messages WHERE id = ?').get(id)
+  if (!row) throw Object.assign(new Error('未分拣消息不存在'), { statusCode: 404 })
+  if (row.status !== 'open') throw Object.assign(new Error('该消息已处理（已归挂或已忽略）'), { statusCode: 409 })
+  db.prepare(`UPDATE unrouted_messages SET status = 'discarded' WHERE id = ?`).run(id)
+  return { ok: true }
+}
+
+/**
+ * 归挂到项目并重走抽取：以原消息时刻/原文/发言人标签产事件（发言人保留原标签、不映射成员——
+ * 池内消息没存平台 id，保守不产针对具体人的建议，与 S3-3 同口径）。
+ */
+export async function routeUnrouted(db, id, projectId, { llm: llmOverride, send } = {}) {
+  const row = db.prepare('SELECT * FROM unrouted_messages WHERE id = ?').get(id)
+  if (!row) throw Object.assign(new Error('未分拣消息不存在'), { statusCode: 404 })
+  if (row.status !== 'open') throw Object.assign(new Error('该消息已处理（已归挂或已忽略）'), { statusCode: 409 })
+  const project = db.prepare('SELECT id, name FROM projects WHERE id = ?').get(Number(projectId))
+  if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
+  const llm = getLlm(db, llmOverride, { purpose: 'extraction', projectId: project.id })
+  const extracted = await extractEvents(llm, db, project.id, [{ speakerName: row.speaker_label || '未识别发言人', text: row.content }])
+  let events = 0
+  let suggestions = 0
+  for (const evt of extracted) {
+    if (evt.nature === 'suggestion' && evt.targetField === 'responsible_member_id') continue // S3-3 同口径
+    const created = addEvent(db, {
+      projectId: project.id, businessTime: row.business_time, nature: evt.nature, eventType: evt.eventType,
+      summary: evt.summary, rawSnapshot: row.content, sourcePlatform: row.platform,
+      speakerMemberId: null, speakerLabel: row.speaker_label || '未识别发言人',
+      confidence: evt.confidence ?? null, targetObject: evt.targetObject || 'task',
+      targetTaskId: evt.targetTaskId ?? null, targetField: evt.targetField ?? null,
+      targetValue: evt.targetValue !== undefined ? String(evt.targetValue) : null,
+      generatedBy: 'extraction',
+    })
+    if (created.status === 'pending') { suggestions += 1; await pushSuggestion(db, created, { send }) } else events += 1
+  }
+  db.prepare(`UPDATE unrouted_messages SET status = 'routed', routed_project_id = ? WHERE id = ?`).run(project.id, id)
+  return { ok: true, projectId: project.id, projectName: project.name, events, suggestions }
+}
+
 /**
  * LLM 抽取：项目上下文 + 消息 → 事件数组。LLM 未配置时确定性降级：
  * 只产记录型进展事件（绝不自动改任务面，信任边界兜底）。

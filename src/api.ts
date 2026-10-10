@@ -122,6 +122,12 @@ export const api = {
   upsertChannel: (p: Record<string, unknown>) => req('POST', '/api/v1/channels', p),
   deleteChannel: (id: number) => req('DELETE', `/api/v1/channels/${id}`),
 
+  // S48（v0.53）：未分拣池消化（仅管理员）
+  unrouted: () => req<{ messages: { id: number; platform: string; groupKey: string; businessTime: number; speakerLabel: string | null; content: string }[] }>('GET', '/api/v1/admin/unrouted'),
+  routeUnrouted: (id: number, projectId: number) =>
+    req<{ ok: boolean; projectId: number; projectName: string; events: number; suggestions: number }>('POST', `/api/v1/admin/unrouted/${id}/route`, { projectId }),
+  discardUnrouted: (id: number) => req<{ ok: boolean }>('POST', `/api/v1/admin/unrouted/${id}/discard`, {}),
+
   projectTypes: () => req<{ types: import('./types').ProjectType[] }>('GET', '/api/v1/project-types'),
   createProjectType: (p: Record<string, unknown>) => req<{ type: import('./types').ProjectType }>('POST', '/api/v1/admin/project-types', p),
   patchProjectType: (id: number, p: Record<string, unknown>) => req<{ type: import('./types').ProjectType }>('PATCH', `/api/v1/admin/project-types/${id}`, p),
