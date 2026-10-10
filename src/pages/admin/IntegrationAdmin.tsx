@@ -105,7 +105,7 @@ function LlmCard() {
         {result && <span className="text-[12px]">{result}</span>}
       </div>
       {/* S47（v0.52，K30）：近 7 天 LLM 用量摘要（用途×调用数/token/失败）——成本优化的数据依据 */}
-      {usage && (
+      {usage && Array.isArray(usage.byPurpose) && (
         <div className="mt-3 border-t border-[var(--color-line)] pt-2" data-testid="llm-usage">
           <div className="mb-1 text-[12px] text-[var(--color-ink-soft)]">近 7 天用量（按用途）</div>
           {usage.byPurpose.length === 0 ? (
