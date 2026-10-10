@@ -261,3 +261,15 @@
 - 决策：任务面新增 `note` 备注列（migration 0026，tasks 与 project_type_tasks 同加，≤200 字引擎校验、卡片渲染同上限截断）。三层语义：**模板默认值**——类型内嵌任务清单（`normalizeTypeTasks`）每项可带 note，立项随任务拷贝进实例（与 S33 参考拷贝完全同模式）；**实例独立改**——createTask/updateTask 收 note（task.update 审计），实例改动不回写类型（v0.18「类型只影响未来立项」口径不变）；**推送带详情**——纯提醒（S57）、逾期预警（S7-1）卡片与正文携带备注，个人梳理（S16）/晨报任务行同路附带（复用 S23「参考资料随推送」管道语义）。立项自定义清单（S1-6）未给 note 即为空——**编辑清单=放弃类型默认**，与「改标题丢参考」既有行为一致，不按行序猜测对齐。
 - 理由：「提醒到了但不知道怎么干」是推送链路的最后一块缺口——评审会带什么材料、照哪条口径验收，此前只能口口相传。选任务级 `note` 而非复用 `task_records`（追加式过程留痕，语义是历史）或 `task_refs.note`（链接自己的说明，语义是资料）：三者互补不重叠。200 字上限是卡片元素预算护栏（TABLE_MAX_ROWS / lark_md 行宽，S45）的入库前移——超长内容应进参考资料或更新记录，不是备注。对话面 add_task 透传 note（记录型字段直生效，K25）；抽取面建议字段不含 note——备注是人写的静态说明，被动推断没有信任收益。立项不按行序携带默认备注：行被增删后对齐不可靠，静默错位比明确放弃更危险。
 - 推翻：无（`/tasks` 盘点卡不带备注——会议盘点视图吃卡片预算，备注属于推送与详情查询；抽取面建议 target 字段组合不动）。
+
+## K43 任务生命周期落进展：新增/完成进讨论面进展列（S59，v0.65）
+
+- 决策：任务「新增/完成」两条最硬的事实此前只在任务面静默变化，讨论面进展列看不到。三条路径各补一条 record 型 `progress` 事件进 `project_events`（即时生效，append-only）：**新增**——`createTask` INSERT 后落「🆕 新增任务「标题」」（generatedBy=web）；**web/agent 直接完成**——`updateTask` 置 done 分支落「✅ 完成任务「标题」」（generatedBy=web）；**建议确认完成**——`applyTaskPatch` 置 done 在 `confirmEvent` 事务内落同款（generatedBy=extraction，与状态修改原子）。**不去重**——add_task 建议确认也走 createTask（proposals.js），天然只落一次；updateTask 与 applyTaskPatch 是互斥的两条完成路径，不会双写；软删留痕走 audit 不进进展列。
+- 理由：「进展」此前只能靠群聊抽取（S56）或手工补录，任务面最确定的两类事实反而缺席——讨论面动态流缺了骨架。选 `project_events` 进展列而非 `task_records` 加 type 列：`task_records` 是扁平 content 表（无类型概念），「进展」目前是 project_events.eventType 的既有语义，复用零迁移、与 S56 归档的群聊进展同列同语义。generatedBy 区分 web/extraction 是为了采纳率（S3-5）与审计口径可追溯来源。
+- 推翻：无（任务面其他变更——改标题/改期/改责任人——维持既有 owner_change/schedule_change 事件类型，不挤进展列；提醒任务自动完成的「系统提醒已送达」是系统动作非真实进展，不落进展列）。
+
+## K44 抽取后群进展播报：产出通告 + 三道闸静默 + dedicated-only（S60，v0.65）
+
+- 决策：extraction 调度周期尾部新增「进展播报」——把本轮各项目沉淀的 record 型 `progress` 事件（`ingestMessages` 返回的 `stats.progressEvents` 聚合）按项目分组，往该项目绑定的飞书专题群（dedicated）发一张绿色「🎉 有新进展」汇总卡（`bot/cards.js` 确定性模板 `buildProgressDigestCard`，body 文本经 `progressDigestBody` 同步生成，卡片失败经 push.js 既有降级链落富文本）。**三道闸任一不过即整体静默**：①本轮没拉到新群消息（`progressByProject` 为空）；②拉到的全是噪音闲聊（S50 过滤器已滤）；③抽取出事件但无一条 record 型 `progress`（只有风险/决策/建议或无归属闲聊）。**幂等**：`pushType='progress_digest'`，发前查 pushes 台账同项目近一小时（=extraction 默认 cron 周期）是否已播报过，同周期不重复发。信任边界：播报是抽取**产出**的群通告——LLM 只产进展摘要文本（卡片结构代码定，K28），不进任务面、不修改任务状态，无需确认卡，符合 K25。
+- 理由：抽取器每小时默默沉淀进展到项目事件流，团队毫无感知，大脑的「我在干活」完全没有存在感——播报是把「沉淀」翻译成「被看见」的最后一步。三道闸是用户 2026-10-10 明确拍板的「不要打扰团队」口径：播报的存在感必须严格等于真实进展的存在感，零进展周期对团队完全透明。选每项目一卡聚合而非逐条即时推送：与 S55「批量合卡后续再说」的既定方向一致，单项目一周期一卡的节奏克制。选绿色 header 新色系：与既有 blue（晨报/建议）/red（逾期）/orange（负载/沉默）/wathet（提醒/盘点）区分，语义是「正向、可庆祝」。只发 dedicated 专题群：复用 `notifyProjectChannel` 既有目标查询（general 大群只读抽取不回发，K6 企微不投递），与 S57 提醒同管道。
+- 推翻：无（播报挂 extraction cron 尾部不进 15 分钟 alert 周期，节奏克制；S59 落的任务生命周期进展事件**不参与**播报——那是 web/agent 主动操作的留痕，不是抽取产出的群消息）。

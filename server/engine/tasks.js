@@ -201,6 +201,11 @@ export function createTask(db, input, by) {
      VALUES (?, ?, ?, ?, 'todo', ?, ?, ?, 'manual', ?, ?)`
   ).run(projectId, title, note, owner, planStartDate || null, planEndDate || null, kind, now, now)
   audit(db, { memberId: by, action: 'task.create', objectType: 'task', objectId: info.lastInsertRowid, detail: { kind, hasNote: Boolean(note) } })
+  // S59（v0.65，K43）：任务新增落进展——record 型 progress 事件进讨论面进展列（即时生效，append-only）
+  addEvent(db, {
+    projectId, eventType: 'progress', nature: 'record', sourcePlatform: 'web', generatedBy: 'web',
+    summary: `🆕 新增任务「${title}」`, speakerMemberId: by,
+  })
   return getTask(db, Number(info.lastInsertRowid))
 }
 
@@ -233,7 +238,14 @@ export function updateTask(db, id, patch, by) {
   if ('note' in patch) fields.note = normalizeTaskNote(patch.note) ?? null
   if ('status' in patch && patch.status !== cur.status) {
     fields.status = assertValue('taskStatus', patch.status)
-    if (patch.status === 'done') fields.actual_end_date = today()
+    if (patch.status === 'done') {
+      fields.actual_end_date = today()
+      // S59（v0.65，K43）：任务完成落进展——record 型 progress 事件进讨论面进展列
+      addEvent(db, {
+        projectId: cur.project_id, eventType: 'progress', nature: 'record', sourcePlatform: 'web', generatedBy: 'web',
+        summary: `✅ 完成任务「${cur.title}」`, speakerMemberId: by,
+      })
+    }
   }
   // S57：提醒任务改期或人工重开 → 幂等锚点重置（重新武装，新提醒日再触发一次）
   if (cur.kind === 'reminder') {
