@@ -6,7 +6,8 @@ import { today, bjWeekStartMs } from '../db/time.js'
 import { getSetting } from './settings.js'
 
 const OPEN_PROJECT = `p.status = 'active'` // S29 三态：在跑=进行中
-const OPEN_TASK = `t.status IN ('todo','doing') AND t.deleted_at IS NULL` // S36：已删任务退出指标口径
+// S36：已删任务退出指标口径；S57（v0.62）：追踪口径只认工作类——纯提醒有独立送达通道，不占分母
+const OPEN_TASK = `t.status IN ('todo','doing') AND t.deleted_at IS NULL AND t.kind = 'work'`
 const DAY = 86400000
 
 function daysSince(ts) {
@@ -209,8 +210,8 @@ const IMPLEMENTATIONS = {
       .prepare(
         `SELECT ${dims} AS ${groupBy}, m.is_key_person, m.max_parallel_projects,
            (SELECT COUNT(DISTINCT p2.id) FROM projects p2 WHERE p2.status = 'active' AND (p2.lead_member_id = m.id
-              OR p2.id IN (SELECT project_id FROM tasks WHERE responsible_member_id = m.id AND status IN ('todo','doing','blocked') AND deleted_at IS NULL))) AS parallel_projects,
-           (SELECT COUNT(*) FROM tasks t2 WHERE t2.responsible_member_id = m.id AND t2.status IN ('todo','doing') AND t2.deleted_at IS NULL) AS open_tasks
+              OR p2.id IN (SELECT project_id FROM tasks WHERE responsible_member_id = m.id AND status IN ('todo','doing','blocked') AND deleted_at IS NULL AND kind = 'work'))) AS parallel_projects,
+           (SELECT COUNT(*) FROM tasks t2 WHERE t2.responsible_member_id = m.id AND t2.status IN ('todo','doing') AND t2.deleted_at IS NULL AND t2.kind = 'work') AS open_tasks
          FROM members m WHERE m.status = 'active' GROUP BY ${dims}, m.id ORDER BY parallel_projects DESC`
       )
       .all()

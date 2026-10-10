@@ -565,6 +565,19 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S56-3 | 当目标任务所在项目已结项/取消或任务已删除时，任务记录静默跳过（不抛错、不阻塞事件落库与后续消息处理） | `server/test/s56-task-timeline.test.mjs` |
 | S56-4 | 当 LLM 未配置（降级路径）时，不产生任务记录（降级事件无任务归属），事件落库语义不变 | `server/test/s56-task-timeline.test.mjs` |
 
+## S57（P0）— 系统（大脑·调度/推送）+ 成员（建提醒入口）— 纯提醒任务分类（v0.62）
+
+任务面新增 `kind` 分类（work=工作 / reminder=纯提醒，migration 0025）：纯提醒在提醒日（plan_end_date）北京时间过发送门槛（reminder.fireAfterHour 默认 09:00）后由预警巡检触发一次性推送——责任人私聊 + 项目全部绑定专题群，发完自动完成（reminded_at 幂等锚点 + 时间线留痕 + 审计），不进逾期追踪口径（指标/健康分/简报盘子/组合页进度排除 reminder）。决策见 design.md K40。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S57-1 | 当纯提醒任务到期（提醒日 ≤ 今日、北京时已过发送门槛、未发过、项目在跑）时，应在同一轮触发：责任人私聊推送 + 项目全部绑定专题群推送（pushes 行分别落痕，群行 group_key 非空），随后任务置 done、actual_end_date=今日、reminded_at 落值、任务时间线追加送达记录；同日再跑不重发（幂等） | `server/test/s57-reminder-tasks.test.mjs` |
+| S57-2 | 当提醒日未到（未来日期）或北京时未过发送门槛时，不触发；停机跨日/补录的过期提醒（提醒日 < 今日且未发过）在下个周期补发一次 | `server/test/s57-reminder-tasks.test.mjs` |
+| S57-3 | 当责任人未指派或已离职时，跳过私聊只发项目群；项目无绑定专题渠道时只发私聊；终态（结项/取消）项目的提醒不触发（任务面冻结，S29） | `server/test/s57-reminder-tasks.test.mjs` |
+| S57-4 | 当任务 kind=work（含全部存量任务）时，永不进提醒扫描；提醒任务改期或人工重开后幂等锚点重置（新提醒日再次触发一次） | `server/test/s57-reminder-tasks.test.mjs` |
+| S57-5 | 当创建任务带非法 kind 时拒绝（400）；建提醒入口（web 表单 / 机器人 add_task）透传 kind，缺省 work；抽取/梳理通道不产提醒任务 | `server/test/s57-reminder-tasks.test.mjs` |
+| S57-6 | 追踪口径排除：逾期任务数/逾期率、未指派任务、健康分逾期子口径、关键人负载未完任务数、项目简报任务盘子与完成率、组合页任务进度均不计 kind=reminder；/my 与任务盘点仍可见提醒（盘点行 ⏰ 标注） | `server/test/s57-reminder-tasks.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

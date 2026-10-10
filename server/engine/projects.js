@@ -149,9 +149,9 @@ export function listProjects(db, { statuses = OPEN_STATUSES } = {}) {
     .prepare(
       `SELECT p.*, m.name AS lead_name, pt.name AS type_name,
          (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status IN ('todo','doing','blocked')
-            AND t.deleted_at IS NULL AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY()) AS overdue_tasks,
-         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.deleted_at IS NULL) AS tasks_total,
-         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.deleted_at IS NULL AND t.status = 'done') AS tasks_done,
+            AND t.deleted_at IS NULL AND t.kind = 'work' AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY()) AS overdue_tasks,
+         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.deleted_at IS NULL AND t.kind = 'work') AS tasks_total,
+         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.deleted_at IS NULL AND t.kind = 'work' AND t.status = 'done') AS tasks_done,
          (SELECT MAX(e.business_time) FROM project_events e WHERE e.project_id = p.id AND e.status = 'effective') AS last_event_at
        FROM projects p LEFT JOIN members m ON m.id = p.lead_member_id
        LEFT JOIN project_types pt ON pt.id = p.project_type_id

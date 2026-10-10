@@ -124,8 +124,9 @@ export default function ProjectDetail({ id }: { id: number }) {
         <Card title={`结束原因 / 复盘记录（${p.status === 'closed' ? '已结项' : '已取消'} · 只读）`}><div className="whitespace-pre-wrap text-[13px]">{p.closeoutSummary}</div></Card>
       )}
 
-      {/* S42（v0.44）：进度（堆叠条/完成率）与排期（任务级甘特+里程碑刻度）一屏总览；v0.49 起交付日期入轴（S42-5） */}
-      <ProgressSchedule tasks={p.tasks} milestones={p.milestones} projectEndDate={p.planEndDate} />
+      {/* S42（v0.44）：进度（堆叠条/完成率）与排期（任务级甘特+里程碑刻度）一屏总览；v0.49 起交付日期入轴（S42-5）。
+          S57（v0.62）：进度与甘特只认工作类——纯提醒送达不算工作完成度（与 brief/metrics 口径一致，K40）。 */}
+      <ProgressSchedule tasks={p.tasks.filter((t) => t.kind !== 'reminder')} milestones={p.milestones} projectEndDate={p.planEndDate} />
 
       <Card title={`任务面（${p.tasks.length}）${readonly ? ' · 只读' : ''}`} actions={!readonly ? (
         <div className="flex gap-2">
@@ -178,6 +179,8 @@ export default function ProjectDetail({ id }: { id: number }) {
                     <td className={`num ${t.isOverdue ? 'text-[var(--color-bad)]' : ''}`}>{readonly ? (t.planEndDate || '—') : <InlineText type="date" value={t.planEndDate} onSubmit={async (v) => { await api.patchTask(t.id, { planEndDate: v }); await refresh() }} />}</td>
                     <td>
                       {t.isOverdue && <Badge tone="bad">逾期</Badge>}
+                      {t.kind === 'reminder' && <Badge tone="info" data-testid="reminder-badge">⏰ 提醒</Badge>}
+                      {t.kind === 'reminder' && t.remindedAt && <Badge tone="ok">已送达</Badge>}
                       {!!t.refCount && <Badge tone="info">参考 {t.refCount}</Badge>}
                     </td>
                     <td className="whitespace-nowrap">
@@ -457,16 +460,36 @@ function TaskRefsModal({ taskId, taskTitle, readonly, onClose }: { taskId: numbe
 function AddTask({ projectId, members, onDone }: { projectId: number; members: Member[]; onDone: () => Promise<void> }) {
   const [title, setTitle] = useState('')
   const [owner, setOwner] = useState('') // S38：新建默认未指派（责任人与项目牵头人解耦，K20）
+  const [kind, setKind] = useState('work') // S57：work=工作 / reminder=纯提醒（到期推送后自动完成）
+  const [date, setDate] = useState('') // S57：纯提醒的提醒日（=planEndDate，必填）
   const submit = async () => {
     if (!title.trim()) return
-    await api.createTask({ projectId, title, ...(owner ? { responsibleMemberId: Number(owner) } : {}) })
-    setTitle(''); setOwner(''); await onDone()
+    if (kind === 'reminder' && !date) return
+    await api.createTask({
+      projectId, title, kind,
+      ...(kind === 'reminder' ? { planEndDate: date } : {}),
+      ...(owner ? { responsibleMemberId: Number(owner) } : {}),
+    })
+    setTitle(''); setOwner(''); setDate(''); await onDone()
   }
+  const reminder = kind === 'reminder'
   return (
-    <div className="mt-3 flex gap-2">
-      <input className="cell-input" placeholder="新增任务标题（默认未指派，Enter 保存）" value={title}
+    <div className="mt-3 flex flex-wrap gap-2">
+      <select className="cell-input w-full sm:w-28" aria-label="新任务分类" value={kind}
+        onChange={(e) => setKind(e.target.value)}>
+        <option value="work">工作</option>
+        <option value="reminder">⏰ 纯提醒</option>
+      </select>
+      <input className="cell-input min-w-[12rem] flex-1"
+        placeholder={reminder ? '新增提醒标题（提醒日推责任人+项目群后自动完成）' : '新增任务标题（默认未指派，Enter 保存）'}
+        value={title}
         onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') void submit() }} />
+      {reminder && (
+        <input type="date" className="cell-input w-full sm:w-40" aria-label="提醒日（必填）" value={date}
+          onChange={(e) => setDate(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void submit() }} />
+      )}
       <select className="cell-input w-full sm:w-32" aria-label="新任务责任人（默认未指派）" value={owner} onChange={(e) => setOwner(e.target.value)}>
         <option value="">（未指派）</option>
         {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}

@@ -8,7 +8,7 @@
 import { camelizeRows } from '../db/index.mjs'
 import { getSetting } from '../engine/settings.js'
 import { richPost } from './bot/format.js'
-import { sendTextToUser, sendPostToUser, sendCardToUser } from './connectors/feishu.js'
+import { sendTextToUser, sendPostToUser, sendCardToUser, sendText, sendPost, sendCard } from './connectors/feishu.js'
 
 /** 默认发送器：飞书凭证齐备才可投递（否则 null → 落 skipped）。S55：card 走交互卡片通道。 */
 function defaultSender(db) {
@@ -16,6 +16,14 @@ function defaultSender(db) {
   if (!cfg.appId || !cfg.appSecret) return null
   return ({ openId, text, post, card }) =>
     (card ? sendCardToUser(cfg, openId, card) : post ? sendPostToUser(cfg, openId, post) : sendTextToUser(cfg, openId, text))
+}
+
+/** S57：群发送器——chat_id 定向（项目专题渠道 group_key；bot 必在群内，因该群本就是抽取渠道）。 */
+function defaultGroupSender(db) {
+  const cfg = getSetting(db, 'im.feishu')
+  if (!cfg.appId || !cfg.appSecret) return null
+  return ({ chatId, text, post, card }) =>
+    (card ? sendCard(cfg, chatId, card) : post ? sendPost(cfg, chatId, post) : sendText(cfg, chatId, text))
 }
 
 /**
@@ -69,6 +77,48 @@ export async function notifyAdmins(db, payload, opts = {}) {
   const admins = camelizeRows(db.prepare(`SELECT * FROM members WHERE role = 'admin' AND status = 'active'`).all())
   const out = []
   for (const a of admins) out.push(await notifyMember(db, a, payload, opts))
+  return out
+}
+
+/**
+ * S57（v0.62，K40）：项目群推送——发往项目绑定的全部飞书专题渠道（设计约定 #5 每项目 1..N 核心渠道）。
+ * pushes 行 recipient_member_id 空、group_key 落痕；企微渠道不投递（连接器只读，K6）；
+ * 无绑定专题渠道 = 无目标，不落行（调用方私聊侧已兜底触达）。
+ */
+export async function notifyProjectChannel(db, projectId, { pushType, title, body }, { send } = {}) {
+  const chs = db.prepare(
+    `SELECT group_key FROM channels WHERE project_id = ? AND platform = 'feishu' AND channel_type = 'dedicated' ORDER BY id`
+  ).all(projectId)
+  const out = []
+  for (const ch of chs) {
+    let status = 'skipped'
+    let error = null
+    let messageId = null
+    const sender = send || defaultGroupSender(db)
+    if (!sender) {
+      error = '飞书凭证未配置（配置台「外部依赖→飞书」填 appId/appSecret 后投递）——仅落库'
+    } else {
+      const post = richPost(body)
+      const payload = post
+        ? { chatId: ch.group_key, post: { zh_cn: { title, content: post.zh_cn.content } } }
+        : { chatId: ch.group_key, text: `【${title}】\n${body}` }
+      try {
+        const r = await sender(payload)
+        status = 'sent'
+        messageId = r?.messageId || null
+      } catch (e) {
+        status = 'failed'
+        error = String(e?.message || e).slice(0, 500)
+      }
+    }
+    const info = db
+      .prepare(
+        `INSERT INTO pushes (push_type, recipient_member_id, related_project_id, title, body, channel_platform, status, error, message_id, group_key, created_at)
+         VALUES (?, NULL, ?, ?, ?, 'feishu', ?, ?, ?, ?, ?)`
+      )
+      .run(pushType, projectId, title, body, status, error, messageId, ch.group_key, Date.now())
+    out.push({ id: Number(info.lastInsertRowid), groupKey: ch.group_key, status })
+  }
   return out
 }
 

@@ -19,7 +19,11 @@ export const TASKS = [
 
 const DEFAULT_RUNNERS = {
   extraction: async (db, { llm }) => (await import('./extract.js')).runExtraction(db, {}, { llm }),
-  alerts: async (db) => (await import('./alert.js')).evaluateAlerts(db),
+  alerts: async (db) => {
+    await (await import('./alert.js')).evaluateAlerts(db)
+    // S57（v0.62）：纯提醒复用预警巡检周期（日级语义，15 分钟粒度足够；时点门槛在 runner 内把守）
+    await (await import('./reminder.js')).evaluateReminders(db)
+  },
   report: async (db) => (await import('./report.js')).dailyReport(db, { force: false }),
   calendarSync: async (db) => (await import('./calendar.js')).syncProjectCalendar(db),
   backup: async (db) => (await import('../engine/backup.js')).runBackup(db),
