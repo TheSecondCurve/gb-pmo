@@ -387,6 +387,9 @@ function softValidateProposal(db, kind, p) {
     if (!proj) return { error: 'projectId 必填且须为真实项目 id（先 query 查项目）' }
     const title = String(p.title || '').trim()
     if (!title) return { error: 'title 必填（任务标题）' }
+    // S57：任务分类（taskKind——payload.kind 是提议类型判别符，不可复用）
+    if (p.taskKind != null && p.taskKind !== 'work' && p.taskKind !== 'reminder') return { error: 'taskKind 须为 work（工作，缺省）或 reminder（纯提醒）' }
+    if (p.taskKind === 'reminder' && !p.planEndDate) return { error: '纯提醒任务必须给 planEndDate（提醒日 YYYY-MM-DD，到期推责任人+项目群后自动完成）' }
     if (p.planStartDate && !DATE_OK.test(String(p.planStartDate))) return { error: 'planStartDate 须为 YYYY-MM-DD' }
     if (p.planEndDate && !DATE_OK.test(String(p.planEndDate))) return { error: 'planEndDate 须为 YYYY-MM-DD' }
     let owner = null
@@ -397,11 +400,12 @@ function softValidateProposal(db, kind, p) {
     return {
       payload: {
         projectId: proj.id, title: title.slice(0, 200),
+        ...(p.taskKind ? { taskKind: String(p.taskKind) } : {}),
         ...(owner ? { responsibleMemberId: owner.id } : {}),
         ...(p.planStartDate ? { planStartDate: String(p.planStartDate) } : {}),
         ...(p.planEndDate ? { planEndDate: String(p.planEndDate) } : {}),
       },
-      summary: `项目「${proj.name}」新增任务「${title.slice(0, 200)}」（责任人 ${owner ? owner.name : '未指派'}${p.planEndDate ? `，截止 ${p.planEndDate}` : ''}）`,
+      summary: `项目「${proj.name}」新增${p.taskKind === 'reminder' ? '纯提醒' : '任务'}「${title.slice(0, 200)}」（责任人 ${owner ? owner.name : '未指派'}${p.planEndDate ? `，${p.taskKind === 'reminder' ? '提醒日' : '截止'} ${p.planEndDate}` : ''}）`,
     }
   }
   if (kind === 'add_milestone') {

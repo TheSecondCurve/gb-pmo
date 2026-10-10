@@ -31,6 +31,8 @@ export interface TaskRow {
   id: number; projectId: number; title: string; responsibleMemberId: number | null; responsibleName?: string | null
   status: string; planStartDate?: string | null; planEndDate?: string | null
   isOverdue: boolean
+  kind?: string // S57：任务分类 work=工作 / reminder=纯提醒（到期推送后自动完成）
+  remindedAt?: number | null // S57：提醒已送达时刻（幂等锚点；改期/重开重置）
   refCount?: number // S23：未删除参考资料条数（项目详情任务行）
 }
 export interface TaskRefRow {

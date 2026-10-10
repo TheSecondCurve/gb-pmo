@@ -10,6 +10,8 @@ export const ENUMS = {
   priority: { high: '高', medium: '中', low: '低' },
   // v0.6：任务状态固定三档（无 blocked/cancelled；任务相互独立，无前置依赖）
   taskStatus: { todo: '未开始', doing: '进行中', done: '完成' },
+  // S57（v0.62，K40）：任务分类——work 进逾期追踪口径；reminder 到期一次性推送后自动完成、不追踪
+  taskKind: { work: '工作', reminder: '纯提醒' },
   taskSource: { template: '模板', manual: '手动', extraction: '抽取', suggestion: '建议采纳' },
   milestoneStatus: { planned: '计划中', met: '已达成', missed: '已延误', cancelled: '已取消' },
   channelPlatform: { feishu: '飞书', wecom: '企业微信' },
@@ -29,7 +31,7 @@ export const ENUMS = {
   },
   eventStatus: { pending: '待确认', effective: '已生效', rejected: '已驳回', expired: '已超时' },
   eventGenerator: { extraction: 'IM 抽取', digest: '梳理建议', agent: 'Agent 口述', web: '页面操作', system: '系统' },
-  pushType: { daily_report: '日报', digest: '梳理', alert: '预警', test: '测试' },
+  pushType: { daily_report: '日报', digest: '梳理', alert: '预警', reminder: '提醒', test: '测试' },
   tokenScope: { read: '只读', write: '读写' },
   // S20 机器人指令通道：指令/卡片/机器人回复三类记录 + 结果枚举（bot_commands.result）
   botCommandKind: { command: '指令', card: '卡片回调', bot_reply: '机器人回复' },
@@ -84,6 +86,8 @@ export const DEFAULT_SETTINGS = {
     healthYellow: { silentDays: 3, overdue: 1 },
   },
   push: { dailyReportHour: 18 }, // v0.7 废弃：日报时点由 scheduler.reportCron 取代（保留兼容旧配置）
+  // S57（v0.62）：纯提醒任务发送门槛——提醒日当天北京时过该小时后首个预警巡检周期触发（凌晨不推）
+  reminder: { fireAfterHour: 9 },
   scheduler: {
     extractionCron: '0 * * * *',   // 信息更新对齐（S18，默认每小时）
     extractionEnabled: true,

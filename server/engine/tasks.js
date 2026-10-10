@@ -34,23 +34,24 @@ export function listTasks(db, { projectId, responsibleMemberId, statuses } = {})
   )
 }
 
-/** S2-1 未指派视图：已设计划开始日但无责任人（v0.42 起未指派为立项后正常初态，本视图承担初次分配工作队列，S38/K20）。 */
+/** S2-1 未指派视图：已设计划开始日但无责任人（v0.42 起未指派为立项后正常初态，本视图承担初次分配工作队列，S38/K20）。
+ *  S57：只列工作类——纯提醒无需分配责任人，到期直达项目群。 */
 export function listUnassigned(db) {
   return decorate(
     db.prepare(
       `SELECT ${TASK_COLS} FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id LEFT JOIN projects p ON p.id = t.project_id
-       WHERE t.responsible_member_id IS NULL AND t.plan_start_date IS NOT NULL AND t.status IN ('todo','doing') AND t.deleted_at IS NULL ORDER BY t.plan_start_date`
+       WHERE t.responsible_member_id IS NULL AND t.plan_start_date IS NOT NULL AND t.status IN ('todo','doing') AND t.kind = 'work' AND t.deleted_at IS NULL ORDER BY t.plan_start_date`
     ).all()
   )
 }
 
 export const INV_MAX_PER_PROJECT = 40 // 盘点单项目列出的任务条数上限（模板任务 ≤30，防御性截断；S45 卡片文本行同口径复用）
 
-const invLine = (t) => `· #${t.id} ${t.title}（${label('taskStatus', t.status)}${t.plan_end_date ? `，截止 ${t.plan_end_date}` : ''}${t.responsible_name ? `，${t.responsible_name}` : ''}）`
+const invLine = (t) => `${t.kind === 'reminder' ? '⏰ ' : ''}· #${t.id} ${t.title}（${label('taskStatus', t.status)}${t.plan_end_date ? `，截止 ${t.plan_end_date}` : ''}${t.responsible_name ? `，${t.responsible_name}` : ''}）`
 
-/** S45：盘点任务行结构化（卡片模板渲染用；camelCase，statusLabel 查枚举表）。 */
+/** S45：盘点任务行结构化（卡片模板渲染用；camelCase，statusLabel 查枚举表）。S57：带 kind（reminder 行 ⏰ 标注）。 */
 const invRow = (t) => ({
-  id: t.id, title: t.title, status: t.status, statusLabel: label('taskStatus', t.status),
+  id: t.id, title: t.title, kind: t.kind ?? 'work', status: t.status, statusLabel: label('taskStatus', t.status),
   planEndDate: t.plan_end_date ?? null, responsibleName: t.responsible_name ?? null,
 })
 
@@ -65,7 +66,7 @@ export function tasksInventory(db, { projectId } = {}) {
     const project = db.prepare('SELECT id, name FROM projects WHERE id = ?').get(projectId)
     if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
     const rows = db.prepare(
-      `SELECT t.id, t.title, t.status, t.plan_end_date, m.name AS responsible_name
+      `SELECT t.id, t.title, t.kind, t.status, t.plan_end_date, m.name AS responsible_name
        FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
        WHERE t.project_id = ? AND t.status != 'done' AND t.deleted_at IS NULL ORDER BY t.id`
     ).all(projectId)
@@ -96,7 +97,7 @@ export function tasksInventory(db, { projectId } = {}) {
   const projects = db.prepare(`SELECT id, name FROM projects WHERE status = 'active' ORDER BY id`).all()
   const byProject = new Map(projects.map((p) => [p.id, { name: p.name, rows: [] }]))
   const rows = db.prepare(
-    `SELECT t.id, t.title, t.status, t.plan_end_date, t.project_id
+    `SELECT t.id, t.title, t.kind, t.status, t.plan_end_date, t.project_id
      FROM tasks t JOIN projects p ON p.id = t.project_id
        WHERE t.responsible_member_id IS NULL AND t.status != 'done' AND t.deleted_at IS NULL AND p.status = 'active' ORDER BY t.project_id, t.id`
   ).all()
@@ -188,14 +189,16 @@ export function createTask(db, input, by) {
   if (project.status === 'closed' || project.status === 'cancelled') {
     throw Object.assign(new Error('项目已结项/取消，任务面只读'), { statusCode: 409 })
   }
+  // S57（v0.62，K40）：任务分类——work=工作（缺省）/ reminder=纯提醒（到期一次性推送后自动完成）
+  const kind = input.kind == null || input.kind === '' ? 'work' : assertValue('taskKind', input.kind)
   // S38/K20（v0.42 推翻 D3）：责任人与项目牵头人解耦，缺省=未指派（NULL），不再回填牵头人
   const owner = responsibleMemberId == null || responsibleMemberId === '' ? null : assertActiveMember(db, responsibleMemberId)
   const now = Date.now()
   const info = db.prepare(
-    `INSERT INTO tasks (project_id, title, responsible_member_id, status, plan_start_date, plan_end_date, source, created_at, updated_at)
-     VALUES (?, ?, ?, 'todo', ?, ?, 'manual', ?, ?)`
-  ).run(projectId, title, owner, planStartDate || null, planEndDate || null, now, now)
-  audit(db, { memberId: by, action: 'task.create', objectType: 'task', objectId: info.lastInsertRowid })
+    `INSERT INTO tasks (project_id, title, responsible_member_id, status, plan_start_date, plan_end_date, kind, source, created_at, updated_at)
+     VALUES (?, ?, ?, 'todo', ?, ?, ?, 'manual', ?, ?)`
+  ).run(projectId, title, owner, planStartDate || null, planEndDate || null, kind, now, now)
+  audit(db, { memberId: by, action: 'task.create', objectType: 'task', objectId: info.lastInsertRowid, detail: { kind } })
   return getTask(db, Number(info.lastInsertRowid))
 }
 
@@ -227,6 +230,12 @@ export function updateTask(db, id, patch, by) {
   if ('status' in patch && patch.status !== cur.status) {
     fields.status = assertValue('taskStatus', patch.status)
     if (patch.status === 'done') fields.actual_end_date = today()
+  }
+  // S57：提醒任务改期或人工重开 → 幂等锚点重置（重新武装，新提醒日再触发一次）
+  if (cur.kind === 'reminder') {
+    const dateChanged = 'plan_end_date' in fields && fields.plan_end_date !== cur.plan_end_date
+    const reopened = fields.status && fields.status !== 'done' && cur.status === 'done'
+    if (dateChanged || reopened) fields.reminded_at = null
   }
   if (!Object.keys(fields).length) return getTask(db, id)
   fields.updated_at = Date.now()
@@ -399,16 +408,49 @@ export function deleteTaskRef(db, id, by) {
   audit(db, { memberId: by, action: 'task_ref.delete', objectType: 'task_ref', objectId: id })
 }
 
-/** S7-1（v0.6 口径；S29 修订）：某人名下逾期未完任务清单——只计进行中项目（终态项目任务已冻结退出预警口径）。 */
+/** S7-1（v0.6 口径；S29 修订）：某人名下逾期未完任务清单——只计进行中项目（终态项目任务已冻结退出预警口径）。
+ *  S57：追踪口径只认工作类——纯提醒有自己的送达通道，不进逾期预警。 */
 export function overdueTasksOf(db, memberId) {
   return camelizeRows(
     db.prepare(
       `SELECT t.id, t.title, t.plan_end_date, p.id AS project_id, p.name AS project_name
        FROM tasks t JOIN projects p ON p.id = t.project_id
        WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL AND p.status = 'active'
-         AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY()`
+         AND t.kind = 'work' AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY()`
     ).all(memberId)
   )
+}
+
+// —— 纯提醒（S57，v0.62，K40）——
+
+/**
+ * S57：到期待发纯提醒扫描——提醒日（plan_end_date）≤ 今日、未发过、未完、未删、项目在跑。
+ * ≤（而非 =）是补发语义：停机跨日/补录过期日期晚发一次好过永不发；发送时点门槛由 brain/reminder.js 把守。
+ */
+export function dueReminders(db) {
+  return camelizeRows(
+    db.prepare(
+      `SELECT t.*, p.name AS project_name, p.status AS project_status,
+              m.id AS owner_id, m.name AS responsible_name, m.status AS owner_status, m.feishu_id, m.wecom_id
+       FROM tasks t JOIN projects p ON p.id = t.project_id
+       LEFT JOIN members m ON m.id = t.responsible_member_id
+       WHERE t.kind = 'reminder' AND t.status != 'done' AND t.deleted_at IS NULL AND t.reminded_at IS NULL
+         AND p.status = 'active' AND t.plan_end_date IS NOT NULL AND t.plan_end_date <= BJ_TODAY()
+       ORDER BY t.plan_end_date, t.id`
+    ).all()
+  )
+}
+
+/** S57：提醒送达后自动完成——done + actual_end_date + 幂等锚点 + 时间线留痕 + 审计（单事务）。 */
+export function completeReminder(db, task, { note } = {}) {
+  const now = Date.now()
+  db.transaction(() => {
+    db.prepare(`UPDATE tasks SET status = 'done', actual_end_date = ?, reminded_at = ?, updated_at = ? WHERE id = ?`)
+      .run(today(), now, now, task.id)
+    db.prepare('INSERT INTO task_records (task_id, member_id, content, created_at) VALUES (?, NULL, ?, ?)')
+      .run(task.id, `⏰ 系统提醒已送达${note ? `（${note}）` : ''}，任务自动完成`, now)
+    audit(db, { memberId: null, action: 'task.remind', objectType: 'task', objectId: task.id, detail: { projectId: task.project_id ?? task.projectId, title: task.title, note: note || null } })
+  })()
 }
 
 // —— 渠道（S1 绑定 / S3 抽取源；D5 通用群）——
