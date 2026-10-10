@@ -3,6 +3,8 @@
 // 多列布局（≤TABLE_MAX_ROWS 行成表，超出退化文本行）；多项目域一律分节 lark_md 文本行
 // （卡片元素预算护栏）。卡片 2.0 原生 table 组件留待线上实测后另行启用（本期 column_set 保底）。
 // S55（v0.60，K38）：建议确认卡（buildSuggestionCard）——抽取面待确认建议的 IM 点按闭环。
+// v0.63（K41）：预警/纯提醒卡（buildOverdueAlertCard/buildLoadAlertCard/buildSilentAlertCard/buildReminderCard）——
+// 预警巡检与纯提醒推送的卡片形态，投递层降级链（卡片失败→post/text 补发）在 push.js。
 
 import crypto from 'node:crypto'
 import { INV_MAX_PER_PROJECT } from '../../engine/tasks.js'
@@ -128,4 +130,50 @@ export function buildTasksInventoryCard(inv) {
   }
   const title = single ? `任务盘点 · ${inv.projectName}` : '未分配任务盘点'
   return card('wathet', title, elements)
+}
+
+// —— v0.63（K41）：预警与纯提醒卡片 ——
+
+/**
+ * S7-1 逾期任务预警卡：红色 header + column_set 表格（任务/项目/截止/超期）；
+ * ≤TABLE_MAX_ROWS 行成表、超出退化文本行（S45 元素预算护栏）；
+ * S23 参考资料以 lark_md 链接行留在表下。tasks: [{id,title,projectName,planEndDate,daysOverdue,refs?}]。
+ */
+export function buildOverdueAlertCard({ memberName, tasks }) {
+  const elements = [md(`你有 **${tasks.length}** 项逾期未完任务：`)]
+  if (tasks.length <= TABLE_MAX_ROWS) {
+    elements.push(...table(
+      ['任务', '项目', '截止', '超期'],
+      tasks.map((t) => [t.title, t.projectName, t.planEndDate, `超 ${t.daysOverdue} 天`]),
+      [4, 3, 2, 2],
+    ))
+  } else {
+    elements.push(md(tasks.map((t) => `· ${t.title}（${t.projectName}，截止 ${t.planEndDate}，超 ${t.daysOverdue} 天）`).join('\n')))
+  }
+  const refLines = tasks
+    .filter((t) => t.refs?.length)
+    .map((t) => `· ${t.title}：${t.refs.map((r) => `[${r.title}](${r.url})`).join('、')}`)
+  if (refLines.length) elements.push(md(`**参考**\n${refLines.join('\n')}`))
+  return card('red', `逾期任务预警：${memberName}（${tasks.length} 项）`, elements)
+}
+
+/** S7-2 负载预警卡：橙色 header + 事实一段。 */
+export function buildLoadAlertCard({ member, parallelProjects, maxParallelProjects, openTasks }) {
+  return card('orange', `负载预警：${member}`, [
+    md(`**${member}** 并行参与 **${parallelProjects}** 个进行中项目（上限 ${maxParallelProjects}），未完任务 **${openTasks}** 项。`),
+  ])
+}
+
+/** S48-4 沉默项目预警卡：橙色 header + 项目名与沉默天数。 */
+export function buildSilentAlertCard({ projectName, days }) {
+  return card('orange', `沉默项目预警：${projectName}`, [
+    md(`项目「**${projectName}**」已连续 **${days}** 天无已生效事件且无任务变动。\n请关注：是真停滞还是讨论没进群？`),
+  ])
+}
+
+/** S57 纯提醒卡：wathet header ⏰ + 项目/提醒日/责任人；一次性送达语义写在卡片里。 */
+export function buildReminderCard({ title, projectName, planEndDate, responsibleName }) {
+  return card('wathet', `⏰ 提醒：${title}`, [
+    md(`项目：**${projectName}**\n提醒日：${planEndDate}${responsibleName ? `\n责任人：**${responsibleName}**` : ''}\n一次性送达，任务已自动标记完成（不追踪状态）。`),
+  ])
 }

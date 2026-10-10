@@ -5,6 +5,7 @@ import { listProjects } from '../engine/projects.js'
 import { createTask, updateTask, listTaskRecords, overdueTasksOf, tasksInventory, upsertChannel } from '../engine/tasks.js'
 import { PROPOSAL_KINDS } from '../engine/proposals.js'
 import { evaluateReminders } from '../brain/reminder.js'
+import { buildReminderCard } from '../brain/bot/cards.js'
 import { queryMetric } from '../engine/metrics.js'
 import { projectBrief } from '../engine/brief.js'
 import { myWork } from '../engine/statusBoard.js'
@@ -72,6 +73,36 @@ describe('S57 纯提醒任务分类', () => {
     const again = await evaluateReminders(db, { send: fakeSend(sent2), now: atHour(10) })
     expect(again.reminders.length).toBe(0)
     expect(sent2.length).toBe(0)
+  })
+
+  it('S57-1: 提醒推送以交互卡片送达——责任人私聊与专题群同卡（wathet ⏰，v0.63）', async () => {
+    const p = db.prepare(`SELECT id FROM projects WHERE name = ?`).get('提醒主项目') // S57-1 已建并绑 oc_rem
+    const t = createTask(db, {
+      projectId: p.id, title: '卡片提醒', kind: 'reminder',
+      responsibleMemberId: members.dev.id, planEndDate: today(),
+    }, members.admin.id)
+
+    const sent = []
+    const { reminders } = await evaluateReminders(db, { send: fakeSend(sent), now: atHour(10) })
+    expect(reminders.map((x) => x.taskId)).toEqual([t.id])
+    const priv = sent.find((s) => s.openId === members.dev.feishuId)
+    const grp = sent.find((s) => s.chatId === 'oc_rem')
+    for (const m of [priv, grp]) {
+      expect(m?.card).toBeTruthy()
+      expect(m.card.header.template).toBe('wathet')
+      expect(m.card.header.title.content).toContain('⏰ 提醒：卡片提醒')
+      expect(JSON.stringify(m.card)).toContain('提醒主项目')
+    }
+  })
+
+  it('S57-1: 提醒卡片模板——wathet header ⏰ + 项目/提醒日/责任人（v0.63）', () => {
+    const card = buildReminderCard({ title: '评审会提醒', projectName: '提醒主项目', planEndDate: '2026-10-10', responsibleName: '李四' })
+    expect(card.header.template).toBe('wathet')
+    expect(card.header.title.content).toBe('⏰ 提醒：评审会提醒')
+    const s = JSON.stringify(card)
+    expect(s).toContain('提醒主项目')
+    expect(s).toContain('2026-10-10')
+    expect(s).toContain('李四')
   })
 
   it('S57-2: 未到提醒日/未过发送门槛不触发；过期未发（停机跨日、补录）补发一次', async () => {
