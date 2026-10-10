@@ -49,7 +49,7 @@ export async function runAgentLoop({ llm, systemPrompt, userText, history = [], 
         text: String(parsed.text || '').slice(0, 3000), turns, queries,
       }
     }
-    if (parsed.action === 'query' || parsed.action === 'metric' || parsed.action === 'brief' || parsed.action === 'morning' || parsed.action === 'recent_chat') {
+    if (parsed.action === 'query' || parsed.action === 'metric' || parsed.action === 'brief' || parsed.action === 'morning' || parsed.action === 'recent_chat' || parsed.action === 'minutes') {
       if (queries >= MAX_QUERIES) {
         messages.push({ role: 'assistant', content: out }, { role: 'user', content: `查询次数已达上限（${MAX_QUERIES} 次），请基于已取回的信息直接 reply。` })
         continue

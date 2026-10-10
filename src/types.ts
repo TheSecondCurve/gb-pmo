@@ -38,6 +38,12 @@ export interface TaskRefRow {
   createdBy?: number | null; createdByName?: string | null; createdAt: number
 }
 export interface TaskRecordRow { id: number; taskId: number; memberId: number | null; memberName?: string | null; content: string; createdAt: number }
+// S46（v0.51，K29）：推送记录（通知收件箱）；status: sent=已送达 / failed=投递失败 / skipped=未投递（error 记原因）
+export interface PushRow {
+  id: number; pushType: string; title: string; body: string; status: 'sent' | 'failed' | 'skipped'
+  error?: string | null; messageId?: string | null; channelPlatform?: string | null
+  relatedProjectId?: number | null; createdAt: number
+}
 export interface MilestoneRow { id: number; projectId: number; name: string; planDate?: string | null; actualDate?: string | null; status: string }
 export interface EventRow {
   id: number; projectId: number; businessTime: number; createdAt: number; nature: 'record' | 'suggestion'

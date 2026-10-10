@@ -10,6 +10,8 @@ import * as proposalsEngine from '../engine/proposals.js' // S25 通用提议确
 import { getAllSettings, setSetting, getSetting } from '../engine/settings.js'
 import { queryMetric, listMetrics } from '../engine/metrics.js'
 import { assertValue } from '../engine/enums.js'
+import { listPushes } from '../brain/push.js' // S46 通知收件箱
+import { llmUsage } from '../engine/llmUsage.js' // S47 LLM 用量
 
 export function registerApiRoutes(app) {
   const db = app.db
@@ -65,6 +67,12 @@ export function registerApiRoutes(app) {
     const out = issueBindCode(db, req.member.id)
     auth.audit(db, { memberId: req.member.id, action: 'bot.bindCode', objectType: 'member', objectId: req.member.id })
     return out
+  })
+
+  // S46（v0.51）：通知收件箱——本人推送记录（日报/预警/梳理/建议通知；投递状态三态：sent/failed/skipped）
+  app.get('/api/v1/pushes', async (req) => {
+    const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 200)
+    return { pushes: listPushes(db, { recipientMemberId: req.member.id, limit }) }
   })
 
   // —— 成员（D1 全员透明：查看全员可；维护管理员）——
@@ -366,6 +374,37 @@ export function registerApiRoutes(app) {
       model: body.model ?? sub.model,
       timeoutMs: saved.timeoutMs,
     })
+  })
+
+  // S47（v0.52，K30）：LLM 用量聚合——按用途（调用数/token/平均耗时/失败数）+ 按北京日汇总
+  app.get('/api/v1/admin/llm-usage', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    return llmUsage(db, { days: Number(req.query.days) || 7 })
+  })
+
+  // S48（v0.53，K31）：未分拣池消化——列表 / 归挂到项目（重走抽取）/ 忽略（仅管理员）
+  app.get('/api/v1/admin/unrouted', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { listUnrouted } = await import('../brain/extract.js')
+    return { messages: listUnrouted(db) }
+  })
+
+  app.post('/api/v1/admin/unrouted/:id/route', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const projectId = Number(req.body?.projectId)
+    if (!Number.isInteger(projectId)) return reply.status(400).send({ message: 'projectId 必填（整数）' })
+    const { routeUnrouted } = await import('../brain/extract.js')
+    const out = await routeUnrouted(db, Number(req.params.id), projectId, { llm: app.llm ?? undefined })
+    auth.audit(db, { memberId: req.member.id, action: 'unrouted.route', objectType: 'unrouted_message', objectId: Number(req.params.id), detail: { projectId } })
+    return out
+  })
+
+  app.post('/api/v1/admin/unrouted/:id/discard', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { discardUnrouted } = await import('../brain/extract.js')
+    const out = discardUnrouted(db, Number(req.params.id))
+    auth.audit(db, { memberId: req.member.id, action: 'unrouted.discard', objectType: 'unrouted_message', objectId: Number(req.params.id) })
+    return out
   })
 
   // S17-5：IM 连通性验证（企微未部署 SDK 时给出明确指引错误）

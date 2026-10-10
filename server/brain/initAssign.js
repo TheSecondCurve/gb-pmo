@@ -26,8 +26,8 @@ function preflight(db, projectId) {
   return project
 }
 
-function assertLlm(db, llmOverride) {
-  const llm = getLlm(db, llmOverride)
+function assertLlm(db, llmOverride, projectId) {
+  const llm = getLlm(db, llmOverride, { purpose: 'init_assign', projectId })
   if (!llm) {
     throw Object.assign(new Error('LLM 未配置：请先在配置台「外部依赖 → LLM」配置任一类别（DeepSeek / GLM 国内 Coding Plan，可先「测试连接」）后再用 AI 初始分配'), { statusCode: 503 })
   }
@@ -40,7 +40,7 @@ function assertLlm(db, llmOverride) {
  */
 export async function draftInitAssignments(db, projectId, { llm: llmOverride } = {}) {
   const project = preflight(db, projectId)
-  const llm = assertLlm(db, llmOverride)
+  const llm = assertLlm(db, llmOverride, projectId)
 
   const tasks = camelizeRows(
     db.prepare(
@@ -141,7 +141,7 @@ function pruneJobs() {
  */
 export function startDraftInitAssignments(db, projectId, { llm: llmOverride } = {}) {
   preflight(db, projectId) // 同步 404/409
-  const llm = assertLlm(db, llmOverride) // 同步 503（并把已解析的适配器传入后台，避免二次解析）
+  const llm = assertLlm(db, llmOverride, projectId) // 同步 503（并把已解析的适配器传入后台，避免二次解析）
   pruneJobs()
   const draftId = `d${Date.now().toString(36)}${(++jobSeq).toString(36)}`
   const job = { projectId: Number(projectId), status: 'running', createdAt: Date.now() }

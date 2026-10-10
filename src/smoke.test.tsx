@@ -604,3 +604,57 @@ describe('S4-8 讨论面分栏（v0.47）', () => {
     expect(colOther.getByText(/二期范围砍半/)).toBeTruthy()
   })
 })
+
+// S46（v0.51，K29）通知收件箱冒烟：推送记录列表渲染（类型/状态/标题/正文）
+describe('S46 通知收件箱（v0.51）', () => {
+  it('S46-4: 通知页渲染本人推送记录（类型标签/投递状态/标题/正文）', async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/v1/pushes')) {
+        return new Response(JSON.stringify({
+          pushes: [{
+            id: 1, pushType: 'daily_report', title: '项目大脑日报 2026-10-10', body: '【我的任务】未完 3 项',
+            status: 'skipped', error: '飞书凭证未配置', createdAt: 1760000000000,
+          }],
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ member: { id: 1, name: '甲', role: 'member' } }), { status: 200 })
+    }) as unknown as typeof fetch
+    location.hash = '#/pushes'
+    render(<StoreProvider><App /></StoreProvider>)
+    expect(await screen.findByText('项目大脑日报 2026-10-10')).toBeTruthy()
+    expect(screen.getByText('日报')).toBeTruthy() // 类型中文标签
+    expect(screen.getByText('未投递')).toBeTruthy() // skipped 中文状态
+    expect(screen.getByText(/未完 3 项/)).toBeTruthy()
+  })
+})
+
+// S47（v0.52，K30）LLM 用量摘要冒烟：配置台 LLM 卡片展示近 7 天用量表
+describe('S47 LLM 用量记账（v0.52）', () => {
+  it('S47-4: 配置台 LLM 卡片展示近 7 天用量摘要（用途/调用数/token/失败）', async () => {
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('/api/v1/admin/llm-usage')) {
+        return new Response(JSON.stringify({
+          days: 7,
+          byPurpose: [{ purpose: 'extraction', calls: 42, promptTokens: 1000, completionTokens: 200, avgDurationMs: 800, errors: 1 }],
+          byDay: [{ day: '2026-10-10', calls: 42, tokens: 1200, errors: 1 }],
+        }), { status: 200 })
+      }
+      if (url.startsWith('/api/v1/admin/settings')) {
+        return new Response(JSON.stringify({
+          llm: { provider: 'deepseek', deepseek: { apiKey: '', baseUrl: '', model: '' }, 'glm-coding': { apiKey: '', baseUrl: '', model: '' }, timeoutMs: 120000 },
+          'im.feishu': { appId: '', appSecret: '' }, calendar: { feishuCalendarId: '' },
+        }), { status: 200 })
+      }
+      return new Response(JSON.stringify({ member: { id: 1, name: '甲', role: 'admin' } }), { status: 200 })
+    }) as unknown as typeof fetch
+    location.hash = '#/admin/integrations/llm'
+    const { default: Admin } = await import('./pages/Admin')
+    render(<StoreProvider><Admin section="integrations" tab="llm" /></StoreProvider>)
+    const usage = await screen.findByTestId('llm-usage')
+    expect(within(usage).getByText('extraction')).toBeTruthy()
+    expect(within(usage).getByText('42')).toBeTruthy()
+    expect(within(usage).getByText('1000/200')).toBeTruthy()
+  })
+})

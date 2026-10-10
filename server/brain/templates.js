@@ -18,7 +18,7 @@ function cleanTitle(raw) {
 }
 
 export async function draftTaskList(db, { name, description }, { llm: llmOverride } = {}) {
-  const llm = getLlm(db, llmOverride)
+  const llm = getLlm(db, llmOverride, { purpose: 'draft' })
   if (!llm) {
     throw Object.assign(new Error('LLM 未配置：请先在配置台「外部依赖 → LLM」配置任一类别（DeepSeek / GLM 国内 Coding Plan，可先「测试连接」）后再用 AI 起草'), { statusCode: 503 })
   }

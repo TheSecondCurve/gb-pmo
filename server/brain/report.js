@@ -9,7 +9,7 @@ import { queryMetric } from '../engine/metrics.js'
 import { taskRefMap, formatTaskRefs } from '../engine/tasks.js'
 import { notifyMember } from './push.js'
 
-export async function dailyReport(db, { force = false } = {}) {
+export async function dailyReport(db, { force = false, send } = {}) {
   const now = new Date()
   const dayStart = bjDayStartMs(now) // 「当日」按北京日（S19）
   if (!force) {
@@ -85,7 +85,7 @@ export async function dailyReport(db, { force = false } = {}) {
     }
 
     const title = `项目大脑日报 ${today(now)}`
-    notifyMember(db, m, { pushType: 'daily_report', title, body: sections.join('\n\n') })
+    await notifyMember(db, m, { pushType: 'daily_report', title, body: sections.join('\n\n') }, { send })
     reports.push({ memberId: m.id, sections: sections.length })
   }
   return { reports: reports.length, at: now.toISOString() }

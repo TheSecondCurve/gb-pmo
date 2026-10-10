@@ -175,10 +175,10 @@ describe('agent 脚本安全', () => {
 })
 
 describe('push / enums / settings 单元', () => {
-  it('notifyMember + listPushes：无 IM 身份标 skipped，按人过滤', () => {
+  it('notifyMember + listPushes：无 IM 身份标 skipped，按人过滤（v0.51 起 notifyMember 为异步投递层）', async () => {
     const { db } = setupDb()
     const m = createMember(db, { name: '李', username: 'li', password: 'p' }, 1)
-    notifyMember(db, m, { pushType: 'alert', title: 't', body: 'b' })
+    await notifyMember(db, m, { pushType: 'alert', title: 't', body: 'b' })
     const rows = listPushes(db, { recipientMemberId: m.id })
     expect(rows[0].status).toBe('skipped')
     expect(listPushes(db).length).toBe(1)

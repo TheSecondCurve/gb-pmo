@@ -54,7 +54,7 @@ describe('S7 预警', () => {
     const task = p.tasks[0]
     await authed(ctx.app, cookie, 'PATCH', `/api/v1/tasks/${task.id}`, { responsibleMemberId: ctx.members.key.id, planEndDate: yesterday })
 
-    const { alerts } = evaluateAlerts(ctx.db)
+    const { alerts } = await evaluateAlerts(ctx.db)
     const ovd = alerts.find((a) => a.type === 'overdue_tasks' && a.memberId === ctx.members.key.id)
     expect(ovd).toBeTruthy()
     expect(ovd.projects).toContain(p.id)
@@ -75,7 +75,7 @@ describe('S7 预警', () => {
     expect(wang.parallelProjects).toBeGreaterThanOrEqual(3)
     expect(wang.overloaded).toBe(true)
 
-    const { alerts } = evaluateAlerts(ctx.db)
+    const { alerts } = await evaluateAlerts(ctx.db)
     expect(alerts.some((a) => a.type === 'overloaded' && a.member === '王五')).toBe(true)
     const alert = ctx.db.prepare(`SELECT * FROM pushes WHERE push_type = 'alert' AND title LIKE '%负载预警：王五%'`).get()
     expect(alert).toBeTruthy()
