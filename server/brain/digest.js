@@ -1,19 +1,22 @@
 // 大脑·梳理（S15 by 项目 / S16 by 员工）+ 结项复盘摘要（S8-2）。
 // LLM 出叙事与建议；建议一律走建议型事件等人确认（S15-2）。LLM 未配置时确定性降级。
+// S49（v0.54，K32）：weeklyDigestRun = 每周定时梳理（全部在跑项目推牵头人）+ 老板周报（推管理员）；
+// 周级幂等——本周已有「项目大脑周报」推送行则整轮跳过（防进程重启跨时点重复产建议事件）。
 
 import { camelizeRows, camelizeRow } from '../db/index.mjs'
-import { today } from '../db/time.js'
+import { today, bjWeekStartMs } from '../db/time.js'
 import { getSetting } from '../engine/settings.js'
 import { addEvent, markPushedTo, pendingSuggestionsFor } from '../engine/events.js'
 import { taskRefMap, formatTaskRefs } from '../engine/tasks.js'
+import { weeklyBrief } from '../engine/weekly.js'
 import { getLlm, parseJsonLoose } from './llm.js'
-import { notifyMember } from './push.js'
+import { notifyMember, notifyAdmins } from './push.js'
 
 const DAY = 86400000
 
 /** S15 项目梳理：任务面 + 讨论面双来源汇总，每条结论带依据引用。 */
-export async function projectDigest(db, projectId, { llm: llmOverride, windowDays = 7 } = {}) {
-  const llm = getLlm(db, llmOverride)
+export async function projectDigest(db, projectId, { llm: llmOverride, windowDays = 7, send } = {}) {
+  const llm = getLlm(db, llmOverride, { purpose: 'digest', projectId })
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId)
   if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
   const th = getSetting(db, 'thresholds')
@@ -80,15 +83,15 @@ export async function projectDigest(db, projectId, { llm: llmOverride, windowDay
   const title = `项目梳理：${project.name}${silent ? '（项目沉默）' : ''}`
   const body = `${silent ? '⚠ 项目沉默：近窗口无事件且无任务变动。\n' : ''}${narrative}\n\n任务面：\n${taskPlane}\n\n建议 ${createdSuggestions.length} 条（待确认生效）`
   if (lead) {
-    notifyMember(db, camelizeRow(lead), { pushType: 'digest', title, body, projectId })
+    await notifyMember(db, camelizeRow(lead), { pushType: 'digest', title, body, projectId }, { send })
     for (const evt of createdSuggestions) markPushedTo(db, evt.id, [lead.id])
   }
   return { projectId, title, narrative, silent, taskCount: tasks.length, overdueCount: overdue.length, unassignedCount: unassigned.length, eventCount: events.length, suggestions: createdSuggestions }
 }
 
 /** S16 员工梳理：跨项目任务 + 被依赖 + 排期冲突 + 超时待确认置顶。 */
-export async function personDigest(db, memberId, { llm: llmOverride } = {}) {
-  const llm = getLlm(db, llmOverride)
+export async function personDigest(db, memberId, { llm: llmOverride, send } = {}) {
+  const llm = getLlm(db, llmOverride, { purpose: 'digest' })
   const member = db.prepare('SELECT * FROM members WHERE id = ?').get(memberId)
   if (!member) throw Object.assign(new Error('成员不存在'), { statusCode: 404 })
   const th = getSetting(db, 'thresholds')
@@ -135,14 +138,13 @@ export async function personDigest(db, memberId, { llm: llmOverride } = {}) {
   narrative ||= `你有 ${tasks.length} 项未完任务（逾期 ${overdue.length}）、排期冲突 ${conflicts.length} 处、超时待确认建议 ${timedOut.length} 条。${overdue.length ? '建议优先处理逾期项。' : ''}`
 
   const body = `${timedOut.length ? `⏰ 超时待确认（置顶）：\n${timedOut.map((e) => `- ${e.summary}（事件#${e.id}）`).join('\n')}\n\n` : ''}${narrative}\n\n任务：\n${taskLines}${conflicts.length ? `\n\n排期冲突：\n${conflicts.map(([a, b]) => `- ${a.title}（${a.planStartDate}~${a.planEndDate}）与 ${b.title}（${b.planStartDate}~${b.planEndDate}）重叠`).join('\n')}` : ''}`
-  notifyMember(db, camelizeRow(member), { pushType: 'digest', title: `个人梳理：${member.name}`, body })
+  await notifyMember(db, camelizeRow(member), { pushType: 'digest', title: `个人梳理：${member.name}`, body }, { send })
 
   return { memberId, narrative, taskCount: tasks.length, overdueCount: overdue.length, conflictCount: conflicts.length, timedOutSuggestions: timedOut.length, timedOut, conflicts }
 }
 
 /** S8-2 结项复盘摘要：基于事件流的确定性生成（LLM 可增强，人工可改后作为 closeProject 入参）。 */
-export async function closeoutSummary(db, projectId, { llm: llmOverride } = {}) {
-  const llm = getLlm(db, llmOverride)
+export async function closeoutSummary(db, projectId, { llm: llmOverride } = {}) {  const llm = getLlm(db, llmOverride, { purpose: 'closeout', projectId })
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId)
   const events = camelizeRows(
     db.prepare('SELECT event_type, summary, business_time FROM project_events WHERE project_id = ? ORDER BY business_time').all(projectId)
@@ -157,4 +159,41 @@ export async function closeoutSummary(db, projectId, { llm: llmOverride } = {}) 
     { role: 'user', content: `项目：${project.name}\n${base}\n事件流：\n${events.slice(-30).map((e) => e.summary).join('\n')}` },
   ])
   return String(out).trim() || base
+}
+
+/**
+ * S49（v0.54，K32）：每周定时梳理 + 老板周报（scheduler digest 任务驱动）。
+ * 周级幂等：本周已有「项目大脑周报」推送行 → 整轮跳过（项目梳理重跑会重复产建议事件，append-only 不可撤销）。
+ * ① 全部在跑项目逐个 projectDigest（S15 推牵头人，单项目失败不阻塞其余）；② weeklyBriefPush 周报推管理员。
+ */
+export async function weeklyDigestRun(db, { llm: llmOverride, send } = {}) {
+  const dup = db
+    .prepare(`SELECT 1 FROM pushes WHERE push_type = 'digest' AND title LIKE '项目大脑周报%' AND created_at >= ?`)
+    .get(bjWeekStartMs())
+  if (dup) return { skipped: true, reason: '本周已推送过周报，整轮跳过（周级幂等）' }
+
+  const projects = camelizeRows(db.prepare(`SELECT id FROM projects WHERE status = 'active'`).all())
+  const digests = []
+  for (const p of projects) {
+    try {
+      digests.push(await projectDigest(db, p.id, { llm: llmOverride, send }))
+    } catch (e) {
+      digests.push({ projectId: p.id, error: e.message })
+    }
+  }
+
+  const brief = weeklyBrief(db)
+  let narrative = null
+  const llm = getLlm(db, llmOverride, { purpose: 'digest' })
+  if (llm) {
+    try {
+      narrative = String(await llm.complete([
+        { role: 'system', content: '你是企业项目大脑，为老板写本周项目组合综述：3-5 句中文，基于给定数据指出最值得关注的项目与原因，不编造数据之外的事实。' },
+        { role: 'user', content: brief.text },
+      ])).trim() || null
+    } catch { narrative = null } // 综述失败降级纯数据（不阻塞周报）
+  }
+  const body = `${narrative ? `【本周综述】${narrative}\n\n` : ''}${brief.text}`
+  await notifyAdmins(db, { pushType: 'digest', title: `项目大脑周报 ${brief.weekStart}`, body }, { send })
+  return { digests: digests.length, digestResults: digests, brief }
 }

@@ -23,6 +23,7 @@ import * as wecomConnector from '../connectors/wecom.js'
 const CHAT_CONNECTORS = { feishu: feishuConnector, wecom: wecomConnector }
 const RECENT_CHAT_LOOKBACK_SEC = 7200 // 回看窗口：最近 2 小时群讨论
 const RECENT_CHAT_MAX = 50 // 单次返回条数上限
+const MINUTES_MAX_HOURS = 6 // S54：纪要回看窗上限（默认 2 小时同 recent_chat）
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 // 建议字段 → 事件类型（与 IM 抽取器同口径，confirmEvent.applyTaskPatch 支持的字段子集）
@@ -47,33 +48,61 @@ export function runBriefTool(db, projectId) {
 }
 
 /**
+ * 专题群最近讨论的共享拉取（S20-18 recent_chat / S54 minutes 共用）：
+ * 仅专题群可用、临时拉取不挪 channels.cursor 不产事件、说话人身份映射、机器人自身消息过滤。
+ */
+async function fetchRecentDiscussion(db, env, { fetchChat, limit, lookbackSec }) {
+  const chRaw = env.chatType === 'group'
+    ? db.prepare('SELECT * FROM channels WHERE platform = ? AND group_key = ?').get(env.platform, env.chatId)
+    : null
+  if (!chRaw || chRaw.channel_type !== 'dedicated') return { unavailable: true }
+  const channel = camelizeRow(chRaw)
+  const take = Math.min(Math.max(1, Number(limit) || 20), RECENT_CHAT_MAX)
+  const fetch = fetchChat || CHAT_CONNECTORS[env.platform]?.fetchMessages
+  if (!fetch) return { unavailable: true, reason: `平台 ${env.platform} 无消息连接器。` }
+  const cursor = String(Math.floor(Date.now() / 1000) - lookbackSec)
+  const { messages = [] } = await fetch(getSetting(db, `im.${env.platform}`), channel, cursor)
+  const botSeen = db.prepare('SELECT 1 FROM bot_commands WHERE message_id = ?')
+  const lines = messages
+    .filter((m) => m.id && !botSeen.get(m.id))
+    .map((m) => `${mapSpeaker(db, env.platform, m.speakerId)?.name || '未识别'}：${String(m.text || '').slice(0, 200)}`)
+  return { lines, take }
+}
+
+/**
  * S20-18（v0.34）群讨论上下文：仅项目专题群——连接器临时拉本群最近消息给 LLM 读。
  * 临时拉取不挪 channels.cursor、不产生事件（定时抽取与 S20-10 去重不受影响）；
- * 说话人按 feishu/wecom id 映射成员（未识别标注），机器人自身消息（bot_commands 已有）过滤。
+ * 说话人按 feishu/wecom id 映射（未识别标注），机器人自身消息（bot_commands 已有）过滤。
  * env: { platform, chatId, chatType }；opts.fetchChat 可注入替换默认连接器（测试用）。
  */
 export async function runRecentChatTool(db, env, { fetchChat, limit } = {}) {
   const unavailable = 'recent_chat 仅项目专题群可用——本会话没有定域的群讨论上下文；请改用 query 查已抽取事件，或让用户直接补充讨论结论。'
-  if (env.chatType !== 'group') return unavailable
-  const chRaw = db.prepare('SELECT * FROM channels WHERE platform = ? AND group_key = ?').get(env.platform, env.chatId)
-  if (!chRaw || chRaw.channel_type !== 'dedicated') return unavailable
-  const channel = camelizeRow(chRaw)
-  const take = Math.min(Math.max(1, Number(limit) || 20), RECENT_CHAT_MAX)
-  const fetch = fetchChat || CHAT_CONNECTORS[env.platform]?.fetchMessages
-  if (!fetch) return `recent_chat 失败：平台 ${env.platform} 无消息连接器。`
   try {
-    const cursor = String(Math.floor(Date.now() / 1000) - RECENT_CHAT_LOOKBACK_SEC)
-    const { messages = [] } = await fetch(getSetting(db, `im.${env.platform}`), channel, cursor)
-    const botSeen = db.prepare('SELECT 1 FROM bot_commands WHERE message_id = ?')
-    const lines = messages
-      .filter((m) => m.id && !botSeen.get(m.id))
-      .map((m) => `${mapSpeaker(db, env.platform, m.speakerId)?.name || '未识别'}：${String(m.text || '').slice(0, 200)}`)
-    if (!lines.length) {
+    const r = await fetchRecentDiscussion(db, env, { fetchChat, limit, lookbackSec: RECENT_CHAT_LOOKBACK_SEC })
+    if (r.unavailable) return r.reason ? `recent_chat 失败：${r.reason}` : unavailable
+    if (!r.lines.length) {
       return `本群最近 ${RECENT_CHAT_LOOKBACK_SEC / 3600} 小时内没有可读的群聊讨论（无人发言或均为机器人消息）。请让用户直接说明讨论结论。`
     }
-    return `本群最近讨论（${lines.length} 条，从旧到新；仅近期窗口，更早内容走定时抽取归档）：\n${lines.slice(-take).join('\n')}`
+    return `本群最近讨论（${r.lines.length} 条，从旧到新；仅近期窗口，更早内容走定时抽取归档）：\n${r.lines.slice(-r.take).join('\n')}`
   } catch (e) {
     return `recent_chat 失败：${e.message}（可改用 query 查已抽取事件，或让用户直接复述讨论结论）`
+  }
+}
+
+/**
+ * S54（v0.59，K37）纪要拉取：minutes 读侧动作——与 recent_chat 同族同纪律（不挪游标/不产事件/身份映射/滤机器人），
+ * 回看窗可放宽至 6 小时（默认 2h）。返回讨论文本供 LLM 浓缩三段式纪要；归档由 record_event 承担（用户确认后）。
+ */
+export async function runMinutesTool(db, env, { fetchChat, limit, hours } = {}) {
+  const unavailable = 'minutes 仅项目专题群可用——本会话没有定域的群聊上下文（纪要在项目专题群里 @我 发起）。'
+  const h = Math.min(Math.max(Number(hours) || 2, 1), MINUTES_MAX_HOURS)
+  try {
+    const r = await fetchRecentDiscussion(db, env, { fetchChat, limit: limit ?? RECENT_CHAT_MAX, lookbackSec: h * 3600 })
+    if (r.unavailable) return r.reason ? `minutes 失败：${r.reason}` : unavailable
+    if (!r.lines.length) return `本群最近 ${h} 小时内没有可读的群聊讨论（无人发言或均为机器人消息）——明说即可，不要编造纪要内容。`
+    return `本群最近 ${h} 小时讨论（${r.lines.length} 条，从旧到新）：\n${r.lines.slice(-r.take).join('\n')}\n—— 请浓缩为三段式纪要（结论/待办/风险，标注发言人），末尾附「回复『归档』沉淀为项目记录」。`
+  } catch (e) {
+    return `minutes 失败：${e.message}（可让用户直接复述讨论结论）`
   }
 }
 

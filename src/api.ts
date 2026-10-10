@@ -88,6 +88,15 @@ export const api = {
     req<{ rejected: number[]; failed: { id: number; message: string }[] }>('POST', '/api/v1/events/reject-batch', { ids }),
   pendingEvents: () => req<{ events: import('./types').EventRow[] }>('GET', '/api/v1/events/pending'),
 
+  // S46（v0.51）：通知收件箱（仅本人推送记录）
+  pushes: (limit?: number) =>
+    req<{ pushes: import('./types').PushRow[] }>('GET', `/api/v1/pushes${limit ? `?limit=${limit}` : ''}`),
+
+  // S47（v0.52）：LLM 用量聚合（仅管理员）
+  llmUsage: (days = 7) =>
+    req<{ days: number; byPurpose: { purpose: string; calls: number; promptTokens: number; completionTokens: number; avgDurationMs: number | null; errors: number }[]; byDay: { day: string; calls: number; tokens: number; errors: number }[] }>(
+      'GET', `/api/v1/admin/llm-usage?days=${days}`),
+
   // S25 通用提议：确认/驳回（与飞书卡片同一口子，权限矩阵在 engine）
   confirmProposal: (id: number) => req('POST', `/api/v1/proposals/${id}/confirm`, {}),
   rejectProposal: (id: number) => req('POST', `/api/v1/proposals/${id}/reject`, {}),
@@ -112,6 +121,12 @@ export const api = {
   channels: () => req<{ channels: import('./types').ChannelRow[] }>('GET', '/api/v1/channels'),
   upsertChannel: (p: Record<string, unknown>) => req('POST', '/api/v1/channels', p),
   deleteChannel: (id: number) => req('DELETE', `/api/v1/channels/${id}`),
+
+  // S48（v0.53）：未分拣池消化（仅管理员）
+  unrouted: () => req<{ messages: { id: number; platform: string; groupKey: string; businessTime: number; speakerLabel: string | null; content: string }[] }>('GET', '/api/v1/admin/unrouted'),
+  routeUnrouted: (id: number, projectId: number) =>
+    req<{ ok: boolean; projectId: number; projectName: string; events: number; suggestions: number }>('POST', `/api/v1/admin/unrouted/${id}/route`, { projectId }),
+  discardUnrouted: (id: number) => req<{ ok: boolean }>('POST', `/api/v1/admin/unrouted/${id}/discard`, {}),
 
   projectTypes: () => req<{ types: import('./types').ProjectType[] }>('GET', '/api/v1/project-types'),
   createProjectType: (p: Record<string, unknown>) => req<{ type: import('./types').ProjectType }>('POST', '/api/v1/admin/project-types', p),

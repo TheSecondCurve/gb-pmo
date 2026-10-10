@@ -218,6 +218,8 @@ client.sh action generate_person_digest '{}'
 | body | TEXT |  |
 | channel_platform | TEXT |  |
 | status | TEXT | sent|failed|skipped |
+| error | TEXT |  |
+| message_id | TEXT |  |
 
 ### settings
 
@@ -380,6 +382,35 @@ client.sh action generate_person_digest '{}'
 | url | TEXT | 链接（http/https；飞书文档/wiki 均可） |
 | note | TEXT | 备注（可选：适用时机/范围） |
 | sort_order | INTEGER |  |
+
+### llm_calls
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| purpose | TEXT | extraction|routing|digest|closeout|draft|init_assign|chat（自由文本约定值） |
+| project_id | INTEGER | 关联项目（可空；对话面/个人梳理无单项目语义） |
+| provider | TEXT | 生效类别（deepseek|glm-coding；fake 注入时为适配器名） |
+| model | TEXT |  |
+| prompt_tokens | INTEGER | 上游 usage 返回时记录，无则 NULL |
+| completion_tokens | INTEGER |  |
+| duration_ms | INTEGER |  |
+| ok | INTEGER | 1 成功 / 0 失败（error 记摘要） |
+| error | TEXT |  |
+
+### im_buffer
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| platform | TEXT |  |
+| group_key | TEXT |  |
+| message_id | TEXT | 全局去重键（网关重复投递/多源汇入幂等） |
+| speaker_id | TEXT |  |
+| speaker_label | TEXT |  |
+| text | TEXT |  |
+| ts | INTEGER | 消息时刻（epoch 毫秒） |
+| consumed_at | INTEGER | 抽取排干时刻；NULL=待消费 |
 
 ## 枚举（值 ↔ 中文 label，双向对齐）
 

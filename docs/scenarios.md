@@ -443,6 +443,128 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S45-2 | /morning 与 /tasks 应以消息卡片呈现：标题栏 + 分项目 section；单项目域任务清单应以多列布局呈现（任务/状态·截止/责任人）；多项目域与超长段落应退化为分节文本行；web 端同一命令仍应收纯文本 | `server/test/s45-bot-rich-format.test.mjs`（含 web 契约用例） |
 | S45-3 | 卡片/post 发送失败应降级为纯文本补发；`bot_reply` 审计行应落完整纯文本（与卡片/富文本同内容），多轮上下文口径不变 | `server/test/s45-bot-rich-format.test.mjs` |
 
+## S46（P0）— 系统（大脑·推送通道）/全员 — 推送链路真实投递与通知收件箱（v0.51）
+
+日报/预警/梳理/建议通知此前只写 `pushes` 表不投递（真实触达率为零）。投递层升格为「投递+落库」：飞书 open_id 私聊真实下发（post/text 分流），三态落行 sent/failed/skipped（失败不阻塞调用方）；web 新增「通知」收件箱（#/pushes，仅本人）。企微维持只落库。决策见 design.md K29。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S46-1 | 当接收人已绑定 feishu_id 且飞书凭证已配置时，推送应经应用身份以 `receive_id_type=open_id` 私聊真实投递；成功时 `pushes` 行 `status='sent'` 且记录飞书 `message_id`；多行/含链接的正文以 post 富文本发送，单行纯文本发 text | `server/test/s46-push-delivery.test.mjs` |
+| S46-2 | 当飞书投递失败时（上游报错/网络异常），`pushes` 行应落 `status='failed'` 并记录 error 原因；单个接收人失败不影响其余接收人，也不向调用方抛错 | `server/test/s46-push-delivery.test.mjs` |
+| S46-3 | 当接收人无 IM 身份、或飞书凭证未配置时，应落 `status='skipped'` 且 `error` 写明原因；企微成员维持只落库不投递 | `server/test/s46-push-delivery.test.mjs` |
+| S46-4 | 当成员打开 web「通知」页（#/pushes）时，应看到自己的推送记录（类型中文标签/标题/正文/北京时刻/投递状态），接口仅返回本人数据；IM 未配置时收件箱仍可读 | `server/test/s46-push-delivery.test.mjs` + `src/smoke.test.tsx`（前端冒烟） |
+| S46-5 | 当日报/预警/梳理/建议通知链路产出推送时，应全部经过同一投递层（三态落行语义一致），不再只写库不发送 | `server/test/s46-push-delivery.test.mjs` |
+
+## S47（P0）— 系统（大脑·LLM 适配层）/管理员 — LLM 用量记账（v0.52）
+
+`getLlm` 返回的适配器统一包裹记账层：每次逻辑调用落一行 `llm_calls`（用途/项目/provider/model/token/耗时/成败），一次调用一行（内部重试不重复计）；管理端按用途聚合 + 按日汇总，配置台 LLM 卡片展示近 7 天摘要。决策见 design.md K30。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S47-1 | 当任一大脑模块经 `getLlm` 发起调用时，应落一行 `llm_calls`（purpose/projectId/provider/model/prompt_tokens/completion_tokens/duration_ms/ok/error）；一次逻辑调用只落一行（S40 内部重试不重复计）；注入的 fake 适配器经 getLlm 包装后同样落行 | `server/test/s47-llm-usage.test.mjs` |
+| S47-2 | 当调用失败（上游报错/超时）时，该行应落 `ok=0` 与 error 摘要；成功行应携带上游返回的 token 数（无 usage 字段时容忍为空） | `server/test/s47-llm-usage.test.mjs` |
+| S47-3 | 当管理员调 `GET /api/v1/admin/llm-usage?days=7` 时，应返回按用途聚合（调用数/token 合计/平均耗时/失败数）与按日汇总；普通成员 403 | `server/test/s47-llm-usage.test.mjs` |
+| S47-4 | 当打开配置台「外部依赖→LLM」时，应展示近 7 天用量摘要（各用途调用数与 token） | `src/smoke.test.tsx`（前端冒烟） |
+| S47-5 | 当 LLM 未配置（getLlm 返回 null）时，大脑走确定性降级且不产生用量行；记账层不改变超时重试/JSON 降级等既有协议行为（S40 语义不变） | `server/test/s47-llm-usage.test.mjs` |
+
+## S48（P0）— 管理员/系统（大脑·预警）— 未分拣池出口与沉默项目预警（v0.53）
+
+未分拣消息池从「只写不读」接通管理员消化出口（列表/归挂重走抽取/忽略，仅管理员）；沉默项目（连续 silentDays 天无已生效事件且无任务变动）由预警巡检主动推牵头人+管理员，同窗口节流。决策见 design.md K31。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S48-1 | 当管理员打开未分拣列表时，应看到 open 状态消息（群/发言人/内容摘要/北京时刻）；普通成员 403 | `server/test/s48-unrouted-silent.test.mjs` |
+| S48-2 | 当管理员将一条未分拣消息归挂到项目时，应落 `status='routed'` + `routed_project_id`，并以原消息时刻/原文对该消息重走抽取（产出事件归属该项目，发言人归因保留原标签、不映射成员）；项目不存在 404，消息非 open 状态 409 | `server/test/s48-unrouted-silent.test.mjs` |
+| S48-3 | 当管理员忽略一条未分拣消息时，应落 `status='discarded'` 并从 open 列表消失 | `server/test/s48-unrouted-silent.test.mjs` |
+| S48-4 | 当在跑项目连续 silentDays 天无已生效事件且窗口内无任务变动时，预警巡检应推送牵头人与管理员（列出项目名与沉默天数）；同一项目在同一沉默窗口内不重复推送（节流）；刚发生事件或任务有变动的项目不预警 | `server/test/s48-unrouted-silent.test.mjs` |
+
+## S49（P0）— 系统（大脑·调度）/老板 — 每周定时梳理与老板周报简报（v0.54）
+
+调度器第六任务 `digest`（默认周一 09:00）：全部在跑项目跑项目梳理推牵头人 + 组合级周报推管理员（本周新增/结项、逾期、沉默、交付临近、过载；LLM 综述可选）。周级幂等：本周已有周报推送行则整轮跳过。决策见 design.md K32。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S49-1 | 当 digestCron 到点时，应对全部在跑项目跑项目梳理并推送牵头人；`digestCron`/`digestEnabled` 进配置台「阈值与推送」（非法 cron 400、开关停跑，与既有调度任务同构） | `server/test/s49-weekly-digest.test.mjs` |
+| S49-2 | 当周报推送时，正文应含本周新增/结项计数、逾期项目清单（含逾期数）、沉默项目清单、未来 14 天交付临近清单、关键人过载清单（数据确定性组装，北京时区）；LLM 配置时应有综述段，未配置时降级为纯数据文本不报错 | `server/test/s49-weekly-digest.test.mjs` |
+| S49-3 | 当同一自然周内 digest 任务再次触发时（如进程重启跨过 cron 时点），应整轮跳过（本周已有周报推送行），不重复产梳理建议与周报推送 | `server/test/s49-weekly-digest.test.mjs` |
+
+## S50（P0）— 系统（大脑·IM 抽取）— 噪音预过滤与批量抽取（v0.55）
+
+噪音消息（空/纯表情/应酬白名单/单字符）确定性预过滤不进 LLM；其余消息按项目归组分批（≤8 条且 ≤3000 字）一次调用抽取，事件按 msgIndex 归因源消息。通用群分拣维持逐条（防跨消息污染）。决策见 design.md K33。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S50-1 | 当消息为空、纯表情/标点、精确命中应酬白名单或仅单字符时，应直接跳过（不进分拣/抽取、不产事件），统计计入 `noiseSkipped`；含实质内容的短消息（如「完成了」）不得被过滤 | `server/test/s50-extract-batch.test.mjs` |
+| S50-2 | 当专题渠道一轮拉取多条消息时，应按 ≤8 条且 ≤3000 字分批，每批一次 LLM 调用；LLM 输出事件带 `msgIndex` 时应按源消息落业务时刻/原文快照/发言人归因，缺省时归批次末条 | `server/test/s50-extract-batch.test.mjs` |
+| S50-3 | 当通用群一轮消息分拣落定到多个项目时，应按项目分组分别批量抽取；分拣本身维持逐条调用；未识别发言人的建议过滤按事件的源消息发言人判定（S3-3 口径延伸到批量） | `server/test/s50-extract-batch.test.mjs` |
+| S50-4 | 当 LLM 未配置时，降级路径同样先经噪音预过滤（噪音不产降级记录事件），其余消息维持「每条一条记录型进展事件」语义不变 | `server/test/s50-extract-batch.test.mjs` |
+
+## S51（P0）— 系统（大脑·LLM 适配层）/管理员 — 模型分层·按用途模型覆盖（v0.56）
+
+`llm.purposeModels` 按用途覆盖模型（高频低价路径独立指向便宜模型）；getLlm 按用途解析，覆盖类别未配 key 回退主类别；无覆盖行为不变。决策见 design.md K34。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S51-1 | 当配置 `purposeModels.extraction = { model: 'glm-5.3-Flash' }` 时，抽取用途的调用应使用该模型（provider 缺省=当前生效类别），其余用途维持主模型 | `server/test/s51-purpose-models.test.mjs` |
+| S51-2 | 当 purposeModels 的 purpose 不在约定清单、provider 未知或 model 为空时，保存应 400 并指明字段 | `server/test/s51-purpose-models.test.mjs` |
+| S51-3 | 当覆盖条目指定了未配 apiKey 的类别时，该用途应回退当前生效类别（功能不被禁用），用量行按实际生效类别记录 | `server/test/s51-purpose-models.test.mjs` |
+| S51-4 | 当无任何覆盖时，各用途行为与 v0.52 完全一致（模型=生效类别配置） | `server/test/s51-purpose-models.test.mjs` |
+
+## S52（P0）— 系统（大脑·IM 抽取/机器人网关）— 事件驱动抽取缓冲（v0.57）
+
+已绑定渠道的非 @ 群消息落 `im_buffer` 缓冲（拒答语义不变）；抽取先排干缓冲再走 API 游标对账，双源按 message_id 去重（重复拉取零 LLM 零重复事件）；消费行 7 天滚动清理。决策见 design.md K35。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S52-1 | 当已绑定渠道（专题/通用）的群收到非 @ 机器人消息时，应在照常拒答（S20-16 语义不变）的同时落 `im_buffer` 行（message_id 去重）；未绑定群/外部群/私聊不落缓冲 | `server/test/s52-event-buffer.test.mjs` |
+| S52-2 | 当抽取运行时，应先排干该渠道缓冲（按消息时刻升序喂既有入库管线）并标记 `consumed_at`；API 对账重拉到已消费 message_id 时应跳过（不重复产事件、不消耗 LLM） | `server/test/s52-event-buffer.test.mjs` |
+| S52-3 | 当缓冲排干过程失败时，行保持未消费（下轮重试）；已消费行超过 7 天滚动清理 | `server/test/s52-event-buffer.test.mjs` |
+| S52-4 | 当消息已被机器人指令处理/回复时（bot_commands 有 message_id 且非「未@忽略」行——忽略行不算已处理，正是缓冲要抽取的内容），既不去重缓冲也不进抽取（S20-10 口径不变）；缓冲消息仍受 S50 噪音预过滤约束 | `server/test/s52-event-buffer.test.mjs` |
+
+## S53（P0）— 成员 — 全线（会话面）— 确定性斜杠 /my /week /risk（v0.58）
+
+高频问询做确定性斜杠（零 LLM、不占限额、未配置可用）：/my=本人工作面，/week=本周到期（定域同晨报），/risk=全局风险板。引擎组装、IM 走 post、web 纯文本。决策见 design.md K36。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S53-1 | 当成员发 `/my`（`/我的`）时，应返回本人未完任务（项目/#id/标题/状态/截止日，逾期标注超期天数）+ 明日到期清单 + 待确认建议计数；全部在跑项目跨项目聚合 | `server/test/s53-slash-commands.test.mjs` |
+| S53-2 | 当成员发 `/week`（`/本周`）时，专题群应只返回本群绑定项目的本周到期任务与计划中里程碑，私聊/通用群/web 应返回全部在跑项目的本周到期项；窗口=本北京自然周 | `server/test/s53-slash-commands.test.mjs` |
+| S53-3 | 当成员发 `/risk`（`/风险`）时，应返回全局风险板：逾期任务（项目/责任人/超期天数）、沉默项目（天数）、未指派任务计数、关键人过载清单；各项为空时明确标注而非省略 | `server/test/s53-slash-commands.test.mjs` |
+| S53-4 | 三个命令应在 LLM 未配置、额度耗尽时照常可用（确定性、不占限额），`/help` 文案收录；web 与飞书两入口行为一致 | `server/test/s53-slash-commands.test.mjs` |
+
+## S54（P0）— 成员 — 全线（会话面，专题群主场景）— 群讨论纪要浓缩与归档（v0.59）
+
+`minutes` 读动作（仅专题群，默认 2h/上限 6h/≤50 条，不挪游标不产事件）拉讨论 → LLM 三段式纪要（结论/待办/风险，标注发言人）→ 用户确认「归档」经 record_event 落记录型事件。决策见 design.md K37。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S54-1 | 当专题群内 LLM 调用 `minutes` 动作时，应返回本群最近 N 小时（默认 2、上限 6）的尾端讨论（≤50 条，说话人经身份映射，机器人自身消息过滤）；私聊/通用群/未登记群/web 会话应返回不可用说明；不挪 channels.cursor、不产事件 | `server/test/s54-minutes.test.mjs` |
+| S54-2 | 当用户要纪要时，应先经 minutes 拉取讨论再产出三段式纪要（结论/待办/风险，标注发言人），末尾附「回复『归档』沉淀为项目记录」指引；讨论为空时明说而非编造 | `server/test/s54-minutes.test.mjs` |
+| S54-3 | 当用户随后确认归档（「归档/记下来」）时，应经 record_event 落记录型事件（自动生效，归爆发令人，摘要含纪要浓缩）；纪要内容可在项目事件流查到 | `server/test/s54-minutes.test.mjs` |
+| S54-4 | minutes 应计入有界循环查询次数（与 query/metric/recent_chat 同族限额） | `server/test/s54-minutes.test.mjs` |
+
+## S55（P0）— 牵头人/成员（抽取面建议确认）— IM 内确认卡闭环（v0.60）
+
+待确认建议推送升级为飞书确认卡（确认/驳回按钮，HMAC 签名与 S20 卡同构，点按走 confirmEvent 既有口子）；未绑定/未配置/缺密钥/发卡失败降级原文本推送。抽取面人确认边界不动。决策见 design.md K38。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S55-1 | 当建议推送且接收人已绑定飞书、应用凭证齐备、签名密钥存在时，应发出带「确认生效/驳回」按钮的卡片（按钮 value 含事件 id + HMAC 签名，与 S20 确认卡同构）；pushes 行落 sent + message_id | `server/test/s55-im-confirm-cards.test.mjs` |
+| S55-2 | 当成员点按卡片「确认生效」时，应走 `confirmEvent` 既有口子生效（decided_by=点按人）并回执；点「驳回」走 `rejectEvent`；伪造签名/未绑定操作者拒绝 | `server/test/s55-im-confirm-cards.test.mjs` |
+| S55-3 | 当接收人未绑定飞书、凭证/密钥缺失或卡片发送失败时，应降级为原文本推送（post/text 分流不变），内容不丢、pushes 行状态如实 | `server/test/s55-im-confirm-cards.test.mjs` |
+| S55-4 | 当建议目标是里程碑（target_object='milestone'）时，卡片只推项目牵头人（S35 口径），点按同样生效 | `server/test/s55-im-confirm-cards.test.mjs` |
+
+## S56（P0）— 系统（大脑·IM 抽取）— 聊天进展自动归档任务时间线（v0.61）
+
+记录型事件可带 `targetTaskId`，落库时同步经既有 addTaskRecord 追加任务更新记录（记录人=发言人映射成员）；非法 id 丢字段不丢事件；终态/已删静默跳过；降级路径不产记录。决策见 design.md K39。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S56-1 | 当记录型事件带合法 `targetTaskId`（本项目未删任务）时，应同步追加一条任务更新记录（内容=事件摘要、记录人=发言人成员 id），任务时间线立即可见 | `server/test/s56-task-timeline.test.mjs` |
+| S56-2 | 当记录型事件不带 `targetTaskId` 或 id 非法（不属本项目/已删）时，事件照常落库但不产任务记录（字段丢弃不丢事件） | `server/test/s56-task-timeline.test.mjs` |
+| S56-3 | 当目标任务所在项目已结项/取消或任务已删除时，任务记录静默跳过（不抛错、不阻塞事件落库与后续消息处理） | `server/test/s56-task-timeline.test.mjs` |
+| S56-4 | 当 LLM 未配置（降级路径）时，不产生任务记录（降级事件无任务归属），事件落库语义不变 | `server/test/s56-task-timeline.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

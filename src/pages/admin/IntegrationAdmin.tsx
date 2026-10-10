@@ -19,7 +19,10 @@ export default function IntegrationAdmin({ tab }: { tab: string }) {
 }
 
 interface LlmSub { apiKey: string; baseUrl: string; model: string }
-interface LlmCfg { provider: string; deepseek: LlmSub; 'glm-coding': LlmSub; timeoutMs?: number }
+interface LlmCfg {
+  provider: string; deepseek: LlmSub; 'glm-coding': LlmSub; timeoutMs?: number
+  purposeModels?: Record<string, { provider?: string; model?: string }> // S51：按用途模型覆盖
+}
 
 // LLM 类别目录（S17-11）：与 server/engine/enums.js 的 LLM_PROVIDERS 保持一致
 const LLM_PROVIDERS: { key: string; label: string; baseUrl: string; model: string; note?: string }[] = [
@@ -36,6 +39,7 @@ function LlmCard() {
   const [cfg, setCfg] = useState<LlmCfg | null>(null)
   const [active, setActive] = useState('deepseek') // 当前编辑/测试的类别；「保存」后成为生效类别
   const [result, setResult] = useState('')
+  const [usage, setUsage] = useState<Awaited<ReturnType<typeof api.llmUsage>> | null>(null)
   useEffect(() => {
     void (async () => {
       const s = await api.settings()
@@ -48,6 +52,7 @@ function LlmCard() {
       }
       setCfg(backfilled as unknown as LlmCfg)
       setActive(llm.provider || 'deepseek')
+      setUsage(await api.llmUsage(7).catch(() => null)) // S47：近 7 天用量摘要（失败不阻塞卡片）
     })()
   }, [])
   if (!cfg) return <Spinner />
@@ -72,11 +77,23 @@ function LlmCard() {
           <input className={inputCls} type="number" min={1} max={600} value={Math.round((cfg.timeoutMs ?? 120000) / 1000)}
             onChange={(e) => setCfg({ ...cfg, timeoutMs: Number(e.target.value) * 1000 })} />
         </Field>
+        {/* S51（v0.56，K34）：高频用途模型覆盖——留空=跟随生效类别模型；其余用途经 Agent put_setting 可配 */}
+        <Field label="抽取模型覆盖（extraction，留空=跟随生效类别）">
+          <input className={inputCls} placeholder="如 glm-5.3-Flash" value={cfg.purposeModels?.extraction?.model ?? ''}
+            onChange={(e) => setCfg({ ...cfg, purposeModels: { ...cfg.purposeModels, extraction: { model: e.target.value } } } as LlmCfg)} />
+        </Field>
+        <Field label="分拣模型覆盖（routing，留空=跟随生效类别）">
+          <input className={inputCls} placeholder="如 glm-5.3-Flash" value={cfg.purposeModels?.routing?.model ?? ''}
+            onChange={(e) => setCfg({ ...cfg, purposeModels: { ...cfg.purposeModels, routing: { model: e.target.value } } } as LlmCfg)} />
+        </Field>
       </div>
       {provider.note && <p className="mb-3 text-[12px] text-[var(--color-ink-soft)]">{provider.note}</p>}
       <div className="flex items-center gap-2">
         <Btn kind="primary" onClick={async () => {
-          await api.putSetting('llm', { provider: provider.key, ...shown, timeoutMs: cfg.timeoutMs })
+          // S51：purposeModels 清理空条目（留空=不覆盖），其余用途条目原样保留
+          const pm = Object.fromEntries(Object.entries(cfg.purposeModels ?? {})
+            .filter(([, v]) => (v as { model?: string })?.model?.trim()))
+          await api.putSetting('llm', { provider: provider.key, ...shown, timeoutMs: cfg.timeoutMs, purposeModels: pm })
           toast(`已保存并切换生效类别：${provider.label}`)
           const s = await api.settings(); setCfg(s.llm as LlmCfg); setActive((s.llm as LlmCfg).provider)
         }}>保存（含切换生效类别）</Btn>
@@ -87,6 +104,29 @@ function LlmCard() {
         }}>测试连接（当前类别，S17-4）</Btn>
         {result && <span className="text-[12px]">{result}</span>}
       </div>
+      {/* S47（v0.52，K30）：近 7 天 LLM 用量摘要（用途×调用数/token/失败）——成本优化的数据依据 */}
+      {usage && Array.isArray(usage.byPurpose) && (
+        <div className="mt-3 border-t border-[var(--color-line)] pt-2" data-testid="llm-usage">
+          <div className="mb-1 text-[12px] text-[var(--color-ink-soft)]">近 7 天用量（按用途）</div>
+          {usage.byPurpose.length === 0 ? (
+            <div className="text-[12px] text-[var(--color-ink-soft)]">暂无 LLM 调用记录</div>
+          ) : (
+            <table className="w-full text-[12px]">
+              <thead><tr className="text-left text-[var(--color-ink-soft)]"><th className="py-0.5">用途</th><th>调用</th><th>Token（入/出）</th><th>失败</th></tr></thead>
+              <tbody>
+                {usage.byPurpose.map((r) => (
+                  <tr key={r.purpose} className="border-t border-[var(--color-line)]">
+                    <td className="py-0.5">{r.purpose}</td>
+                    <td className="num">{r.calls}</td>
+                    <td className="num">{r.promptTokens}/{r.completionTokens}</td>
+                    <td className={`num ${r.errors ? 'text-[var(--color-bad)]' : ''}`}>{r.errors}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
     </Card>
   )
 }

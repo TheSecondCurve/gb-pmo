@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, LLM_PROVIDERS } from './enums.js'
+import { DEFAULT_SETTINGS, LLM_PROVIDERS, LLM_PURPOSES } from './enums.js'
 import { parseCron } from './cron.js'
 
 /** 读配置：与默认值深合并（配置台只存覆盖项）。 */
@@ -13,11 +13,11 @@ export function getSetting(db, key) {
 // 值校验器（按 key）：保存前拦截非法值，中文错误带 400。
 const VALIDATORS = {
   scheduler(value) {
-    for (const k of ['extractionCron', 'alertCron', 'reportCron', 'calendarSyncCron', 'backupCron']) {
+    for (const k of ['extractionCron', 'alertCron', 'reportCron', 'calendarSyncCron', 'backupCron', 'digestCron']) {
       if (value?.[k] === undefined) continue
       parseCron(value[k]) // 非法即 throw（statusCode 400，含字段与原因）
     }
-    for (const k of ['extractionEnabled', 'alertEnabled', 'reportEnabled', 'calendarSyncEnabled', 'backupEnabled']) {
+    for (const k of ['extractionEnabled', 'alertEnabled', 'reportEnabled', 'calendarSyncEnabled', 'backupEnabled', 'digestEnabled']) {
       if (value?.[k] === undefined) continue
       if (typeof value[k] !== 'boolean') {
         throw Object.assign(new Error(`scheduler.${k} 须为布尔值（true/false）`), { statusCode: 400 })
@@ -26,12 +26,32 @@ const VALIDATORS = {
   },
   // S17-11（v0.14）：LLM 类别枚举校验；baseUrl/model 不强校验（归一化见 NORMALIZERS.llm）
   // S40（v0.43）：timeoutMs 1s~600s 整数边界（防呆；GLM 大 JSON 实测需 ~120s，见 K22）
+  // S51（v0.56）：purposeModels 按用途覆盖——purpose 白名单、provider 已知类别、model 必填
   llm(value) {
     if (value?.provider !== undefined && !LLM_PROVIDERS[value.provider]) {
       throw Object.assign(new Error(`llm.provider 须为 ${Object.keys(LLM_PROVIDERS).join(' / ')}`), { statusCode: 400 })
     }
     if (value?.timeoutMs !== undefined && (!Number.isInteger(value.timeoutMs) || value.timeoutMs < 1000 || value.timeoutMs > 600000)) {
       throw Object.assign(new Error('llm.timeoutMs 须为 1000~600000 的整数（毫秒）'), { statusCode: 400 })
+    }
+    if (value?.purposeModels !== undefined) {
+      if (!value.purposeModels || typeof value.purposeModels !== 'object' || Array.isArray(value.purposeModels)) {
+        throw Object.assign(new Error('llm.purposeModels 须为对象（{ <purpose>: { provider?, model } }）'), { statusCode: 400 })
+      }
+      for (const [purpose, ov] of Object.entries(value.purposeModels)) {
+        if (!LLM_PURPOSES.includes(purpose)) {
+          throw Object.assign(new Error(`llm.purposeModels 未知用途: ${purpose}（可用 ${LLM_PURPOSES.join(' / ')}）`), { statusCode: 400 })
+        }
+        if (!ov || typeof ov !== 'object') {
+          throw Object.assign(new Error(`llm.purposeModels.${purpose} 须为对象 { provider?, model }`), { statusCode: 400 })
+        }
+        if (ov.provider !== undefined && !LLM_PROVIDERS[ov.provider]) {
+          throw Object.assign(new Error(`llm.purposeModels.${purpose}.provider 未知: ${ov.provider}`), { statusCode: 400 })
+        }
+        if (!ov.model || typeof ov.model !== 'string' || !ov.model.trim()) {
+          throw Object.assign(new Error(`llm.purposeModels.${purpose}.model 必填（覆盖条目必须指明模型名）`), { statusCode: 400 })
+        }
+      }
     }
   },
   // S24（v0.16）：AI 助手每日指令限额（正整数）
@@ -114,6 +134,7 @@ const NORMALIZERS = {
       }
     }
     out.timeoutMs = value.timeoutMs ?? prev?.timeoutMs ?? DEFAULT_SETTINGS.llm.timeoutMs
+    out.purposeModels = value.purposeModels ?? prev?.purposeModels ?? {} // S51：按用途模型覆盖随块保留
     for (const k of Object.keys(value)) delete value[k]
     Object.assign(value, out)
   },

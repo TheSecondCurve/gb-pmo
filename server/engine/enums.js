@@ -68,6 +68,10 @@ export const LLM_PROVIDERS = {
   'glm-coding': { label: 'GLM 国内 Coding Plan（智谱）', baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4', model: 'glm-5.3' },
 }
 
+// S51（v0.56，K34）：按用途模型覆盖（llm.purposeModels）的用途白名单——高频低价路径（extraction/routing）
+// 可独立指向便宜模型，低频叙事路径维持主模型。
+export const LLM_PURPOSES = ['extraction', 'routing', 'digest', 'closeout', 'draft', 'init_assign', 'chat']
+
 // 阈值默认值（配置台 settings 可覆盖；PRD K5）
 export const DEFAULT_SETTINGS = {
   thresholds: {
@@ -91,6 +95,8 @@ export const DEFAULT_SETTINGS = {
     calendarSyncEnabled: true,
     backupCron: '30 3 * * *',          // 数据库异地备份（S34，默认每日 03:30 避开整点；存储未配全时静默跳过）
     backupEnabled: true,
+    digestCron: '0 9 * * 1',           // 每周梳理 + 老板周报（S49，默认周一 09:00；周级幂等——本周已推周报则整轮跳过）
+    digestEnabled: true,
   },
   // S22 项目日历：feishuCalendarId 空=未初始化（配置台「外部依赖→飞书」初始化写入；同步任务静默跳过）
   calendar: { feishuCalendarId: '' },
@@ -102,6 +108,7 @@ export const DEFAULT_SETTINGS = {
     deepseek: { apiKey: '', baseUrl: LLM_PROVIDERS.deepseek.baseUrl, model: LLM_PROVIDERS.deepseek.model },
     'glm-coding': { apiKey: '', baseUrl: LLM_PROVIDERS['glm-coding'].baseUrl, model: LLM_PROVIDERS['glm-coding'].model },
     timeoutMs: 120000,
+    purposeModels: {}, // S51：按用途模型覆盖 { <purpose>: { provider?, model } }（空=全覆盖生效类别）
   },
   'im.feishu': {
     appId: '', appSecret: '',
