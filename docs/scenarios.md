@@ -554,6 +554,17 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S55-3 | 当接收人未绑定飞书、凭证/密钥缺失或卡片发送失败时，应降级为原文本推送（post/text 分流不变），内容不丢、pushes 行状态如实 | `server/test/s55-im-confirm-cards.test.mjs` |
 | S55-4 | 当建议目标是里程碑（target_object='milestone'）时，卡片只推项目牵头人（S35 口径），点按同样生效 | `server/test/s55-im-confirm-cards.test.mjs` |
 
+## S56（P0）— 系统（大脑·IM 抽取）— 聊天进展自动归档任务时间线（v0.61）
+
+记录型事件可带 `targetTaskId`，落库时同步经既有 addTaskRecord 追加任务更新记录（记录人=发言人映射成员）；非法 id 丢字段不丢事件；终态/已删静默跳过；降级路径不产记录。决策见 design.md K39。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S56-1 | 当记录型事件带合法 `targetTaskId`（本项目未删任务）时，应同步追加一条任务更新记录（内容=事件摘要、记录人=发言人成员 id），任务时间线立即可见 | `server/test/s56-task-timeline.test.mjs` |
+| S56-2 | 当记录型事件不带 `targetTaskId` 或 id 非法（不属本项目/已删）时，事件照常落库但不产任务记录（字段丢弃不丢事件） | `server/test/s56-task-timeline.test.mjs` |
+| S56-3 | 当目标任务所在项目已结项/取消或任务已删除时，任务记录静默跳过（不抛错、不阻塞事件落库与后续消息处理） | `server/test/s56-task-timeline.test.mjs` |
+| S56-4 | 当 LLM 未配置（降级路径）时，不产生任务记录（降级事件无任务归属），事件落库语义不变 | `server/test/s56-task-timeline.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

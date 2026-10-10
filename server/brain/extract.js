@@ -7,6 +7,7 @@
 import { camelizeRows, camelizeRow } from '../db/index.mjs'
 import { getSetting } from '../engine/settings.js'
 import { addEvent, markPushedTo } from '../engine/events.js'
+import { addTaskRecord } from '../engine/tasks.js'
 import { getLlm, parseJsonLoose } from './llm.js'
 import { routeMessage } from './routing.js'
 import { notifyMember, notifyAdmins } from './push.js'
@@ -103,7 +104,7 @@ function chunkBatches(items) {
  * S20-10：机器人已处理/已回复的消息（bot_commands 有 message_id）跳过，防同一消息双入库。
  */
 export async function ingestMessages(db, channel, messages, { llm: llmOverride, send } = {}) {
-  const stats = { events: 0, suggestions: 0, unrouted: 0, unknownSpeakers: 0, botProcessed: 0, noiseSkipped: 0, bufferSkipped: 0 }
+  const stats = { events: 0, suggestions: 0, unrouted: 0, unknownSpeakers: 0, botProcessed: 0, noiseSkipped: 0, bufferSkipped: 0, taskRecords: 0 }
   // S20-10 去重口径（v0.57 修订）：机器人「指令已处理/已回复」的消息跳过；refused_not_mentioned 的
   // 未@忽略行不算已处理——正是 S52 缓冲要抽取的内容，不排除（否则缓冲排干会被全部误跳）。
   const botSeen = db.prepare(
@@ -189,6 +190,14 @@ export async function ingestMessages(db, channel, messages, { llm: llmOverride, 
           await pushSuggestion(db, created, { send })
         } else {
           stats.events += 1
+          // S56（v0.61，K39）：记录型事件带合法任务归属 → 同步归档任务时间线
+          // （复用 addTaskRecord 既有守卫：终态项目/已删任务静默跳过，不阻塞事件与后续消息）
+          if (evt.targetTaskId) {
+            try {
+              addTaskRecord(db, { taskId: evt.targetTaskId, content: evt.summary }, source.speakerMemberId)
+              stats.taskRecords += 1
+            } catch { /* 终态只读/任务已删 → 静默跳过 */ }
+          }
         }
       }
     }
@@ -315,7 +324,13 @@ export async function routeUnrouted(db, id, projectId, { llm: llmOverride, send 
       targetValue: evt.targetValue !== undefined ? String(evt.targetValue) : null,
       generatedBy: 'extraction',
     })
-    if (created.status === 'pending') { suggestions += 1; await pushSuggestion(db, created, { send }) } else events += 1
+    if (created.status === 'pending') { suggestions += 1; await pushSuggestion(db, created, { send }) } else {
+      events += 1
+      // S56：记录型事件带任务归属 → 同步归档任务时间线（终态/已删静默跳过）
+      if (evt.targetTaskId) {
+        try { addTaskRecord(db, { taskId: evt.targetTaskId, content: evt.summary }, null) } catch { /* 静默跳过 */ }
+      }
+    }
   }
   db.prepare(`UPDATE unrouted_messages SET status = 'routed', routed_project_id = ? WHERE id = ?`).run(project.id, id)
   return { ok: true, projectId: project.id, projectName: project.name, events, suggestions }
@@ -355,7 +370,7 @@ export async function extractEvents(llm, db, projectId, messages) {
         content: `你是企业项目大脑的抽取器。从群聊消息中抽取项目事件，输出 JSON {"events":[...]}。
 每条事件：{"nature":"record"|"suggestion","eventType":"progress|risk|decision|blocker|finance|schedule_change|status_change|owner_change","summary":"一句中文摘要","confidence":0~1,
 "suggestion 时必填":"targetTaskId(上面任务清单里的#id)","targetField":"status|plan_end_date|plan_start_date","targetValue":"对应值(日期用YYYY-MM-DD)"}。
-规则：纯进展/风险/决策/财务事实描述 → record（财务类消息如回款/开票/费用沟通 eventType=finance，仅记录、不含金额字段）；明确的任务完成/日期变化信号 → suggestion（如"已上线/完成了" → status=done，"推迟到X" → plan_end_date）；与项目无关的寒暄不要产出；没有把握不要编 targetTaskId。${multi ? '每条事件附 "msgIndex"（消息编号 [i] 的 i，0 基）指明来源消息；无法确定时省略。' : ''}只输出 JSON。`,
+规则：纯进展/风险/决策/财务事实描述 → record（财务类消息如回款/开票/费用沟通 eventType=finance，仅记录、不含金额字段）；消息明确在说某条任务的进展/情况时 record 事件也可带 targetTaskId（摘要会同步归档到该任务的更新记录，S56）；明确的任务完成/日期变化信号 → suggestion（如"已上线/完成了" → status=done，"推迟到X" → plan_end_date）；与项目无关的寒暄不要产出；没有把握不要编 targetTaskId。${multi ? '每条事件附 "msgIndex"（消息编号 [i] 的 i，0 基）指明来源消息；无法确定时省略。' : ''}只输出 JSON。`,
       },
       {
         role: 'user',
@@ -372,12 +387,14 @@ export async function extractEvents(llm, db, projectId, messages) {
     .filter((e) => e.nature !== 'suggestion' || (e.targetTaskId && validTasks.has(Number(e.targetTaskId)) && e.targetField && e.targetValue !== undefined))
     .map((e) => {
       const idx = Number.isInteger(e.msgIndex) && e.msgIndex >= 0 && e.msgIndex < messages.length ? e.msgIndex : messages.length - 1
+      // S56：记录型的 targetTaskId 也须属本项目未删任务——非法 id 丢弃字段不丢事件
+      const tid = e.targetTaskId && validTasks.has(Number(e.targetTaskId)) ? Number(e.targetTaskId) : null
       return {
         nature: e.nature === 'suggestion' ? 'suggestion' : 'record',
         eventType: String(e.eventType),
         summary: String(e.summary).slice(0, 200),
         confidence: Number(e.confidence) || null,
-        targetTaskId: e.targetTaskId ? Number(e.targetTaskId) : null,
+        targetTaskId: tid,
         targetField: e.targetField || null,
         targetValue: e.targetValue,
         sourceMsg: messages[idx], // S50：事件归因源消息（缺省/越界归批次末条）
