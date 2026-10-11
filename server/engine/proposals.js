@@ -108,6 +108,23 @@ export const PROPOSAL_KINDS = {
       return projects.updateProject(db, Number(payload.projectId), patch, by)
     },
   },
+  // S62（v0.67，K47）：未绑定知识库时记录——确认后在默认父页面下新建子页 + 绑定 + 写入（一步到位）
+  record_wiki_newpage: {
+    label: '新建知识库页并记录',
+    canConfirm: canConfirmProjectOp,
+    async apply(db, payload, by) {
+      const wiki = await import('./wiki.js')
+      const project = db.prepare('SELECT id, name FROM projects WHERE id = ?').get(Number(payload.projectId))
+      if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
+      // ① 默认父页面下新建子页（标题缺省=项目名）→ ② 绑定 → ③ 写入原文
+      const binding = await wiki.bindProjectWiki(db, project.id, {
+        parentNodeToken: wiki.getDefaultParentToken(db),
+        newTitle: payload.newTitle || project.name,
+      }, by)
+      const rec = await wiki.recordToWiki(db, project.id, { eventType: payload.eventType, summary: payload.summary }, by)
+      return { title: binding.title, nodeToken: binding.nodeToken, section: rec.section, url: rec.url }
+    },
+  },
 }
 
 // —— 口子 ——

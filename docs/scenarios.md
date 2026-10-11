@@ -626,6 +626,18 @@ extraction 调度周期尾部，把本轮各项目沉淀的 record 型 `progress
 | S61-5 | 当经机器人 record_wiki/bind_wiki 操作时，bind_wiki 仅牵头人/管理员可用；record_wiki 未绑定页面回执指引文案；绑定成功回执含页面标题 | `server/test/s61-wiki.test.mjs` |
 | S61-6 | 当用户说「记到文档里」时，记录内容必须是原文（禁止 LLM 总结/浓缩/改写）；LLM 给的 summary 明显短于用户原文时用抠掉触发前缀的原文兜底，不丢信息 | `server/test/s61-wiki.test.mjs` |
 
+## S62（P0）— 全员（机器人）+ 系统（大脑·飞书知识库）+ 管理员（配置台）— 知识库默认父页面与丝滑记录（v0.67）
+
+默认父页面存 settings（migration 0028 落初始值，管理员配置台可改）；项目未绑定页面时记录经确认卡在默认父页面下新建子页+绑定+写入（复用 proposals 状态机）；记录/新建成功回执带页面可点链接。决策见 design.md K47。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S62-1 | 当 migration 0028 落库时，settings.wiki.defaultParentUrl 有初始值；管理员在配置台可改（getDefaultParentToken 解析出 node_token） | `server/test/s62-wiki-default-parent.test.mjs` |
+| S62-2 | 当项目未绑定页面且有默认父页面时，record_wiki 应出确认卡（record_wiki_newpage 提议落库，payload 带原文与项目名） | `server/test/s62-wiki-default-parent.test.mjs` |
+| S62-3 | 当确认该提议时，应在默认父页面下新建以项目命名的子页（用父节点 spaceId）、绑定该项目、把原文写入，apply 返回带页面链接 | `server/test/s62-wiki-default-parent.test.mjs` |
+| S62-4 | 当项目未绑定页面且无默认父页面时，维持引导式拒绝（两种绑定方式明示） | `server/test/s62-wiki-default-parent.test.mjs` |
+| S62-5 | 当已绑定页面时，record_wiki 成功回执应带页面可点链接 | `server/test/s62-wiki-default-parent.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

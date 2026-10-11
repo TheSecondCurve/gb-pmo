@@ -294,11 +294,25 @@ async function writeRecordWiki(db, payload, ctx) {
     if (verbatim && summary.length < verbatim.length * 0.6) summary = verbatim
   }
   const eventType = String(payload.eventType || 'progress')
+  // S62（v0.67，K47）：未绑定时——有默认父页面则出确认卡（新建子页+绑定+写入一步到位）；无则引导式拒绝
+  const { getProjectWiki, getDefaultParentToken } = await import('../../engine/wiki.js')
+  if (!getProjectWiki(db, project.id)) {
+    if (getDefaultParentToken(db)) {
+      const prop = createProposal(db, {
+        kind: 'record_wiki_newpage',
+        payload: { projectId: project.id, eventType, summary, newTitle: project.name },
+        summary: `项目「${project.name}」未绑定知识库页面，确认后将在默认父页面下新建《${project.name}》并记录本条内容`,
+        proposedBy: ctx.member.id,
+      })
+      return { type: 'card', cardKind: 'propose', proposalId: prop.id, kind: 'record_wiki_newpage', summary: prop.summary }
+    }
+    return refused('该项目还未绑定知识库页面。绑定方式：① 把 wiki 页面链接发给我（「绑定这个页面 https://…/wiki/…」）；② 或在 web 项目详情页「知识库」卡绑定。绑定后再说「记一下…」即可写入。')
+  }
   try {
     const r = await recordToWiki(db, project.id, { eventType, summary }, ctx.member.id)
-    return { type: 'receipt', text: `已记到项目「${project.name}」的知识库页面《${r.title || '未命名'}》（${r.section} 小节）✓` }
+    return { type: 'receipt', text: `已记到项目「${project.name}」的知识库页面《${r.title || '未命名'}》（${r.section} 小节）✓\n📄 ${r.url}` }
   } catch (e) {
-    return refused(e.message) // 未绑定/权限不足/页面被删 → 明确中文回执
+    return refused(e.message) // 权限不足/页面被删 → 明确中文回执
   }
 }
 

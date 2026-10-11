@@ -249,7 +249,32 @@ function FeishuCard() {
         </div>
         {calMsg && <div className="mt-2 text-[12px]">{calMsg}</div>}
       </Card>
+      <WikiDefaultParentCard />
     </div>
+  )
+}
+
+/** S62（v0.67）：知识库默认父页面——项目未绑定时记录经确认卡在此页下新建子页；管理员可改。 */
+function WikiDefaultParentCard() {
+  const { toast } = useStore()
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    void (async () => {
+      const s = await api.settings()
+      setUrl((s.wiki as { defaultParentUrl?: string })?.defaultParentUrl ?? '')
+    })()
+  }, [])
+  if (url === null) return null
+  return (
+    <Card title="知识库默认父页面（S62）：项目未绑定页面时，「记一下」经确认卡在此页下新建子页">
+      <p className="mb-3 text-[12px] leading-5 text-[var(--color-ink-soft)]">
+        粘一个 wiki 页面链接作为全局默认父页面；项目群里用户说「记一下…」但项目未绑定页面时，机器人会出确认卡——确认后在此页下新建以项目命名的子页并写入。前提：机器人已被加进该页面所在的知识库（知识库设置→成员设置）。
+      </p>
+      <div className="flex items-center gap-2">
+        <input className={`${inputCls} flex-1`} value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://xxx.feishu.cn/wiki/…" />
+        <Btn kind="primary" onClick={async () => { await api.putSetting('wiki', { defaultParentUrl: url }); toast('默认父页面已保存') }}>保存</Btn>
+      </div>
+    </Card>
   )
 }
 

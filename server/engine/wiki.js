@@ -76,6 +76,17 @@ export async function bindProjectWiki(db, projectId, { wikiUrl, parentWikiUrl, p
   return getProjectWiki(db, pid)
 }
 
+/** 读默认父页面 node_token（settings.wiki.defaultParentUrl → parseWikiNodeToken；未配/非法返回 null）。 */
+export function getDefaultParentToken(db) {
+  const url = getSetting(db, 'wiki')?.defaultParentUrl
+  return url ? parseWikiNodeToken(url) : null
+}
+
+/** 拼 wiki 页面可点链接（回执用）；host 从绑定来源 URL 取，兜底 feishu.cn。 */
+export function wikiPageUrl(nodeToken, host = 'feishu.cn') {
+  return `https://${host}/wiki/${nodeToken}`
+}
+
 /** eventType → 页面小节标题（按类型分小节）。 */
 const SECTION_BY_TYPE = { progress: '进展', decision: '决策', risk: '风险', blocker: '阻塞' }
 const sectionTitle = (eventType) => SECTION_BY_TYPE[eventType] || '记录'
@@ -83,6 +94,7 @@ const sectionTitle = (eventType) => SECTION_BY_TYPE[eventType] || '记录'
 /**
  * 把一条内容追加到项目绑定的 wiki 页面：按 eventType 映射小节标题，
  * 追加 [heading2 小节 + text 内容] 两个 block。未绑定/权限不足抛明确中文错误。
+ * 返回 { title, section, url }（url=页面可点链接，回执带跳转，S62）。
  */
 export async function recordToWiki(db, projectId, { eventType = 'progress', summary } = {}, by) {
   const pid = Number(projectId)
@@ -98,5 +110,5 @@ export async function recordToWiki(db, projectId, { eventType = 'progress', summ
   ]
   await appendDocBlocks(cfg, binding.objToken, blocks)
   audit(db, { memberId: by, action: 'project.wiki.record', objectType: 'project', objectId: pid, detail: { eventType, nodeToken: binding.nodeToken } })
-  return { title: binding.title, section: sectionTitle(eventType), eventTypeLabel: label('eventType', eventType) }
+  return { title: binding.title, section: sectionTitle(eventType), eventTypeLabel: label('eventType', eventType), url: wikiPageUrl(binding.nodeToken) }
 }

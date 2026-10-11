@@ -291,9 +291,12 @@ export async function handleCardAction(db, cardEvt, opts = {}) {
       } else {
         try {
           if (v.c === 'confirm') {
-            await confirmProposal(db, Number(v.p), member.id)
+            const { proposal, result: applyResult } = await confirmProposal(db, Number(v.p), member.id)
             result = 'confirmed'
-            replyText = `提议 #${v.p} 已生效。`
+            // S62：新建知识库页确认后回执带页面链接（建页+绑定+写入一步到位的结果）
+            replyText = proposal.kind === 'record_wiki_newpage' && applyResult?.url
+              ? `已新建并绑定知识库页面《${applyResult.title}》，内容已记录（${applyResult.section} 小节）✓\n📄 ${applyResult.url}`
+              : `提议 #${v.p} 已生效。`
           } else {
             await rejectProposal(db, Number(v.p), member.id)
             result = 'rejected'
@@ -365,7 +368,7 @@ ${schemaDigest(db)}
 {"action":"recent_chat","limit":20}            本群最近讨论（仅项目专题群；用户提到「刚才/上面/刚才讨论的」而对话历史不足以理解时，先读它再作答/起建议）——其余会话该动作返回不可用说明
 {"action":"minutes","hours":2}               群讨论纪要拉取（仅项目专题群；默认 2h、上限 6h；S54：用户要「纪要/总结讨论/记一下」时先拉取，再浓缩为三段式纪要【结论/待办/风险，标注发言人】，末尾附「回复『归档』沉淀为项目记录」；讨论为空明说，不编造；用户随后说「归档/记下来」时用 record_event 落 decision 记录）
 {"action":"write","kind":"record_event","payload":{"projectId":1,"eventType":"progress|risk|decision|blocker","summary":"一句中文"}}
-{"action":"write","kind":"record_wiki","payload":{"projectId":1,"eventType":"progress|decision|risk|blocker|record","summary":"用户要记录的原文"}}  把内容记到项目绑定的知识库页面（S61；用户说「记一下/记到文档里/写到知识库」时用；按类型分小节；**summary 必须是用户要记录的完整原文——禁止总结/浓缩/改写，逐字保留所有细节**；未绑定页面会返回指引）
+{"action":"write","kind":"record_wiki","payload":{"projectId":1,"eventType":"progress|decision|risk|blocker|record","summary":"用户要记录的原文"}}  把内容记到项目绑定的知识库页面（S61；用户说「记一下/记到文档里/写到知识库」时用；按类型分小节；**summary 必须是用户要记录的完整原文——禁止总结/浓缩/改写，逐字保留所有细节**；未绑定页面时会出确认卡——用户点确认后自动在默认父页面下新建子页并记录，不要重复发起）
 {"action":"write","kind":"bind_wiki","payload":{"projectId":1,"wikiUrl":"https://xxx.feishu.cn/wiki/<token>"}}  绑定项目到知识库已有页面（仅牵头人/管理员；用户贴 wiki 链接说「绑定这个页面」时用）
 {"action":"write","kind":"bind_wiki","payload":{"projectId":1,"parentWikiUrl":"https://xxx.feishu.cn/wiki/<父页面token>","newTitle":"子页标题"}}  在指定页面下新建子页并绑定（仅牵头人/管理员；用户说「在《X》下新建《Y》」时用）
 {"action":"write","kind":"suggest_event","payload":{"targetTaskId":1,"targetField":"status|plan_start_date|plan_end_date|responsible_member_id","targetValue":"done|YYYY-MM-DD|成员id","summary":"可选，缺省自动生成"}}  任务变更：直接生效并回执（落建议型事件留痕，发令人即生效人）
