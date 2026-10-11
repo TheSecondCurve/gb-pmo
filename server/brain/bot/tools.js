@@ -277,13 +277,22 @@ function writeBindChannel(db, payload, ctx) {
   return { type: 'receipt', text: `本群已绑定为项目「${project.name}」的专题渠道，从现在开始定时抽取归档（不回灌历史）。` }
 }
 
-/** S61（v0.66，K45）：把一条内容记录到项目绑定的飞书知识库页面（用户「记一下」类指令）。 */
+/** S61（v0.66，K45）：把一条内容记录到项目绑定的飞书知识库页面（用户「记一下」类指令）。
+ *  原文护栏（用户 2026-10-10 拍板）：记到文档=原文存档，禁止 LLM 浓缩丢信息。
+ *  LLM 只负责抠原文；若 summary 明显短于用户消息原文（浓缩信号），用抠掉触发前缀后的原文兜底。 */
 async function writeRecordWiki(db, payload, ctx) {
   const projectId = Number(payload.projectId)
   const project = projectId ? db.prepare('SELECT id, name FROM projects WHERE id = ?').get(projectId) : null
   if (!project) return refused('projectId 必填且须为真实项目 id（先 query 查项目）')
-  const summary = String(payload.summary || '').trim()
-  if (!summary) return refused('summary 必填（一句中文，要记到文档里的内容）')
+  let summary = String(payload.summary || '').trim()
+  if (!summary) return refused('要记录的内容不能为空')
+  // 浓缩护栏：用户消息原文抠掉触发前缀（「记一下/记到文档里/写到知识库」等）后，
+  // 若 LLM 给的 summary 明显更短（<60% 原文长度），判定为浓缩丢信息，用原文兜底
+  const raw = String(ctx.evt?.text || '').trim()
+  if (raw) {
+    const verbatim = raw.replace(/^@\S+\s*/, '').replace(/^(记一下|记到文档里?|写到知识库|记录一下|帮我记|存档)[:：，,]?\s*/, '').trim()
+    if (verbatim && summary.length < verbatim.length * 0.6) summary = verbatim
+  }
   const eventType = String(payload.eventType || 'progress')
   try {
     const r = await recordToWiki(db, project.id, { eventType, summary }, ctx.member.id)
