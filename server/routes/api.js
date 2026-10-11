@@ -8,6 +8,7 @@ import * as auth from '../engine/auth.js'
 import * as chat from '../brain/chat.js' // S24 Web AI 助手会话（编排层复用 S20 核心 Agent）
 import * as proposalsEngine from '../engine/proposals.js' // S25 通用提议确认口子
 import * as wiki from '../engine/wiki.js' // S61 知识库绑定与写入
+import * as wikiArchive from '../engine/wikiArchive.js' // S63 项目群全量汇总归档知识库
 import { getAllSettings, setSetting, getSetting } from '../engine/settings.js'
 import { queryMetric, listMetrics } from '../engine/metrics.js'
 import { assertValue } from '../engine/enums.js'
@@ -269,6 +270,16 @@ export function registerApiRoutes(app) {
       return reply.status(403).send({ message: '仅系统管理员或项目牵头人可绑定知识库' })
     }
     return reply.status(201).send(await wiki.bindProjectWiki(db, projectId, req.body, req.member.id))
+  })
+
+  // S63（v0.68，K48）：项目群全量汇总归档知识库——POST 启动（202 异步，台账 running），GET 轮询最近运行
+  app.get('/api/v1/projects/:id/wiki-archive', async (req) => ({ run: wikiArchive.getLatestWikiArchiveRun(db, Number(req.params.id)) }))
+  app.post('/api/v1/projects/:id/wiki-archive', async (req, reply) => {
+    const projectId = Number(req.params.id)
+    if (!tasks.canManageChannel(db, req.member, { channelType: 'dedicated', projectId })) {
+      return reply.status(403).send({ message: '仅系统管理员或项目牵头人可生成项目汇总' })
+    }
+    return reply.status(202).send({ run: await wikiArchive.startWikiArchive(db, projectId, req.member.id) })
   })
 
   // —— 事件确认流 ——
