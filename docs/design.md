@@ -286,3 +286,9 @@
 - 决策：`record_wiki` 的 `summary` 语义从「一句中文」改为「用户要记录的完整原文」——**禁止总结/浓缩/改写，逐字保留所有细节**（数字、时间、范围、待办一项不能丢）。两层保障：①提示词明示「summary 必须是用户原文」（源头引导 LLM 抠原文而非创作）；②工具侧浓缩护栏——`writeRecordWiki` 抠掉用户消息的触发前缀（「记一下/记到文档里/写到知识库」等）得到原文，若 LLM 给的 summary 长度 <60% 原文，判定为浓缩丢信息，直接用原文兜底。
 - 理由：用户 2026-10-10 实测发现 LLM 把「今天和万科确认了一期范围——含北门、东门两个出入口…预算上限 48 万，下周三前出方案」浓缩成「和万科确认了一期范围」，关键细节全丢。「记到文档里」的语义是**存档**，不是摘要——文档是要回头查的凭据，信息一旦丢了就再也找不回来。LLM 在对话面有浓缩倾向（被训练成「给简洁回答」），必须在提示词和代码两层都设防。60% 阈值是启发式：原文本就简短时 LLM 原样传递即可（不强制替换），只有明显浓缩才兜底——宁可误用原文（信息完整、至多带个触发语气残留），不可漏信息。
 - 推翻：K45 中 record_wiki payload 的「summary=一句中文」引导（那是触发 LLM 浓缩的根源）；record_event 的 200 字截断口径不受影响（事件流摘要 vs 文档存档是两种语义）。
+
+## K47 知识库默认父页面 + 卡片确认新建子页 + 回执带链接（S62，v0.67）
+
+- 决策：S61 上线后两个体验断点补全。**①默认父页面**——settings 加 `wiki.defaultParentUrl`（migration 0028 落初始值，管理员配置台「外部依赖→飞书」可改；`getDefaultParentToken` 读 URL 解析 node_token）。**②未绑定时卡片确认**——`writeRecordWiki` 不再直接拒绝，有默认父页面时 `createProposal` 出确认卡（新 kind `record_wiki_newpage`，payload 暂存 `{projectId, eventType, summary原文, newTitle=项目名}`）；确认后 `apply`（async）**一步到位**：默认父页面下 `createWikiNode` 建子页 → `bindProjectWiki` 绑定 → `recordToWiki` 写入原文。**③回执带链接**——`recordToWiki` 返回 `url`（`https://<host>/wiki/<nodeToken>`），record_wiki 回执与确认卡确认回执都带上。
+- 理由：「项目没绑定页面时记录只能干瞪眼」是 S61 最大的体验断点——用户说了句「记一下」却被顶回来，得自己去翻绑定入口。复用 proposals 确认卡状态机是关键决策：不新起暂存表/卡片分支，`record_wiki_newpage` 作为一个 proposal kind 复用 `prop` 分发 + HMAC + `confirmProposal`（其 `apply` 本就 async，建页调飞书 API 无碍）——卡片 value 只带 proposal id，待写入的长原文落库暂存，避开卡片 value 大小与签名覆盖长文本的坑。确认卡而非直生效：新建子页+绑定是「在用户项目里建文档」的写操作，与取消/结项同属需人确认一档（确认后写入是记录型直生效）。回执带链接：记录完用户大概率想回头看一眼，给可点链接省去翻知识库。
+- 推翻：无（无默认父页面时维持 S61-4 引导式拒绝；host 从绑定来源 URL 解析、兜底 feishu.cn——飞书 wiki 链接 host 即租户域名）。

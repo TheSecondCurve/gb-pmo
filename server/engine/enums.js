@@ -125,6 +125,8 @@ export const DEFAULT_SETTINGS = {
     typingFeedback: true,                    // S20-19 私聊占位反馈（慢路径先占位，答案原地编辑同一条消息；应用需 im:message:update 权限）
   },
   'im.wecom': { corpId: '', secret: '', publicKeyVer: '', privateKey: '', sdkUrl: '' },
+  // S62（v0.67，K47）知识库默认父页面：项目未绑定时记录经确认卡在此页下新建子页；管理员配置台可改
+  wiki: { defaultParentUrl: '' },
   // S26（v0.19）管理员诊断台：诊断 shell 等价容器执行权——开关默认关，仅可信内网排障用，全程审计
   debug: { shellEnabled: false, timeoutMs: 10000, maxOutputBytes: 131072 },
   // S24 Web AI 助手会话：每成员每日指令限额（北京日，与 bot_commands 审计同口径）
