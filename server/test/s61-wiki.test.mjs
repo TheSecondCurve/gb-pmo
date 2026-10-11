@@ -103,13 +103,13 @@ describe('S61 知识库绑定与写入', () => {
       .rejects.toThrow('不存在')
   })
 
-  it('S61-5: bot 写工具——record_wiki 缺绑定回执指引、bind_wiki 权限校验与成功回执', async () => {
+  it('S61-5: bot 写工具——record_wiki 缺绑定时按 S62 出确认卡（有默认父页面）、bind_wiki 权限校验与成功回执', async () => {
     const p = freshProject('机器人项目')
     const { runWriteTool } = await import('../brain/bot/tools.js')
-    // record_wiki 未绑定 → refused 含指引
+    // record_wiki 未绑定：S62 起有默认父页面 → 出确认卡（建页+绑定+写入）；无默认父页面才 refused（S62-4 覆盖）
     const r1 = await runWriteTool(db, { kind: 'record_wiki', payload: { projectId: p.id, summary: '测试记录' } }, { member: members.dev, evt: { chatType: 'group', chatId: 'oc_x', ts: Date.now() } })
-    expect(r1.type).toBe('refused')
-    expect(r1.text).toContain('未绑定知识库')
+    expect(r1.type).toBe('card') // S62：默认父页面已配（migration 0028）→ 确认卡
+    expect(r1.kind).toBe('record_wiki_newpage')
     // bind_wiki 非牵头人/管理员 → refused
     const r2 = await runWriteTool(db, { kind: 'bind_wiki', payload: { projectId: p.id, wikiUrl: 'https://x.feishu.cn/wiki/n1' } }, { member: members.dev, evt: { chatType: 'group', chatId: 'oc_x' } })
     expect(r2.type).toBe('refused')
