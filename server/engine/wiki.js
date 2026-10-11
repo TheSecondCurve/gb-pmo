@@ -87,7 +87,7 @@ const sectionTitle = (eventType) => SECTION_BY_TYPE[eventType] || '记录'
 export async function recordToWiki(db, projectId, { eventType = 'progress', summary } = {}, by) {
   const pid = Number(projectId)
   const binding = getProjectWiki(db, pid)
-  if (!binding) throw Object.assign(new Error('该项目未绑定知识库页面，请先绑定（贴 wiki 链接）'), { statusCode: 400 })
+  if (!binding) throw Object.assign(new Error('该项目还未绑定知识库页面。绑定方式：① 把 wiki 页面链接发给我（「绑定这个页面 https://…/wiki/…」）；② 或在 web 项目详情页「知识库」卡绑定。绑定后再说「记一下…」即可写入。'), { statusCode: 400 })
   const text = String(summary || '').trim()
   if (!text) throw Object.assign(new Error('记录内容不能为空'), { statusCode: 400 })
   const cfg = feishuCfg(db)
