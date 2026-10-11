@@ -319,10 +319,22 @@ export async function feishuApi(cfg, path, { method = 'GET', body, query } = {})
   return data?.data || {}
 }
 
+/** 飞书返回 snake_case（node_token/obj_token/obj_type/space_id）——归一为 camelCase 供引擎使用。 */
+function normalizeWikiNode(node) {
+  if (!node) return null
+  return {
+    nodeToken: node.node_token ?? node.nodeToken ?? null,
+    objToken: node.obj_token ?? node.objToken ?? null,
+    objType: node.obj_type ?? node.objType ?? null,
+    title: node.title ?? null,
+    spaceId: node.space_id ?? node.spaceId ?? null,
+  }
+}
+
 /** 用 node_token 换节点详情（验证存在 + 换出 obj_token=document_id）。 */
 export async function getWikiNode(cfg, nodeToken) {
   const data = await feishuApi(cfg, '/wiki/v2/spaces/get_node', { query: { token: nodeToken } })
-  return data.node || null // { nodeToken, objToken, objType, title, spaceId, ... }
+  return normalizeWikiNode(data.node)
 }
 
 /** 列出空间某父节点下的子节点（新建子页前定位父节点用；省略 parentNodeToken = 空间根）。 */
@@ -339,7 +351,7 @@ export async function createWikiNode(cfg, spaceId, { parentNodeToken, title } = 
   if (parentNodeToken) body.parent_node_token = parentNodeToken
   if (title) body.title = title
   const data = await feishuApi(cfg, `/wiki/v2/spaces/${spaceId}/nodes`, { method: 'POST', body })
-  return data.node || null
+  return normalizeWikiNode(data.node)
 }
 
 /** 往 docx 文档根追加一组 block（heading/text 等）；document_id 即 wiki 节点的 obj_token。 */
