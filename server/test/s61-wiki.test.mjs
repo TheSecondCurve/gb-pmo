@@ -119,4 +119,39 @@ describe('S61 知识库绑定与写入', () => {
     expect(r3.type).toBe('receipt')
     expect(r3.text).toContain('机器人项目页')
   })
+
+  it('S61-6: 记到文档必须原文——LLM 浓缩时（summary 明显短于用户原文）用原文兜底，不丢信息', async () => {
+    const p = freshProject('原文项目')
+    stubFetch([['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n1', obj_token: 'doc1', obj_type: 'docx', title: '原文项目页', space_id: 'sp1' } })]])
+    await bindProjectWiki(db, p.id, { wikiUrl: 'https://x.feishu.cn/wiki/n1' }, members.admin.id)
+    const { runWriteTool } = await import('../brain/bot/tools.js')
+    // 用户消息原文（含触发前缀 + 多细节长文）
+    const userText = '记到文档里：今天和万科确认了一期范围——含北门、东门两个出入口的车牌识别+人行摆闸，不含地下车库；二期再加南门。预算上限 48 万，下周三前出方案。'
+    // LLM 浓缩成一句（丢了一期范围明细、二期、预算、时间节点）
+    const summarized = '和万科确认了一期范围'
+    const calls = stubFetch([['/docx/v1/documents/doc1/blocks', () => okJson({})]])
+    const r = await runWriteTool(db, { kind: 'record_wiki', payload: { projectId: p.id, eventType: 'decision', summary: summarized } }, { member: members.dev, evt: { chatType: 'group', chatId: 'oc_x', ts: Date.now(), text: userText } })
+    expect(r.type).toBe('receipt')
+    // 追加到文档的内容必须是原文（抠掉触发前缀后的完整用户输入），不是浓缩版
+    const append = calls.find((c) => c.url.includes('/docx/v1/documents/doc1/blocks/doc1/children'))
+    const content = JSON.parse(append.opts.body).children[1].text.elements[0].text_run.content
+    expect(content).toContain('北门、东门两个出入口')
+    expect(content).toContain('二期再加南门')
+    expect(content).toContain('48 万')
+    expect(content).toContain('下周三')
+    expect(content).not.toBe(summarized)
+  })
+
+  it('S61-6b: 用户原文本就简短时，LLM 原样传递即可（不强制替换）', async () => {
+    const p = freshProject('短句项目')
+    stubFetch([['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n1', obj_token: 'doc1', obj_type: 'docx', title: '短句项目页', space_id: 'sp1' } })]])
+    await bindProjectWiki(db, p.id, { wikiUrl: 'https://x.feishu.cn/wiki/n1' }, members.admin.id)
+    const { runWriteTool } = await import('../brain/bot/tools.js')
+    const userText = '记一下：一期范围已定'
+    const calls = stubFetch([['/docx/v1/documents/doc1/blocks', () => okJson({})]])
+    await runWriteTool(db, { kind: 'record_wiki', payload: { projectId: p.id, eventType: 'decision', summary: '一期范围已定' } }, { member: members.dev, evt: { chatType: 'group', chatId: 'oc_x', ts: Date.now(), text: userText } })
+    const append = calls.find((c) => c.url.includes('/docx/v1/documents/doc1/blocks/doc1/children'))
+    const content = JSON.parse(append.opts.body).children[1].text.elements[0].text_run.content
+    expect(content).toBe('一期范围已定') // 原文本就简洁，不被二次加工
+  })
 })
