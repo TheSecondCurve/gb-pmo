@@ -8,8 +8,11 @@ import { TASK_ROW_CLS, taskVisual } from '../progress'
 import {
   EVENT_PINNED_COLS, EVENT_STATUS_LABEL, EVENT_TYPE_LABEL, MILESTONE_STATUS_LABEL, MILESTONE_STATUS_TONE,
   PRIORITY_LABEL, PROJECT_STATUS_LABEL, TASK_STATUS_LABEL, TASK_STATUS_TONE,
-  type ChannelRow, type EventRow, type InitAssignmentRow, type Member, type ProjectDetail, type TaskRecordRow, type TaskRefRow, type WikiBinding,
+  type ChannelRow, type EventRow, type InitAssignmentRow, type Member, type ProjectDetail, type TaskRecordRow, type TaskRefRow, type WikiArchiveRun, type WikiBinding,
 } from '../types'
+
+/** S63（v0.68）：汇总归档运行阶段中文标签（wiki_archive_runs.stage）。 */
+const ARCHIVE_STAGE_LABEL: Record<string, string> = { fetch: '回读群消息', summarize: '汇总提炼', images: '搬运图片', write: '写入页面' }
 
 export default function ProjectDetail({ id }: { id: number }) {
   const { toast, member } = useStore()
@@ -26,20 +29,48 @@ export default function ProjectDetail({ id }: { id: number }) {
   const [initAssigning, setInitAssigning] = useState(false)
   const [wiki, setWiki] = useState<WikiBinding | null>(null) // S61 知识库绑定
   const [bindingWiki, setBindingWiki] = useState(false)
+  const [archiveRun, setArchiveRun] = useState<WikiArchiveRun | null>(null) // S63 汇总归档台账
   const [hiddenEventTypes, setHiddenEventTypes] = useState<string[]>([]) // S4-8 其他栏筛选：被隐藏的类型（默认空=全显）
 
   const refresh = useCallback(async () => {
-    const [d, e, m, c, w] = await Promise.all([
-      api.project(id), api.projectEvents(id), api.members(), api.channels(), api.projectWiki(id),
+    const [d, e, m, c, w, wa] = await Promise.all([
+      api.project(id), api.projectEvents(id), api.members(), api.channels(), api.projectWiki(id), api.wikiArchive(id),
     ])
-    setP(d); setEvents(e.events); setMembers(m.members); setChannels(c.channels.filter((ch) => ch.projectId === id)); setWiki(w.wiki)
+    setP(d); setEvents(e.events); setMembers(m.members); setChannels(c.channels.filter((ch) => ch.projectId === id)); setWiki(w.wiki); setArchiveRun(wa.run)
   }, [id])
   useEffect(() => { void refresh() }, [refresh])
+
+  // S63：归档任务 running 期间轮询台账，完成/失败即停并提示（结果行随状态更新）
+  useEffect(() => {
+    if (archiveRun?.status !== 'running') return
+    const timer = setTimeout(async () => {
+      try {
+        const next = (await api.wikiArchive(id)).run
+        setArchiveRun(next)
+        if (next?.status === 'done') toast('项目汇总已生成，点知识库卡片链接查看')
+        if (next?.status === 'failed') toast(`项目汇总生成失败：${next.error ?? '未知错误'}`, 'bad')
+      } catch { /* 轮询失败下一轮继续 */ }
+    }, 2000)
+    return () => clearTimeout(timer)
+  }, [archiveRun, id, toast])
+
+  // S63：触发汇总归档（400 未绑定/409 运行中的中文指引如实透出）
+  const startArchive = async () => {
+    try {
+      const r = await api.startWikiArchive(id)
+      setArchiveRun(r.run)
+      toast('已开始生成项目汇总——全量回读群消息中，稍候自动刷新')
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '启动失败', 'bad')
+    }
+  }
 
   if (!p) return <Spinner />
   const readonly = p.status === 'closed' || p.status === 'cancelled'
   // S17-12：渠道写权限与后端同构——管理员或该项目牵头人（通用群在配置台维护）
   const canManageChannels = !readonly && (member?.role === 'admin' || member?.id === p.leadMemberId)
+  // S63：归档触发权限与渠道管理同口径、但不含 !readonly——结项项目正是归档主场景
+  const canArchiveWiki = member?.role === 'admin' || member?.id === p.leadMemberId
   const activeMembers = members.filter((m) => m.status === 'active')
   const nameOf = (mid: number | null | undefined) => activeMembers.find((m) => m.id === mid)?.name || '（未指派）'
 
@@ -246,11 +277,35 @@ export default function ProjectDetail({ id }: { id: number }) {
           )}
         </Card>
 
-        <Card title="知识库（飞书）" actions={canManageChannels ? <Btn small onClick={() => setBindingWiki(true)}>{wiki ? '换绑' : '绑定'}</Btn> : undefined}>
+        <Card title="知识库（飞书）" actions={
+          <span className="flex items-center gap-2">
+            {/* S63：手动触发全量汇总归档（绑定页面后可用；running 中防重入） */}
+            {wiki && canArchiveWiki && (
+              <Btn small kind="primary" disabled={archiveRun?.status === 'running'} onClick={startArchive}>
+                {archiveRun?.status === 'running' ? '生成中…' : '生成项目汇总'}
+              </Btn>
+            )}
+            {canManageChannels ? <Btn small onClick={() => setBindingWiki(true)}>{wiki ? '换绑' : '绑定'}</Btn> : undefined}
+          </span>
+        }>
           {wiki ? (
-            <div className="flex items-center justify-between text-[13px]">
-              <span>📄 《{wiki.title || '未命名'}》<span className="num text-[var(--color-ink-soft)]"> · {wiki.nodeToken}</span></span>
-              <a className="text-[var(--color-primary)]" href={`https://feishu.cn/wiki/${wiki.nodeToken}`} target="_blank" rel="noreferrer">打开</a>
+            <div className="text-[13px]">
+              <div className="flex items-center justify-between">
+                <span>📄 《{wiki.title || '未命名'}》<span className="num text-[var(--color-ink-soft)]"> · {wiki.nodeToken}</span></span>
+                <a className="text-[var(--color-primary)]" href={`https://feishu.cn/wiki/${wiki.nodeToken}`} target="_blank" rel="noreferrer">打开</a>
+              </div>
+              {archiveRun && (
+                <div className="mt-1 text-[11px] text-[var(--color-ink-soft)]">
+                  {archiveRun.status === 'running' && `⏳ 正在生成项目汇总：${ARCHIVE_STAGE_LABEL[archiveRun.stage ?? ''] ?? '处理中'}…`}
+                  {archiveRun.status === 'done' && (
+                    <span>
+                      ✅ 最近汇总 {fmtDateTime(archiveRun.finishedAt ?? archiveRun.createdAt)} · 消息 {archiveRun.messageCount ?? 0} 条 · 金句 {archiveRun.quotesCount ?? 0} 条 · 图片 {archiveRun.imageCount ?? 0} 张{archiveRun.truncated ? '（超上限已截断）' : ''}
+                      {archiveRun.pageUrl && <> · <a className="text-[var(--color-primary)]" href={archiveRun.pageUrl} target="_blank" rel="noreferrer">查看</a></>}
+                    </span>
+                  )}
+                  {archiveRun.status === 'failed' && `❌ 上次生成失败：${archiveRun.error ?? '未知错误'}`}
+                </div>
+              )}
             </div>
           ) : <Empty hint="未绑定知识库页面——绑定后在群里说「记一下…」即可写入" />}
         </Card>
