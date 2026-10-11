@@ -63,6 +63,14 @@ export interface WikiBinding {
   id: number; projectId: number; spaceId: string; nodeToken: string; objToken: string
   title?: string | null; createdBy?: number | null; createdAt: number; updatedAt: number
 }
+/** S63（v0.68）：项目群全量汇总归档台账（wiki_archive_runs）。 */
+export interface WikiArchiveRun {
+  id: number; projectId: number; status: 'running' | 'done' | 'failed'
+  stage?: 'fetch' | 'summarize' | 'images' | 'write' | 'done' | null
+  messageCount?: number | null; chunkCount?: number | null; quotesCount?: number | null; imageCount?: number | null
+  truncated?: number; firstBlockId?: string | null; pageUrl?: string | null; error?: string | null
+  createdBy?: number | null; createdAt: number; finishedAt?: number | null
+}
 export interface ProjectDetail extends ProjectRow {
   tasks: TaskRow[]
   milestones: MilestoneRow[]

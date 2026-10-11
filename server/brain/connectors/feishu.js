@@ -360,3 +360,122 @@ export async function appendDocBlocks(cfg, documentId, blocks) {
     method: 'POST', body: { children: blocks },
   })
 }
+
+// —— S63（v0.68，K48）项目群全量汇总：全量回读 + 文档章节写入 + 图片归档 ——
+
+/**
+ * 全量回读一个群的历史消息（归档一次性回读，区别于增量 fetchMessages——不挪游标语义）。
+ * 降序分页（ByCreateTimeDesc）：超 maxMessages 时保留最近段并标 truncated（K48：归档场景近期密度最高，
+ * 全程骨架由事件流兜底）。返回翻正为时间正序的 { messages, truncated }，
+ * 消息带类型：{ id, speakerId, speakerType, msgType, text, imageKey, ts }（image 消息 text 置空、imageKey 解析自 body）。
+ */
+export async function fetchChatHistory(cfg, groupKey, { startSec = 0, maxMessages = 20000 } = {}) {
+  const token = await tenantToken(cfg)
+  const end = Math.floor(Date.now() / 1000)
+  const items = []
+  let pageToken = ''
+  let truncated = false
+  do {
+    const url = new URL('https://open.feishu.cn/open-apis/im/v1/messages')
+    url.searchParams.set('container_id', groupKey)
+    url.searchParams.set('container_id_type', 'chat')
+    url.searchParams.set('start_time', String(startSec))
+    url.searchParams.set('end_time', String(end))
+    url.searchParams.set('sort_type', 'ByCreateTimeDesc')
+    url.searchParams.set('page_size', '50')
+    if (pageToken) url.searchParams.set('page_token', pageToken)
+    const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } })
+    if (!res.ok) throw Object.assign(new Error(`飞书消息 HTTP ${res.status}`), { statusCode: 502 })
+    const data = await res.json()
+    if (data.code !== 0) throw Object.assign(new Error(`飞书消息失败(${data.code}): ${data.msg}`), { statusCode: 502 })
+    for (const item of data.data?.items || []) {
+      const sec = Number(item.create_time)
+      const msgType = item.msg_type
+      let imageKey = null
+      if (msgType === 'image') {
+        try { imageKey = JSON.parse(item.body?.content || '{}').image_key || null } catch { /* 忽略坏载荷 */ }
+      }
+      items.push({
+        id: item.message_id,
+        speakerId: item.sender?.id || '',
+        speakerType: item.sender?.sender_type || '',
+        msgType,
+        text: msgType === 'image' ? '' : normalizeText(item),
+        imageKey,
+        ts: sec * 1000,
+      })
+    }
+    pageToken = data.data?.has_more ? data.data?.page_token : ''
+    if (items.length >= maxMessages) { truncated = Boolean(pageToken); pageToken = '' }
+  } while (pageToken)
+  const capped = items.length > maxMessages ? items.slice(0, maxMessages) : items
+  capped.reverse() // 降序拉取 → 翻正为时间正序供展示/分块
+  return { messages: capped, truncated: truncated || items.length > maxMessages }
+}
+
+/** 列文档根级子块（分页拉完）：S63 章节定位与幂等替换用。 */
+export async function listDocRootBlocks(cfg, documentId) {
+  const items = []
+  let pageToken = ''
+  do {
+    const data = await feishuApi(cfg, `/docx/v1/documents/${documentId}/blocks/${documentId}/children`, {
+      query: { page_size: '500', ...(pageToken ? { page_token: pageToken } : {}) },
+    })
+    items.push(...(data.items || []))
+    pageToken = data.has_more ? data.page_token : ''
+  } while (pageToken)
+  return items
+}
+
+/** 在文档根 index 处插入一组 block（index 省略=追加末尾）。返回创建成功的 blocks（含 block_id，首块即幂等锚点）。 */
+export async function insertDocBlocks(cfg, documentId, blocks, index) {
+  const body = { children: blocks }
+  if (index !== undefined) body.index = index
+  const data = await feishuApi(cfg, `/docx/v1/documents/${documentId}/blocks/${documentId}/children`, { method: 'POST', body })
+  return data.children || []
+}
+
+/** 删除文档根 [startIndex, endIndex) 区间子块（S63 重跑先删旧生成区再原位写新版）。 */
+export async function deleteDocChildren(cfg, documentId, startIndex, endIndex) {
+  return feishuApi(cfg, `/docx/v1/documents/${documentId}/blocks/${documentId}/children/batch_delete`, {
+    method: 'DELETE', body: { start_index: startIndex, end_index: endIndex },
+  })
+}
+
+/** 下载群消息图片（im/v1/images/:key）。返回 { bytes, contentType }；失败抛中文错误（403 提示 im:resource 权限）。 */
+export async function downloadChatImage(cfg, imageKey) {
+  const token = await tenantToken(cfg)
+  const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/images/${encodeURIComponent(imageKey)}`, {
+    headers: { authorization: `Bearer ${token}` },
+  })
+  const contentType = res.headers?.get?.('content-type') || ''
+  if (!res.ok || !contentType.includes('image')) {
+    let code = res.status
+    let msg = ''
+    try { const j = await res.json(); code = j.code ?? res.status; msg = j.msg || '' } catch { /* 非 JSON 响应体 */ }
+    const permHint = res.status === 403 ? '——需给飞书应用开通 im:resource 权限（下载消息中的图片）' : ''
+    throw Object.assign(new Error(`飞书图片下载失败(${code}): ${msg}${permHint}`), { statusCode: 502 })
+  }
+  return { bytes: Buffer.from(await res.arrayBuffer()), contentType }
+}
+
+/** 上传图片为文档素材（drive/v1/medias/upload_all，parent_type=docx_image），返回 fileToken。 */
+export async function uploadDocImage(cfg, documentId, { fileName, bytes, contentType }) {
+  const token = await tenantToken(cfg)
+  const form = new FormData()
+  form.append('file_name', fileName)
+  form.append('parent_type', 'docx_image')
+  form.append('parent_node', documentId)
+  form.append('size', String(bytes.length))
+  form.append('file', new Blob([bytes], { type: contentType || 'image/jpeg' }), fileName)
+  const res = await fetch('https://open.feishu.cn/open-apis/drive/v1/medias/upload_all', {
+    method: 'POST', headers: { authorization: `Bearer ${token}` }, body: form,
+  })
+  const data = await res.json().catch(() => null)
+  if (!res.ok || !data || data.code !== 0) {
+    const code = data?.code ?? res.status
+    const permHint = res.status === 403 ? '——需给飞书应用开通云文档素材上传权限' : ''
+    throw Object.assign(new Error(`飞书素材上传失败(${code}): ${data?.msg || ''}${permHint}`), { statusCode: 502 })
+  }
+  return data.data?.file_token || null
+}

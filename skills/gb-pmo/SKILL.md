@@ -429,6 +429,24 @@ client.sh action generate_person_digest '{}'
 | title | TEXT | 页面标题（展示/回执用） |
 | updated_at | INTEGER |  |
 
+### wiki_archive_runs
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| project_id | INTEGER |  |
+| status | TEXT | running|done|failed |
+| stage | TEXT | fetch|summarize|images|write|done（进度展示） |
+| message_count | INTEGER | 参与汇总的有效文本消息数（已滤机器人/空文本） |
+| chunk_count | INTEGER | LLM 分块数 |
+| quotes_count | INTEGER | 入选金句数 |
+| image_count | INTEGER | 成功归档图片数 |
+| truncated | INTEGER | 量护栏触发截断/抽样 |
+| first_block_id | TEXT | 本次生成区首块 block_id（幂等替换锚点） |
+| page_url | TEXT | 完成后页面可点链接 |
+| error | TEXT | failed 时中文原因 |
+| finished_at | INTEGER |  |
+
 ## 枚举（值 ↔ 中文 label，双向对齐）
 
 - **memberRole**: admin=系统管理员、member=成员

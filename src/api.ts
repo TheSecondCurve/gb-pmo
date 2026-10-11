@@ -126,6 +126,10 @@ export const api = {
   projectWiki: (id: number) => req<{ wiki: import('./types').WikiBinding | null }>('GET', `/api/v1/projects/${id}/wiki`),
   bindProjectWiki: (id: number, p: Record<string, unknown>) => req<import('./types').WikiBinding>('POST', `/api/v1/projects/${id}/wiki`, p),
 
+  // S63（v0.68）：项目群全量汇总归档（POST 启动异步台账，GET 轮询）
+  wikiArchive: (id: number) => req<{ run: import('./types').WikiArchiveRun | null }>('GET', `/api/v1/projects/${id}/wiki-archive`),
+  startWikiArchive: (id: number) => req<{ run: import('./types').WikiArchiveRun }>('POST', `/api/v1/projects/${id}/wiki-archive`),
+
   // S48（v0.53）：未分拣池消化（仅管理员）
   unrouted: () => req<{ messages: { id: number; platform: string; groupKey: string; businessTime: number; speakerLabel: string | null; content: string }[] }>('GET', '/api/v1/admin/unrouted'),
   routeUnrouted: (id: number, projectId: number) =>
