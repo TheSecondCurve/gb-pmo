@@ -35,13 +35,14 @@ function freshProject(name) {
 }
 
 describe('S61 知识库绑定与写入', () => {
-  it('S61-1: 贴链接绑定已有页面——解析 node_token、get_node 验证并换出 obj_token，绑定行落库', async () => {
+  it('S61-1: 贴链接绑定已有页面——解析 node_token、get_node 验证并换出 obj_token，绑定行落库（飞书返回 snake_case）', async () => {
     ;({ db } = setupDb())
     members = seedMembers(db)
     setSetting(db, 'im.feishu', { appId: 'a', appSecret: 's' }, members.admin.id)
     const p = freshProject('智慧园区')
     const calls = stubFetch([
-      ['/wiki/v2/spaces/get_node', () => okJson({ node: { nodeToken: 'wik123', objToken: 'doc456', objType: 'docx', title: '智慧园区文档', spaceId: 'sp9' } })],
+      // 真实飞书响应是 snake_case：node_token/obj_token/obj_type/space_id
+      ['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'wik123', obj_token: 'doc456', obj_type: 'docx', title: '智慧园区文档', space_id: 'sp9' } })],
     ])
     const b = await bindProjectWiki(db, p.id, { wikiUrl: 'https://xxx.feishu.cn/wiki/wik123?from=copy' }, members.admin.id)
     expect(b.nodeToken).toBe('wik123')
@@ -56,13 +57,13 @@ describe('S61 知识库绑定与写入', () => {
   it('S61-2: 在指定页面下新建子页并绑定——create_node 用父节点 spaceId，新页绑定落库', async () => {
     const p = freshProject('新建子页项目')
     stubFetch([
-      ['/wiki/v2/spaces/get_node', () => okJson({ node: { nodeToken: 'parent9', objToken: 'pdoc', objType: 'docx', title: '项目文档', spaceId: 'sp9' } })],
+      ['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'parent9', obj_token: 'pdoc', obj_type: 'docx', title: '项目文档', space_id: 'sp9' } })],
       ['/wiki/v2/spaces/sp9/nodes', (url, opts) => {
         const body = JSON.parse(opts.body)
         expect(body.obj_type).toBe('docx')
         expect(body.parent_node_token).toBe('parent9')
         expect(body.title).toBe('会议纪要')
-        return okJson({ node: { nodeToken: 'newchild1', objToken: 'newdoc1', objType: 'docx', title: '会议纪要', spaceId: 'sp9' } })
+        return okJson({ node: { node_token: 'newchild1', obj_token: 'newdoc1', obj_type: 'docx', title: '会议纪要', space_id: 'sp9' } })
       }],
     ])
     const b = await bindProjectWiki(db, p.id, { parentWikiUrl: 'https://x.feishu.cn/wiki/parent9', newTitle: '会议纪要' }, members.lead.id)
@@ -74,7 +75,7 @@ describe('S61 知识库绑定与写入', () => {
   it('S61-3: recordToWiki 按类型分小节追加——appendDocBlocks 收到 heading2(小节)+text(内容)', async () => {
     const p = freshProject('记录项目')
     // 先绑定（get_node 桩），再换桩专测追加
-    stubFetch([['/wiki/v2/spaces/get_node', () => okJson({ node: { nodeToken: 'n1', objToken: 'doc1', objType: 'docx', title: '记录项目页', spaceId: 'sp1' } })]])
+    stubFetch([['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n1', obj_token: 'doc1', obj_type: 'docx', title: '记录项目页', space_id: 'sp1' } })]])
     await bindProjectWiki(db, p.id, { wikiUrl: 'https://x.feishu.cn/wiki/n1' }, members.admin.id)
     const calls = stubFetch([['/docx/v1/documents/doc1/blocks', () => okJson({})]])
     const r = await recordToWiki(db, p.id, { eventType: 'decision', summary: '一期范围已定' }, members.dev.id)
@@ -113,7 +114,7 @@ describe('S61 知识库绑定与写入', () => {
     const r2 = await runWriteTool(db, { kind: 'bind_wiki', payload: { projectId: p.id, wikiUrl: 'https://x.feishu.cn/wiki/n1' } }, { member: members.dev, evt: { chatType: 'group', chatId: 'oc_x' } })
     expect(r2.type).toBe('refused')
     // 管理员绑定成功 → receipt
-    stubFetch([['/wiki/v2/spaces/get_node', () => okJson({ node: { nodeToken: 'n1', objToken: 'doc1', objType: 'docx', title: '机器人项目页', spaceId: 'sp1' } })]])
+    stubFetch([['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n1', obj_token: 'doc1', obj_type: 'docx', title: '机器人项目页', space_id: 'sp1' } })]])
     const r3 = await runWriteTool(db, { kind: 'bind_wiki', payload: { projectId: p.id, wikiUrl: 'https://x.feishu.cn/wiki/n1' } }, { member: members.admin, evt: { chatType: 'group', chatId: 'oc_x' } })
     expect(r3.type).toBe('receipt')
     expect(r3.text).toContain('机器人项目页')
