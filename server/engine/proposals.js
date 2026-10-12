@@ -55,6 +55,7 @@ export const PROPOSAL_KINDS = {
         name: payload.name, typeCode: payload.typeCode, templateCode: payload.templateCode,
         leadMemberId: Number(payload.leadMemberId), priority: payload.priority, clientName: payload.clientName,
         planStartDate: payload.planStartDate, planEndDate: payload.planEndDate,
+        ...(payload.initExtra !== undefined ? { initExtra: payload.initExtra } : {}), // S64：项目级补充要求透传（引擎生效时校验）
         ...(payload.tasks !== undefined ? { tasks: normTasks(payload.tasks) } : {}),
         ...(payload.autoSchedule !== undefined ? { autoSchedule: payload.autoSchedule } : {}),
       }, by)
@@ -102,10 +103,33 @@ export const PROPOSAL_KINDS = {
     canConfirm: canConfirmProjectOp,
     apply(db, payload, by) {
       const patch = {}
-      for (const k of ['name', 'clientName', 'priority', 'planStartDate', 'planEndDate', 'leadMemberId']) {
+      for (const k of ['name', 'clientName', 'priority', 'planStartDate', 'planEndDate', 'leadMemberId', 'initExtra']) {
         if (payload[k] !== undefined) patch[k] = payload[k]
       }
       return projects.updateProject(db, Number(payload.projectId), patch, by)
+    },
+  },
+  // S64（v0.69，K49）：机器人触发的初始分配草案确认卡——payload={projectId, assignments(草案快照), extra}。
+  // 提议持久化让卡片长期有效（作业注册表 10 分钟 TTL/重启即作废，K24）；确认时对快照再走全量逐行校验，
+  // 任务面已变 → 400 提示重新发起（快照语义）。任意在职成员可确认（confirmProposal 已校验在职），
+  // 与 web 弹窗「登录即可应用」同口径（D1 全员）；生效=applyInitAssignments(platform='bot')。
+  init_assignments: {
+    label: '初始分配应用',
+    async canConfirm() {
+      return true
+    },
+    async apply(db, payload, by) {
+      try {
+        return await tasks.applyInitAssignments(db, Number(payload.projectId), payload.assignments, by, { platform: 'bot' })
+      } catch (e) {
+        if (e.statusCode === 400) {
+          throw Object.assign(
+            new Error(`${e.message}——草案是生成时刻的快照，任务面可能已变化；请重新触发初始分配获取新草案`),
+            { statusCode: 400 },
+          )
+        }
+        throw e
+      }
     },
   },
   // S62（v0.67，K47）：未绑定知识库时记录——确认后在默认父页面下新建子页 + 绑定 + 写入（一步到位）

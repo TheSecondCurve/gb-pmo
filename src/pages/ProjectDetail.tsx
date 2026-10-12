@@ -368,7 +368,7 @@ export default function ProjectDetail({ id }: { id: number }) {
       {binding && <BindChannelModal projectId={id} onClose={() => setBinding(false)} onDone={async () => { setBinding(false); toast('渠道已绑定'); await refresh() }} />}
       {bindingWiki && <BindWikiModal projectId={id} onClose={() => setBindingWiki(false)} onDone={async () => { setBindingWiki(false); toast('知识库已绑定'); await refresh() }} />}
       {initAssigning && (
-        <InitAssignModal projectId={id} members={activeMembers} onClose={() => setInitAssigning(false)} onDone={async () => { setInitAssigning(false); await refresh() }} />
+        <InitAssignModal projectId={id} projectInitExtra={p.initExtra ?? ''} members={activeMembers} onClose={() => setInitAssigning(false)} onDone={async () => { setInitAssigning(false); await refresh() }} />
       )}
       {digesting && (
         <Modal title="🧠 项目梳理（S15）" onClose={() => setDigesting(false)} wide>
@@ -577,22 +577,37 @@ function AddTask({ projectId, members, onDone }: { projectId: number; members: M
   )
 }
 
-/** S39（v0.42）+ S44（v0.45 异步化）：AI 初始分配弹窗——启动后 2s 轮询作业（GLM 可能要 1~2 分钟），
+/** S39（v0.42）+ S44（v0.45 异步化）+ S64（v0.69 三层要求）：AI 初始分配弹窗——先确认要求
+ * （项目补充要求=长期存本项目；本次追加要求=仅本次）再启动，启动后 2s 轮询作业（GLM 可能要 1~2 分钟），
  * 草案（不落库）逐行可编辑，「应用」单事务批量生效并留痕。 */
-function InitAssignModal({ projectId, members, onClose, onDone }: { projectId: number; members: Member[]; onClose: () => void; onDone: () => Promise<void> }) {
+function InitAssignModal({ projectId, projectInitExtra, members, onClose, onDone }: { projectId: number; projectInitExtra: string; members: Member[]; onClose: () => void; onDone: () => Promise<void> }) {
   const { toast } = useStore()
+  const [phase, setPhase] = useState<'config' | 'running'>('config')
+  const [projectExtra, setProjectExtra] = useState(projectInitExtra)
+  const [runExtra, setRunExtra] = useState('')
   const [rows, setRows] = useState<InitAssignmentRow[] | null>(null)
   const [warnings, setWarnings] = useState<string[]>([])
   const [err, setErr] = useState('')
   const [waitSec, setWaitSec] = useState(0)
   const [applying, setApplying] = useState(false)
+  const start = async () => {
+    setErr('')
+    try {
+      // S64：项目补充要求改动随启动保存到项目（PATCH，空串归一 NULL）；本次追加要求只随本次草案提交
+      if (projectExtra.trim() !== projectInitExtra.trim()) {
+        await api.patchProject(projectId, { initExtra: projectExtra.trim() })
+      }
+      setPhase('running')
+    } catch (e) { setErr((e as Error).message) }
+  }
   useEffect(() => {
+    if (phase !== 'running') return
     let stopped = false
     let timer: ReturnType<typeof setTimeout> | null = null
     const t0 = Date.now()
     void (async () => {
       try {
-        const start = await api.draftInitAssignments(projectId) // 202 {draftId, status:'running'}
+        const start = await api.draftInitAssignments(projectId, runExtra.trim() || undefined) // 202 {draftId, status:'running'}
         const poll = async () => {
           if (stopped) return
           try {
@@ -611,7 +626,8 @@ function InitAssignModal({ projectId, members, onClose, onDone }: { projectId: n
       } catch (e) { if (!stopped) setErr((e as Error).message) }
     })()
     return () => { stopped = true; if (timer) clearTimeout(timer) }
-  }, [projectId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 刻意仅进入 running 时启动一次：runExtra 是启动时刻的快照，加入依赖会在运行中输入变化时重启草案（多烧 LLM）
+  }, [projectId, phase])
   const patchRow = (taskId: number, p: Partial<InitAssignmentRow>) =>
     setRows((rs) => (rs ?? []).map((r) => (r.taskId === taskId ? { ...r, ...p } : r)))
   const apply = async () => {
@@ -628,7 +644,29 @@ function InitAssignModal({ projectId, members, onClose, onDone }: { projectId: n
   return (
     <Modal title="✨ AI 初始分配（S39）" onClose={onClose} wide>
       {err && <div className="mb-3 rounded bg-red-50 px-2 py-1.5 text-[12px] text-[var(--color-bad)]">{err}</div>}
-      {!rows && !err && (
+      {phase === 'config' && (
+        <div className="flex flex-col gap-3">
+          <div className="rounded-md border border-[var(--color-line)] px-2.5 py-2 text-[12px] leading-5 text-[var(--color-ink-soft)]">
+            草案按三层要求生成：<b>类型初始化提示词</b> → <b>项目补充要求</b> → <b>本次追加要求</b>（未填的层自动跳过）。
+            草案不落库，生成后逐行可编辑再应用；也可在项目群 @机器人 触发（确认卡点按生效，S64）。
+          </div>
+          <label className="flex flex-col gap-1 text-[12px]">
+            <span className="font-medium">项目补充要求（保存到本项目，之后每次初始分配都带上）</span>
+            <textarea className="cell-input" rows={3} value={projectExtra} onChange={(e) => setProjectExtra(e.target.value)}
+              placeholder="如：这期张三牵头，大部分开发任务给李四，11 月中前收口" />
+          </label>
+          <label className="flex flex-col gap-1 text-[12px]">
+            <span className="font-medium">本次追加要求（仅本次生效，不保存）</span>
+            <textarea className="cell-input" rows={2} value={runExtra} onChange={(e) => setRunExtra(e.target.value)}
+              placeholder="如：验收前留两天缓冲" />
+          </label>
+          <div className="flex items-center justify-end gap-2">
+            <Btn onClick={onClose}>取消</Btn>
+            <Btn kind="primary" onClick={() => void start()}>开始生成草案</Btn>
+          </div>
+        </div>
+      )}
+      {!rows && !err && phase === 'running' && (
         <div className="py-6 text-center text-[var(--color-ink-soft)]" data-testid="init-assign-waiting">
           大脑分配中（已等待 {waitSec}s；GLM 大输出可能要 1~2 分钟）…
         </div>
