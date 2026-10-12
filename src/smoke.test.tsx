@@ -351,18 +351,31 @@ describe('S38/S39 任务责任人与 AI 初始分配（v0.42）', () => {
     const promptField = (await screen.findByLabelText(/初始化提示词/)) as HTMLTextAreaElement
     expect(promptField.value).toBe('彩排安排在交付前 3 天')
 
-    // 项目详情：AI 初始分配入口 → 草案弹窗（行可编辑 + 应用按钮）
+    // 项目详情：AI 初始分配入口 → 要求配置（S64）→ 草案弹窗（行可编辑 + 应用按钮）
     // S44-5（v0.45）：异步作业——先显示等待进度（running），轮询到 done 后行渲染
     cleanup()
     location.hash = '#/projects/1'
     render(<StoreProvider><ProjectDetail id={1} /></StoreProvider>)
     fireEvent.click(await screen.findByRole('button', { name: /AI 初始分配/ }))
     expect(await screen.findByText('✨ AI 初始分配（S39）')).toBeTruthy()
+    // S64：先配置三层要求（项目补充要求=长期；本次追加=仅本次），再启动草案
+    expect((await screen.findByLabelText(/项目补充要求/)) as HTMLTextAreaElement).toBeTruthy()
+    fireEvent.change(screen.getByLabelText(/本次追加要求/), { target: { value: '验收前留两天缓冲' } })
+    fireEvent.click(screen.getByRole('button', { name: '开始生成草案' }))
     expect(await screen.findByTestId('init-assign-waiting')).toBeTruthy() // S44-5：等待进度呈现
     expect((await screen.findByLabelText('任务 任务一 责任人', {}, { timeout: 5000 })) as HTMLSelectElement)
     const rowSelect = (await screen.findByLabelText('任务 任务一 责任人')) as HTMLSelectElement
     expect(rowSelect.value).toBe('2') // 草案建议责任人预填
     expect(screen.getByRole('button', { name: '应用 1 项' })).toBeTruthy()
+  })
+
+  it('S64-9: 立项表单可填项目级初始分配补充要求（前端冒烟锚点）', async () => {
+    location.hash = '#/projects'
+    render(<StoreProvider><Projects view="table" /></StoreProvider>)
+    fireEvent.click(await screen.findByRole('button', { name: '+ 立项' }))
+    const extraField = (await screen.findByLabelText(/初始分配补充要求/)) as HTMLTextAreaElement
+    fireEvent.change(extraField, { target: { value: '这期张三牵头，开发任务多给李四' } })
+    expect(extraField.value).toBe('这期张三牵头，开发任务多给李四')
   })
 })
 

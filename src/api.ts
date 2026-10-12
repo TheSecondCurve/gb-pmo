@@ -147,9 +147,10 @@ export const api = {
   // S1-7：倒排预览（engine 同一公式，不落库）
   previewSchedule: (body: { planStartDate?: string; planEndDate: string; count: number }) =>
     req<{ schedule: { planStartDate: string; planEndDate: string }[] }>('POST', '/api/v1/projects/preview-schedule', body),
-  // S39（v0.42）+ S44（v0.45 异步化）：AI 初始分配——启动（202 返回 draftId）→ 轮询 → 人审应用（单事务+留痕）
-  draftInitAssignments: (projectId: number) =>
-    req<{ draftId: string; status: 'running' }>('POST', `/api/v1/projects/${projectId}/draft-init-assignments`, {}),
+  // S39（v0.42）+ S44（v0.45 异步化）+ S64（v0.69 extra）：AI 初始分配——启动（202 返回 draftId，
+  // extra=本次追加要求，与类型 init_prompt/项目 init_extra 三层叠加进 LLM）→ 轮询 → 人审应用（单事务+留痕）
+  draftInitAssignments: (projectId: number, extra?: string) =>
+    req<{ draftId: string; status: 'running' }>('POST', `/api/v1/projects/${projectId}/draft-init-assignments`, { extra: extra || undefined }),
   getDraftInitAssignment: (projectId: number, draftId: string) =>
     req<{ status: 'running' | 'done' | 'error'; elapsedMs?: number; message?: string; assignments?: import('./types').InitAssignmentRow[]; warnings?: string[] }>(
       'GET', `/api/v1/projects/${projectId}/draft-init-assignments/${draftId}`),

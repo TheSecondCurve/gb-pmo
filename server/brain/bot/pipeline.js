@@ -212,7 +212,7 @@ const noLlmText = (surface) => surface === 'web'
 
 // —— 工具执行器（读自由写收敛；两入口共用，此前在两个编排层逐字重复） ——
 
-export function makeExecTool(db, env, { llm, sqlLog = [], fetchChat } = {}) {
+export function makeExecTool(db, env, { llm, sqlLog = [], fetchChat, push, botSecret } = {}) {
   return async (parsed) => {
     if (parsed.action === 'query') {
       try {
@@ -261,7 +261,10 @@ export function makeExecTool(db, env, { llm, sqlLog = [], fetchChat } = {}) {
       }
     }
     if (parsed.action === 'write') {
-      return runWriteTool(db, { kind: parsed.kind, payload: parsed.payload }, { member: env.member, evt: env.evt, llm, sourcePlatform: env.platform })
+      // S64：push/botSecret 仅 IM 适配器注入（web 会话无——init_assign 等异步回推工具据此判面）
+      return runWriteTool(db, { kind: parsed.kind, payload: parsed.payload }, {
+        member: env.member, evt: env.evt, llm, sourcePlatform: env.platform, push, botSecret,
+      })
     }
     return '未知动作'
   }
@@ -307,7 +310,7 @@ export async function runConversation(db, env, opts = {}) {
     systemPrompt: opts.systemPrompt,
     userText: env.text,
     history: opts.history ?? [],
-    execTool: makeExecTool(db, env, { llm, sqlLog, fetchChat: opts.fetchChat }),
+    execTool: makeExecTool(db, env, { llm, sqlLog, fetchChat: opts.fetchChat, push: opts.push, botSecret: opts.botSecret }),
   })
   const detail = { turns: out.turns, queries: out.queries, sql: sqlLog, history: (opts.history ?? []).length, ...(opts.detailExtra ?? {}) }
 

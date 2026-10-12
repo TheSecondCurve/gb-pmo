@@ -653,6 +653,22 @@ web 项目详情页手动触发「生成项目汇总」：全量回读项目绑�
 | S63-7 | 当查询运行状态时，POST 应立即返回 running 台账行；完成后 GET 返回统计（消息数/分块数/金句数/图片数）与页面链接；失败时状态 failed 且带中文错误 | `server/test/s63-wiki-archive.test.mjs` |
 | S63-8 | 当群内存在图片消息时，应下载 image_key → 上传文档素材 → 插入 image block 至「群内图片」小节（按时间序 ≤30 张，图注带日期+说话人）；单张失败跳过不阻塞整体，imageCount 计数如实 | `server/test/s63-wiki-archive.test.mjs` |
 
+## S64（P0）— 全员（web+项目群）— 初始分配要求叠加与机器人触发（v0.69）
+
+AI 初始分配的 LLM 输入按「类型 init_prompt → 项目 init_extra（migration 0030）→ 本次触发追加」三层叠加（未配置层跳过）；项目级补充要求立项可填、详情可改、提议/Agent 同语义；项目专题群 @ 机器人可口述触发（要求提炼进本次追加），草案完成后推确认卡到群，任意已绑定成员点「确认应用」批量生效（platform=bot），放弃=rejected。决策见 design.md K49。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S64-1 | 当立项携带 initExtra 时应落库且回读一致（≤2000 字、空串归一 NULL、超长/非字符串 400）；提议通道 create_project 携带 initExtra 确认生效后同语义落库 | `server/test/s64-init-extra-assign.test.mjs` |
+| S64-2 | 当生成草案时，LLM 输入应按「类型 init_prompt → 项目 init_extra → 本次 extra」三层依次拼装（未配置层跳过不占位），三层内容均出现在提示词中 | `server/test/s64-init-extra-assign.test.mjs` |
+| S64-3 | 当 PATCH /projects/:id 传 initExtra 时应更新生效（同归一规则）；未传不动（patch 语义） | `server/test/s64-init-extra-assign.test.mjs` |
+| S64-4 | 当 web 弹窗填「本次追加要求」启动草案时，extra 应随启动请求提交并进入三层拼装；人审+应用链路（S39/S44）不变 | `server/test/s64-init-extra-assign.test.mjs` |
+| S64-5 | 当专题群 @ 机器人触发初始分配（含或不含口述要求）时，应立即回执「生成中」类文案，且 LLM 应把口述要求提炼进 extra 传入草案作业；通用群未点名项目应给引导文案不发起 | `server/test/s64-init-extra-assign.test.mjs` |
+| S64-6 | 当草案完成且有任务时，应推送草案确认卡到触发群（任务/责任人/起止表+warnings+追加要求回显，>20 行截断），同时落 init_assignments 提议（pending）；项目无未完成任务或草案失败时应降级为文本提示，不落提议 | `server/test/s64-init-extra-assign.test.mjs` |
+| S64-7 | 当点卡片「确认应用」时，应单事务批量写入（decision 事件+task.initAssign 审计 platform=bot）并回执 N 项；「放弃」应置 rejected；确认时任务面已变（任务被删等）应 400 中文提示重新发起（快照语义）；未绑定成员点按应静默忽略 | `server/test/s64-init-extra-assign.test.mjs` |
+| S64-8 | 当任意已绑定成员触发/确认时均应放行（与 web 全员口径一致）；LLM 未配置应回执配置指引（503 语义文案）；终态项目应拒绝（409 语义文案） | `server/test/s64-init-extra-assign.test.mjs` |
+| S64-9 | Agent action draft_init_assignments 应支持可选 extra 参数透传进草案；前端立项表单应有 initExtra 输入、草案弹窗应有「本次追加要求」输入（前端冒烟锚点） | `server/test/s64-init-extra-assign.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

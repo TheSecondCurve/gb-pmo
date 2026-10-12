@@ -208,3 +208,31 @@ export function buildReminderCard({ title, projectName, planEndDate, responsible
     md(`项目：**${projectName}**\n提醒日：${planEndDate}${responsibleName ? `\n责任人：**${responsibleName}**` : ''}${note ? `\n备注：${noteText(note)}` : ''}\n一次性送达，任务已自动标记完成（不追踪状态）。`),
   ])
 }
+
+// —— v0.69（K49）：初始分配草案确认卡 ——
+
+/** 草案卡成表行数上限：超出截断并提示（确认后仍全量生效，卡片只做预览）。 */
+export const INIT_CARD_MAX_ROWS = 20
+
+/**
+ * S64 初始分配草案确认卡：任务/责任人/计划起止表 + warnings + 追加要求回显；
+ * 按钮 value 复用 {a:'prop', p, c, s} HMAC 签名（与提议确认卡同一套语义，
+ * handleCardAction 的 prop 分支直接承接点按）。rows: [{title, owner, plan}] 已在调用侧排好。
+ */
+export function buildInitAssignCard({ proposalId, projectName, rows, warnings = [], extra }, secret) {
+  const value = (c) => ({ a: 'prop', p: String(proposalId), c, s: hmac(secret, `prop:${c}:${proposalId}`) })
+  const elements = [
+    md(`**项目「${projectName}」初始分配草案**（共 ${rows.length} 项任务；点「确认应用」后批量写入责任人与计划起止）${extra ? `\n本次追加要求：${extra}` : ''}`),
+    ...table(['任务', '责任人', '计划起止'], rows.slice(0, INIT_CARD_MAX_ROWS).map((r) => [r.title, r.owner, r.plan]), [4, 2, 3]),
+  ]
+  if (rows.length > INIT_CARD_MAX_ROWS) elements.push(md(`……其余 ${rows.length - INIT_CARD_MAX_ROWS} 项卡片已截断，确认后全部生效。`))
+  for (const w of warnings.slice(0, 5)) elements.push(md(`⚠️ ${w}`))
+  elements.push({
+    tag: 'action',
+    actions: [
+      { tag: 'button', text: { tag: 'plain_text', content: '确认应用' }, type: 'primary', value: value('confirm') },
+      { tag: 'button', text: { tag: 'plain_text', content: '放弃' }, type: 'danger', value: value('reject') },
+    ],
+  })
+  return card('orange', `初始分配草案 #${proposalId}`, elements)
+}

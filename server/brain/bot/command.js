@@ -184,6 +184,8 @@ export async function handleBotEvent(db, evt, opts = {}) {
   try {
     out = await runConversation(db, env, {
       llm: opts.llm, history, reply, fetchChat: opts.fetchChat, onLlmStart,
+      // S64（K49）：init_assign 的异步回推通道（草案完成后推卡片回本会话）与卡片签名密钥
+      push: send, botSecret: opts.secret ?? (process.env.GB_PMO_SESSION_SECRET || ''),
       systemPrompt: buildSystemPrompt(db, { member, channel, chatType: evt.chatType, hasHistory: history.length > 0 }),
       detailExtra: historyDegraded ? { historyDegraded: true } : undefined,
     })
@@ -293,10 +295,12 @@ export async function handleCardAction(db, cardEvt, opts = {}) {
           if (v.c === 'confirm') {
             const { proposal, result: applyResult } = await confirmProposal(db, Number(v.p), member.id)
             result = 'confirmed'
-            // S62：新建知识库页确认后回执带页面链接（建页+绑定+写入一步到位的结果）
-            replyText = proposal.kind === 'record_wiki_newpage' && applyResult?.url
-              ? `已新建并绑定知识库页面《${applyResult.title}》，内容已记录（${applyResult.section} 小节）✓\n📄 ${applyResult.url}`
-              : `提议 #${v.p} 已生效。`
+            // S64：初始分配确认回执带生效数量；S62：新建知识库页确认后回执带页面链接
+            replyText = proposal.kind === 'init_assignments'
+              ? `已应用初始分配：${applyResult?.updated ?? '?'} 项任务的责任人与计划起止已更新（由 ${member.name} 确认）。`
+              : proposal.kind === 'record_wiki_newpage' && applyResult?.url
+                ? `已新建并绑定知识库页面《${applyResult.title}》，内容已记录（${applyResult.section} 小节）✓\n📄 ${applyResult.url}`
+                : `提议 #${v.p} 已生效。`
           } else {
             await rejectProposal(db, Number(v.p), member.id)
             result = 'rejected'
@@ -377,19 +381,20 @@ ${schemaDigest(db)}
 ${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅飞书群聊）' : '{"action":"write","kind":"bind_channel","payload":{"projectId":1,"chatName":"群名"}}   仅群聊可用，仅项目牵头人/管理员：直接登记本群为项目专题渠道并回执（不再出确认卡）'}
 {"action":"write","kind":"propose","payload":{"kind":"add_task","projectId":1,"title":"任务标题","note"?:"备注（≤200字，S58）","taskKind":"work|reminder"?,"responsibleMemberId":1?,"planStartDate"?,"planEndDate"?}}  建任务：牵头人/管理员直接生效（缺省责任人=未指派（S38）；taskKind=reminder=纯提醒——到期推责任人+项目群后自动完成、不追踪状态，须给 planEndDate=提醒日；note 备注随提醒/预警推送自动携带）
 {"action":"write","kind":"propose","payload":{"kind":"add_milestone","projectId":1,"name":"里程碑名","planDate"?}}  建里程碑：牵头人/管理员直接生效
-{"action":"write","kind":"propose","payload":{"kind":"update_project","projectId":1,"name"?,"clientName"?,"priority":"high|medium|low"?,"planStartDate"?,"planEndDate"?,"leadMemberId":1?}}  项目信息变更：牵头人/管理员直接生效（至少一个字段；状态不可经此改，S29）
-{"action":"write","kind":"propose","payload":{"kind":"create_project","name":"...","typeCode":"...","leadMemberId":1,"planStartDate?","planEndDate?","tasks":["标题"|{"title":"...","refs":[{"title":"SOP名","url":"https://...","note?":"备注"}]}...]?,"autoSchedule":true?}}  立项：直接生效（发起人须为管理员或拟任牵头人本人；tasks 缺省按类型内嵌清单实例化、含类型预设的逐步骤参考资料；纯标题覆盖=不带参考资料，refs 显式给出才带；autoSchedule=true 按「计划开始（缺省今天）→交付日期」倒排每条任务计划起止，须有 planEndDate）
+{"action":"write","kind":"propose","payload":{"kind":"update_project","projectId":1,"name"?,"clientName"?,"priority":"high|medium|low"?,"planStartDate"?,"planEndDate"?,"leadMemberId":1?,"initExtra"?}}  项目信息变更：牵头人/管理员直接生效（至少一个字段；状态不可经此改，S29）
+{"action":"write","kind":"propose","payload":{"kind":"create_project","name":"...","typeCode":"...","leadMemberId":1,"planStartDate?","planEndDate?","initExtra"?:"初始分配补充要求（本项目特例，S64）","tasks":["标题"|{"title":"...","refs":[{"title":"SOP名","url":"https://...","note?":"备注"}]}...]?,"autoSchedule":true?}}  立项：直接生效（发起人须为管理员或拟任牵头人本人；tasks 缺省按类型内嵌清单实例化、含类型预设的逐步骤参考资料；纯标题覆盖=不带参考资料，refs 显式给出才带；autoSchedule=true 按「计划开始（缺省今天）→交付日期」倒排每条任务计划起止，须有 planEndDate）
 {"action":"write","kind":"propose","payload":{"kind":"create_project_type","code":"...","name":"...","tasks":["标题"|{"title":"...","refs":[{"title":"SOP名","url":"https://..."}...]}...]}}  新建项目类型：仅管理员直接生效（任务清单内嵌于类型；有标准 SOP/知识库文档的步骤可挂 refs，每步 ≤10 条，立项时随任务预填给执行人，S33）
 {"action":"write","kind":"propose","payload":{"kind":"cancel_project","projectId":1,"reason":"取消原因（必填）"}}  取消项目【终态·出确认卡】：原因必填（S29），牵头人/管理员点按确认后才生效
 {"action":"write","kind":"propose","payload":{"kind":"close_project","projectId":1,"summary":"结项总结（必填）"}}   结项【终态·出确认卡】：总结必填（S29；确认时按 S8 校验：任务须全部完成）
 {"action":"write","kind":"trigger","payload":{"name":"trigger_extraction|generate_project_digest|generate_person_digest|push_report","params":{}}}
+{"action":"write","kind":"init_assign","payload":{"projectId":1?,"extra":"用户口述的本次分配要求（原意提炼，可空）"}}  AI 初始分配（S64）：为项目每条未完任务产「责任人+计划起止」草案（约 1-2 分钟，后台生成），完成后我把草案确认卡发到本会话，任意成员点「确认应用」批量生效——用户说「初始分配/初次分配一下任务」时用；项目专题群可不给 projectId（默认本群项目）；用户口述的本次要求（谁牵头/哪类任务给谁/日期怎么收口）原意提炼进 extra
 {"action":"reply","text":"最终答复"}            查够/完成后回答；需要向用户澄清时也用它提问
 
 规则：
 1. 先查后答：结论必须基于 query/metric/brief 取回的数据，取不到就明说，绝不编造项目事实；项目整体状况优先 brief（数据已含中文标签，剩余天数负数=超期）。
 2. 项目/任务/成员一律用你查到的真实 id；相对日期按今天换算成 YYYY-MM-DD。
 3. 纯进展/风险/决策/阻塞 → record_event 直接登记；任务/里程碑变更（状态/日期/责任人）→ suggest_event **直接生效**（多个变更用 items 批量一次办完）——回执即变更结果，不得谎称已改；变更失败（任务不存在/终态项目/非法值等）会返回失败原因，如实转告。
-4. 建任务/建里程碑/项目信息变更/立项/项目类型/群登记 → 直接生效并回执（发起人无权限会被拒，如实说明）；**仅取消项目/结项**走 propose 确认卡，待有权人点按后才生效，不得谎称已生效；项目没有「暂停/启动」操作（S29：状态仅 进行中→已结项/已取消）。
+4. 建任务/建里程碑/项目信息变更/立项/项目类型/群登记 → 直接生效并回执（发起人无权限会被拒，如实说明）；**取消项目/结项**走 propose 确认卡，待有权人点按后才生效；**初始分配**（init_assign）是后台草案 + 确认卡两步——回执只说「生成中」，卡片点按后才生效，均不得谎称已生效；项目没有「暂停/启动」操作（S29：状态仅 进行中→已结项/已取消）。
 5. 不支持的事（财务/合同/绩效/自动重排期求解等）直接说明不支持。
 6. 回复用简洁中文，短段/列表即可。群聊里用户以「刚才/上面讨论的」为据而对话历史不足以理解时，先 recent_chat 读群内最近讨论再行动（仅项目专题群可用）。${web ? '\n6. 这是多轮会话：参考对话历史理解指代（「它/这个项目」等），历史里已有的查询结果可直接引用。' : ''}${hasHistory ? '\n7. 本次附带「对话历史」：仅供理解指代（如「它/这个项目/刚才那条」，群聊历史带说话人名）；事实与最新数据一律以本轮 query/metric 取回为准，历史结论可能已过时，不得直接引用历史数字回答现状。' : ''}`
 }

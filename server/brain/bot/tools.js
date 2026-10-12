@@ -18,6 +18,7 @@ import { normalizeTypeTasks } from '../../engine/projectTypes.js'
 import { bindProjectWiki, recordToWiki } from '../../engine/wiki.js'
 import { getSetting } from '../../engine/settings.js'
 import { camelizeRow } from '../../db/index.mjs'
+import { buildInitAssignCard } from './cards.js'
 import * as feishuConnector from '../connectors/feishu.js'
 import * as wecomConnector from '../connectors/wecom.js'
 
@@ -120,7 +121,8 @@ export async function runWriteTool(db, { kind, payload = {} }, ctx) {
     if (kind === 'bind_channel') return writeBindChannel(db, payload, ctx)
     if (kind === 'trigger') return await runTrigger(db, payload, ctx)
     if (kind === 'propose') return await writePropose(db, payload, ctx)
-    return refused(`不支持的写类型: ${kind}（可用 record_event/record_wiki/bind_wiki/suggest_event/bind_channel/trigger/propose）`)
+    if (kind === 'init_assign') return await writeInitAssign(db, payload, ctx)
+    return refused(`不支持的写类型: ${kind}（可用 record_event/record_wiki/bind_wiki/suggest_event/bind_channel/trigger/propose/init_assign）`)
   } catch (e) {
     if (e.statusCode === 403) return refused(`权限不足：${e.message}`, 'refused_permission')
     return refused(`操作被拒绝：${e.message}`)
@@ -419,6 +421,7 @@ function softValidateProposal(db, kind, p) {
         templateCode: p.templateCode ? String(p.templateCode) : undefined, leadMemberId: lead.id,
         ...(p.priority ? { priority: String(p.priority) } : {}), ...(p.clientName ? { clientName: String(p.clientName) } : {}),
         ...(p.planStartDate ? { planStartDate: String(p.planStartDate) } : {}), ...(p.planEndDate ? { planEndDate: String(p.planEndDate) } : {}),
+        ...(p.initExtra ? { initExtra: String(p.initExtra) } : {}), // S64：项目级初始分配补充要求透传（引擎生效时校验）
         ...(p.tasks !== undefined ? { tasks } : {}), ...(autoSchedule ? { autoSchedule: true } : {}),
       },
       summary: `立项「${String(p.name).trim()}」（类型 ${p.typeCode || p.templateCode}，牵头人 ${lead.name}${tasks.length ? `，任务 ${tasks.length} 项` : ''}${p.planEndDate ? `，交付 ${p.planEndDate}` : ''}${autoSchedule ? '，按交付日期倒排任务' : ''}）`,
@@ -488,7 +491,7 @@ function softValidateProposal(db, kind, p) {
     const proj = getProj(db, p.projectId)
     if (!proj) return { error: 'projectId 必填且须为真实项目 id（先 query 查项目）' }
     if ('status' in p) return { error: '项目状态仅可经结项/取消变更（S29）：请走 close_project / cancel_project 提议' }
-    const KEYS = ['name', 'clientName', 'priority', 'planStartDate', 'planEndDate', 'leadMemberId']
+    const KEYS = ['name', 'clientName', 'priority', 'planStartDate', 'planEndDate', 'leadMemberId', 'initExtra']
     const changes = []
     const payloadOut = { projectId: proj.id }
     for (const key of KEYS) {
@@ -508,7 +511,7 @@ function softValidateProposal(db, kind, p) {
       }
       payloadOut[key] = value
     }
-    if (!changes.length) return { error: '至少提供一个要变更的字段（name/clientName/priority/planStartDate/planEndDate/leadMemberId）' }
+    if (!changes.length) return { error: '至少提供一个要变更的字段（name/clientName/priority/planStartDate/planEndDate/leadMemberId/initExtra）' }
     return { payload: payloadOut, summary: `项目「${proj.name}」变更：${changes.join('、')}` }
   }
   return { error: `未知提议类型 ${kind}` }
@@ -520,4 +523,108 @@ async function runTrigger(db, payload, ctx) {
   const spec = ACTIONS[name]
   const result = await spec.run(payload.params || {}, { db, member: ctx.member, llm: ctx.llm ?? undefined })
   return { type: 'receipt', text: `已触发 ${name}：${JSON.stringify(result).slice(0, 600)}` }
+}
+
+// —— S64（v0.69，K49）：机器人触发 AI 初始分配（触发 + 确认卡人审，无直写）——
+
+/** 专题群定域（与 morningScopeProjectId 同款查询）：本群绑定 dedicated 渠道才回落到该群项目。 */
+function scopedProjectId(db, evt) {
+  if (evt?.chatType !== 'group') return null
+  const ch = db.prepare('SELECT channel_type, project_id FROM channels WHERE platform = ? AND group_key = ?')
+    .get(evt.platform || 'feishu', evt.chatId)
+  return ch?.channel_type === 'dedicated' ? ch.project_id : null
+}
+
+/** 后台推送的消息落 bot_reply（与 command.js recordReplyRow 同口径）：定时抽取跳过机器人自身消息的依据。 */
+function recordBotReply(db, messageId, chatId, text, intent) {
+  if (!messageId) return
+  db.prepare(
+    `INSERT OR IGNORE INTO bot_commands (message_id, platform, chat_id, chat_type, kind, raw_text, intent, created_at)
+     VALUES (?, 'feishu', ?, NULL, 'bot_reply', ?, ?, ?)`
+  ).run(messageId, chatId || null, text ? String(text).slice(0, 2000) : null, intent ?? null, Date.now())
+}
+
+/** 草案展示行：任务/责任人/计划起止（责任人 id → 姓名；标题截断防卡片撑爆）。 */
+function assignmentRows(db, assignments) {
+  const nameStmt = db.prepare('SELECT name FROM members WHERE id = ?')
+  return assignments.map((a) => ({
+    title: String(a.title ?? `#${a.taskId}`).slice(0, 30),
+    owner: a.responsibleMemberId == null ? '未指派' : (nameStmt.get(a.responsibleMemberId)?.name || `#${a.responsibleMemberId}`),
+    plan: `${a.planStartDate || '?'} ~ ${a.planEndDate || '?'}`,
+  }))
+}
+
+/**
+ * S64 机器人触发初始分配：口述要求提炼进 extra → 复用 S44 异步作业（带 onDone）→ 立即回执「生成中」；
+ * 草案完成后由 onDone 落 init_assignments 提议（持久化 pending，卡片长期有效不受作业 TTL 限制）
+ * 并把确认卡推回触发会话；任意已绑定成员点「确认应用」后 applyInitAssignments(platform='bot') 生效。
+ * 404/409/503/400 由 startDraftInitAssignments 同步抛出 → runWriteTool 统一转 refused 中文文案。
+ */
+async function writeInitAssign(db, payload, ctx) {
+  if (typeof ctx.push !== 'function') {
+    return refused('初始分配触发仅 IM 会话可用——web 请用项目详情页「✨ AI 初始分配」，Agent 通道用 draft/apply_init_assignments')
+  }
+  const projectId = Number(payload.projectId) || scopedProjectId(db, ctx.evt)
+  const project = projectId ? db.prepare('SELECT id, name, status FROM projects WHERE id = ?').get(projectId) : null
+  if (!project) {
+    return refused('初始分配需要明确项目：请给 projectId，或在项目专题群里 @我 触发（专题群默认落到本群项目）')
+  }
+  const { startDraftInitAssignments } = await import('../initAssign.js')
+  const chatId = ctx.evt?.chatId
+  const job = startDraftInitAssignments(db, project.id, {
+    llm: ctx.llm ?? undefined,
+    extra: payload.extra, // 归一在 startDraft 同步做（非法 → 400 → refused）
+    onDone: (done) => {
+      void pushInitAssignResult(db, done, {
+        project, chatId, memberId: ctx.member.id, push: ctx.push, secret: ctx.botSecret,
+      })
+    },
+  })
+  return {
+    type: 'receipt',
+    text: `初始分配草案生成中（作业 ${job.draftId}，约 1-2 分钟）——完成后我会把草案卡片发到本会话，点「确认应用」后批量生效。${job.extra ? `\n本次追加要求：${job.extra}` : ''}`,
+  }
+}
+
+/** 作业终态推送（onDone 回调，尽力而为不抛出）：done 有任务→提议+确认卡（失败降级文本）；
+ *  done 无任务 / error → 文本提示；无签名密钥发不了卡 → 文本引导走 web。 */
+async function pushInitAssignResult(db, job, { project, chatId, memberId, push, secret }) {
+  const pushText = async (text) => {
+    const sent = await push({ chatId, text })
+    recordBotReply(db, sent?.messageId, chatId, text, 'write:init_assign')
+  }
+  try {
+    if (job.status === 'error') {
+      await pushText(`初始分配草案生成失败：${job.error}——请稍后重试；若持续失败请管理员检查 LLM 配置。`)
+      return
+    }
+    if (!job.assignments?.length) {
+      await pushText(`初始分配：${job.warnings?.[0] || '没有可分配任务'}——无需生成草案。`)
+      return
+    }
+    const prop = createProposal(db, {
+      kind: 'init_assignments',
+      payload: { projectId: project.id, assignments: job.assignments, extra: job.extra ?? null },
+      summary: `初始分配草案：项目「${project.name}」${job.assignments.length} 项任务的责任人与计划起止（确认后批量生效）`,
+      proposedBy: memberId,
+    })
+    if (!secret) {
+      await pushText(`初始分配草案已生成（提议 #${prop.id}，${job.assignments.length} 项）——本环境未配置卡片签名密钥，请在 web 项目详情页「AI 初始分配」确认应用。`)
+      return
+    }
+    const cardDesc = `初始分配草案卡片（提议 #${prop.id}，${job.assignments.length} 项任务）`
+    const card = buildInitAssignCard({
+      proposalId: prop.id, projectName: project.name,
+      rows: assignmentRows(db, job.assignments), warnings: job.warnings || [], extra: job.extra ?? null,
+    }, secret)
+    let sent
+    try {
+      sent = await push({ chatId, card })
+    } catch {
+      sent = await push({ chatId, text: `初始分配草案已生成（提议 #${prop.id}，${job.assignments.length} 项）——卡片发送失败，请在 web 项目详情页「AI 初始分配」确认应用。` })
+    }
+    recordBotReply(db, sent?.messageId, chatId, cardDesc, 'write:init_assign')
+  } catch (e) {
+    try { await pushText(`初始分配草案推送失败：${e.message}`) } catch { /* 尽力而为 */ }
+  }
 }

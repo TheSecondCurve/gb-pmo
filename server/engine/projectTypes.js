@@ -14,16 +14,22 @@ const TYPE_COLS = 'pt.id, pt.code, pt.name, pt.description, pt.init_prompt, pt.s
 /** 初始化提示词上限（S39，v0.42）：自然语言分配/倒排规则，提示词不是文档库。 */
 export const MAX_INIT_PROMPT = 2000
 
-/** 初始化提示词载荷归一：undefined=不动（patch 语义）；null/空串 → NULL；非字符串/超长 400。 */
-export function normalizeInitPrompt(value) {
+/** 提示词类文本通用归一（S64 起三层要求共用：类型 init_prompt / 项目 init_extra / 本次 extra 同规则）：
+ * undefined=不动（patch 语义）；null/空串 → NULL；非字符串/超长 400。 */
+export function normalizePromptText(value, fieldLabel = '初始化提示词') {
   if (value === undefined) return undefined
   if (value === null) return null
-  if (typeof value !== 'string') throw Object.assign(new Error('初始化提示词须为字符串'), { statusCode: 400 })
+  if (typeof value !== 'string') throw Object.assign(new Error(`${fieldLabel}须为字符串`), { statusCode: 400 })
   const text = value.trim()
   if (text.length > MAX_INIT_PROMPT) {
-    throw Object.assign(new Error(`初始化提示词不超过 ${MAX_INIT_PROMPT} 字`), { statusCode: 400 })
+    throw Object.assign(new Error(`${fieldLabel}不超过 ${MAX_INIT_PROMPT} 字`), { statusCode: 400 })
   }
   return text || null
+}
+
+/** 初始化提示词载荷归一：undefined=不动（patch 语义）；null/空串 → NULL；非字符串/超长 400。 */
+export function normalizeInitPrompt(value) {
+  return normalizePromptText(value)
 }
 
 /** 参考 url 校验（与实例侧 task_refs 同规则；单一真相源，tasks.js 由此 import）。 */
