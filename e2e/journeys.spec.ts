@@ -204,7 +204,9 @@ test('J10 类型初始化提示词 + AI 初始分配：提示词保存回读；�
   expect(detail.tasks.every((t: { responsibleMemberId: number | null }) => t.responsibleMemberId === null)).toBe(true)
   await expect(page.getByPlaceholder(/默认未指派/)).toBeVisible()
 
-  // AI 初始分配入口在；e2e 环境无 LLM → 草案 503 给明确指引（S39-3 降级语义，不瞎生成）
+  // AI 初始分配入口在（S64：先配置要求再启动）；e2e 环境无 LLM → 草案 503 给明确指引（S39-3 降级语义，不瞎生成）
   await page.getByRole('button', { name: /AI 初始分配/ }).click()
+  await page.getByLabel(/本次追加要求/).fill('e2e 本次追加要求')
+  await page.getByRole('button', { name: '开始生成草案' }).click()
   await expect(page.getByText(/LLM 未配置/)).toBeVisible()
 })

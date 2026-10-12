@@ -1,15 +1,19 @@
-// 大脑·AI 初始分配草案（S39，v0.42 / design.md K21；S44，v0.45 / K24 异步化）：读类型初始化提示词
-//（project_types.init_prompt）+ 项目未删未完成任务清单 + 在职成员名册，产每条任务的「责任人 + 计划起止」批量分配草案。
-// 信任边界：草案不落库——web 弹窗人审后应用；Agent apply_init_assignments 可直写（限定例外，
-// 仅限该 action，逐行校验+审计）。LLM 未配置给明确指引，不降级瞎生成（templates.js 同构）。
+// 大脑·AI 初始分配草案（S39，v0.42 / design.md K21；S44，v0.45 / K24 异步化；S64，v0.69 / K49 三层要求）：
+// LLM 输入按「类型初始化提示词（project_types.init_prompt）→ 项目补充要求（projects.init_extra）→ 本次触发追加（extra）」
+// 三层依次拼装（未配置层跳过不占位），连同项目未删未完成任务清单 + 在职成员名册，产每条任务的
+// 「责任人 + 计划起止」批量分配草案。信任边界：草案不落库——web 弹窗人审后应用；Agent apply_init_assignments
+// 可直写（限定例外，仅限该 action，逐行校验+审计）；机器人面=触发 + 草案确认卡人审后生效（K49，无直写）。
+// LLM 未配置给明确指引，不降级瞎生成（templates.js 同构）。
 // v0.45（S44）：请求模型异步化——启动同步校验后 202 返回 draftId（LLM 进程内后台执行），轮询取
 // running/done/error（错误以 200 载荷返回）。原因：部署边缘对源站响应 ~120s 即 524，GLM 大 JSON
 // 稳态要约 2 分钟，同步等待模型与边缘上限架构性不兼容。作业注册表=进程内 Map（瞬态不落库，重启即作废）。
+// v0.69（S64）：startDraftInitAssignments 增 opts.extra（本次追加）与 opts.onDone（终态回调，机器人路推卡片用）。
 
 import { getLlm, parseJsonLoose } from './llm.js'
 import { camelizeRow, camelizeRows } from '../db/index.mjs'
 import { today } from '../db/time.js'
 import { isCalendarDay } from '../engine/tasks.js'
+import { normalizePromptText } from '../engine/projectTypes.js'
 
 /** 同步前置校验（启动与执行共用）：项目存在（404）且非终态（409 任务面只读）。 */
 function preflight(db, projectId) {
@@ -37,10 +41,12 @@ function assertLlm(db, llmOverride, projectId) {
 /**
  * 产初始分配草案（不落库，S44 起由作业注册表后台调用）。返回 { assignments: [{taskId, title, responsibleMemberId, planStartDate, planEndDate}], warnings: [] }
  * —— assignments 覆盖项目全部未删未完成任务（LLM 遗漏/非法行 → 补「保持现状」行，草案=完整目标状态）。
+ * S64：opts.extra = 本次触发追加要求（≤2000 字，与类型/项目两层同规则归一；未给跳过该层）。
  */
-export async function draftInitAssignments(db, projectId, { llm: llmOverride } = {}) {
+export async function draftInitAssignments(db, projectId, { llm: llmOverride, extra } = {}) {
   const project = preflight(db, projectId)
   const llm = assertLlm(db, llmOverride, projectId)
+  const extraText = normalizePromptText(extra, '本次追加要求') ?? null
 
   const tasks = camelizeRows(
     db.prepare(
@@ -54,17 +60,24 @@ export async function draftInitAssignments(db, projectId, { llm: llmOverride } =
   const members = camelizeRows(
     db.prepare(`SELECT id, name, team FROM members WHERE status = 'active' ORDER BY id`).all()
   )
+  // S64（K49）：三层要求依次拼装——类型 init_prompt（未配置保留 S39 通用兜底句）→ 项目 init_extra → 本次 extra；
+  // 后两层未配置整行跳过不占位
+  const requirementLines = [
+    `初始化提示词：${project.typeInitPrompt?.trim() || '（未配置——按任务标题语义与成员名册自行匹配责任人，并在项目周期内按任务顺序铺开排期）'}`,
+    project.initExtra?.trim() ? `项目补充要求：${project.initExtra.trim()}` : null,
+    extraText ? `本次追加要求：${extraText}` : null,
+  ].filter(Boolean)
   const out = await llm.complete(
     [
       {
         role: 'system',
-        content: `你是企业项目大脑的初始分配器。根据项目信息、未完成任务清单、在职成员名册与「初始化提示词」（管理员配置的本类项目任务分配与倒排日期规则），为每条任务给出责任人与计划起止，输出 JSON {"assignments":[{"taskId":1,"responsibleMemberId":2|null,"planStartDate":"YYYY-MM-DD"|null,"planEndDate":"YYYY-MM-DD"|null}]}。
+        content: `你是企业项目大脑的初始分配器。根据项目信息、未完成任务清单、在职成员名册与「初始化提示词/项目补充要求/本次追加要求」（管理员配置与本次触发的任务分配与倒排日期规则，后者优先级更高），为每条任务给出责任人与计划起止，输出 JSON {"assignments":[{"taskId":1,"responsibleMemberId":2|null,"planStartDate":"YYYY-MM-DD"|null,"planEndDate":"YYYY-MM-DD"|null}]}。
 规则：每条任务恰好一行，taskId 只能取任务清单里的 id；responsibleMemberId 只能取成员名册里的 id，没有把握就给 null（未指派）；日期一律真实日历日 YYYY-MM-DD，截止不早于开始，尽量落在项目计划周期内、不早于今天；任务现值不需要调整时照抄现值；只输出 JSON。`,
       },
       {
         role: 'user',
         content: `项目：${project.name}（类型 ${project.typeName || '未知'}；计划 ${project.planStartDate || '未定'} ~ ${project.planEndDate || '未定'}；今天 ${today()}）
-初始化提示词：${project.typeInitPrompt?.trim() || '（未配置——按任务标题语义与成员名册自行匹配责任人，并在项目周期内按任务顺序铺开排期）'}
+${requirementLines.join('\n')}
 在职成员名册：${members.map((m) => `#${m.id} ${m.name}${m.team ? `（${m.team}）` : ''}`).join('、') || '（空）'}
 未完成任务清单：
 ${tasks.map((t) => `#${t.id} ${t.title}（现责任人 ${t.responsibleName || '未指派'}，现计划 ${t.planStartDate || '?'} ~ ${t.planEndDate || '?'}）`).join('\n')}`,
@@ -137,23 +150,30 @@ function pruneJobs() {
 
 /**
  * 启动草案作业：同步前置校验（404/409/503 与执行同口径），立即返回 {draftId, status:'running'}；
- * LLM 进程内后台执行，结果/错误落注册表。
+ * LLM 进程内后台执行，结果/错误落注册表。S64：opts.extra=本次追加要求（同步归一，非法 400）；
+ * opts.onDone(job) 在作业终态（done/error）时回调（进程内随作业生命周期，机器人路推卡片用）。
  */
-export function startDraftInitAssignments(db, projectId, { llm: llmOverride } = {}) {
+export function startDraftInitAssignments(db, projectId, { llm: llmOverride, extra, onDone } = {}) {
   preflight(db, projectId) // 同步 404/409
   const llm = assertLlm(db, llmOverride, projectId) // 同步 503（并把已解析的适配器传入后台，避免二次解析）
+  const extraText = normalizePromptText(extra, '本次追加要求') ?? null // 同步归一：非法 extra 立即 400，不等后台
   pruneJobs()
   const draftId = `d${Date.now().toString(36)}${(++jobSeq).toString(36)}`
-  const job = { projectId: Number(projectId), status: 'running', createdAt: Date.now() }
+  const job = { projectId: Number(projectId), status: 'running', createdAt: Date.now(), extra: extraText }
   jobs.set(draftId, job)
-  void draftInitAssignments(db, projectId, { llm })
+  void draftInitAssignments(db, projectId, { llm, extra: extraText })
     .then((out) => {
       job.status = 'done'; job.assignments = out.assignments; job.warnings = out.warnings; job.doneAt = Date.now()
     })
     .catch((e) => {
       job.status = 'error'; job.error = String(e?.message || '草案生成失败'); job.doneAt = Date.now()
     })
-  return { draftId, status: 'running' }
+    .finally(() => {
+      if (typeof onDone === 'function') {
+        try { onDone({ ...job }) } catch { /* 回调失败不影响作业状态（推送尽力而为） */ }
+      }
+    })
+  return { draftId, status: 'running', extra: extraText } // extra 回显（路由审计/Agent 回执用）
 }
 
 /** 轮询作业：running（含 elapsedMs）/ done（assignments/warnings）/ error（message）；他项目或不存在/过期 → 404。 */

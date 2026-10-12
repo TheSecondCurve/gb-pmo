@@ -435,7 +435,7 @@ function TimelineView({ rows }: { rows: ProjectRow[] }) {
 function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose: () => void; onDone: () => Promise<void> }) {
   const { toast } = useStore()
   const [types, setTypes] = useState<ProjectType[]>([])
-  const [form, setForm] = useState({ name: '', typeCode: '', leadMemberId: '', priority: 'medium', clientName: '', planStartDate: '', planEndDate: '' })
+  const [form, setForm] = useState({ name: '', typeCode: '', leadMemberId: '', priority: 'medium', clientName: '', planStartDate: '', planEndDate: '', initExtra: '' })
   const [tasksText, setTasksText] = useState('')
   const [tasksDirty, setTasksDirty] = useState(false) // 未改动=按类型清单实例化（source=template）；改动过=自定义（source=manual）
   const [backfill, setBackfill] = useState(false) // S1-7：按交付日期倒排任务计划起止
@@ -481,6 +481,7 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
     try {
       await api.createProject({
         ...form, leadMemberId: Number(form.leadMemberId),
+        ...(form.initExtra.trim() ? { initExtra: form.initExtra.trim() } : {}), // S64：项目级初始分配补充要求（可空）
         ...(tasksDirty ? { tasks: titles } : {}), // 未改动→缺省按类型清单（S1-2）；改动过→显式覆盖（S1-6，空清单=空项目）
         ...(backfill && form.planEndDate ? { autoSchedule: true } : {}),
       })
@@ -521,6 +522,9 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
       </div>
       <Field label={`任务清单（每行一条；选类型自动预填${tasksDirty ? '，已自定义——不携带类型预设的参考资料' : '，含类型逐步骤参考资料（立项后任务行可见「参考 N」）'}；留空=空项目）`}>
         <textarea className={inputCls} rows={8} value={tasksText} onChange={(e) => { setTasksText(e.target.value); setTasksDirty(true) }} placeholder={'需求确认与范围冻结\n技术方案与排期\n开发联调\n结项复盘'} />
+      </Field>
+      <Field label="初始分配补充要求（可选，S64：本项目的特例，如「这期张三牵头、开发任务多给李四」；AI 初始分配时与类型初始化提示词叠加）">
+        <textarea className={inputCls} rows={2} value={form.initExtra} onChange={(e) => set('initExtra', e.target.value)} placeholder="这期张三牵头，大部分开发任务给李四，11 月中前收口" />
       </Field>
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <Btn small disabled={!form.name.trim() || drafting} onClick={async () => {

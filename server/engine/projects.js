@@ -4,7 +4,7 @@ import { assertValue, label } from './enums.js'
 import { addEvent } from './events.js'
 import { audit } from './auth.js'
 import { memberName } from './members.js'
-import { resolveTypeForCreate, typeTaskItems, normalizeTypeTasks } from './projectTypes.js'
+import { resolveTypeForCreate, typeTaskItems, normalizeTypeTasks, normalizePromptText } from './projectTypes.js'
 
 const OPEN_STATUSES = ['active'] // S29（v0.28）三态：进行中→已结项/已取消
 const TERMINAL_STATUSES = ['closed', 'cancelled']
@@ -61,6 +61,7 @@ export function createProject(db, input, by) {
   const lead = db.prepare(`SELECT id, name FROM members WHERE id = ? AND status = 'active'`).get(leadMemberId)
   if (!lead) throw Object.assign(new Error('牵头人不存在或已离职'), { statusCode: 400 })
   const type = resolveTypeForCreate(db, { typeCode, templateCode })
+  const initExtra = normalizePromptText(input.initExtra, '初始分配补充要求') // S64：项目级补充要求（叠加类型 init_prompt）
   const customItems = normalizeTypeTasks(input.tasks)
   const items = customItems ?? typeTaskItems(db, type.id)
   const source = customItems !== undefined ? 'manual' : 'template'
@@ -71,10 +72,10 @@ export function createProject(db, input, by) {
   const created = db.transaction(() => {
     const info = db.prepare(
       `INSERT INTO projects (name, template_code, project_type_id, status, priority, lead_member_id, client_name,
-         plan_start_date, plan_end_date, actual_start_date, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         plan_start_date, plan_end_date, actual_start_date, init_extra, created_by, created_at, updated_at)
+       VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(name, type.code, type.id, priority, leadMemberId, clientName || null,
-      planStartDate || null, planEndDate || null, today(), by ?? null, now, now)
+      planStartDate || null, planEndDate || null, today(), initExtra ?? null, by ?? null, now, now)
     const projectId = Number(info.lastInsertRowid)
     const refCount = items.reduce((s, it) => s + it.refs.length, 0)
     const refStmt = db.prepare('INSERT INTO task_refs (task_id, title, url, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)')
@@ -191,6 +192,9 @@ export function updateProject(db, id, patch, by) {
     if (!lead) throw Object.assign(new Error('新牵头人不存在或已离职'), { statusCode: 400 })
     fields.lead_member_id = lead.id
   }
+  // S64：项目级初始分配补充要求可后改（同类型 init_prompt 归一规则）
+  const initExtra = normalizePromptText(patch.initExtra, '初始分配补充要求')
+  if (initExtra !== undefined) fields.init_extra = initExtra
   if (!Object.keys(fields).length) return getProjectDetail(db, id)
   fields.updated_at = Date.now()
   const tx = db.transaction(() => {
