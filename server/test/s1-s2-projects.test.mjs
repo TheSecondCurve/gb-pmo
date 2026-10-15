@@ -231,6 +231,38 @@ describe('S2 排期与任务维护', () => {
     expect(list2.body.records).toHaveLength(2)
   })
 
+  it('S2-5: web PATCH 维护里程碑四态；达成默认落北京当天，其他状态清实际日期；终态项目 409', async () => {
+    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
+      name: '里程碑状态维护', typeCode: 'lianmai_365', leadMemberId: ctx.members.lead.id, tasks: [],
+    })
+    const ms = await authed(ctx.app, cookie, 'POST', '/api/v1/milestones', {
+      projectId: p.body.id, name: '客户验收', planDate: '2026-11-01',
+    })
+    expect(ms.body.status).toBe('planned')
+
+    const met = await authed(ctx.app, cookie, 'PATCH', `/api/v1/milestones/${ms.body.id}`, { status: 'met' })
+    expect(met.status).toBe(200)
+    expect(met.body.status).toBe('met')
+    expect(met.body.actualDate).toBe(today())
+
+    const missed = await authed(ctx.app, cookie, 'PATCH', `/api/v1/milestones/${ms.body.id}`, { status: 'missed' })
+    expect(missed.status).toBe(200)
+    expect(missed.body.actualDate).toBeNull()
+    const reopened = await authed(ctx.app, cookie, 'PATCH', `/api/v1/milestones/${ms.body.id}`, { status: 'planned' })
+    expect(reopened.status).toBe(200)
+    expect(reopened.body.actualDate).toBeNull()
+    const cancelled = await authed(ctx.app, cookie, 'PATCH', `/api/v1/milestones/${ms.body.id}`, { status: 'cancelled' })
+    expect(cancelled.status).toBe(200)
+    expect(cancelled.body.actualDate).toBeNull()
+
+    const closed = await authed(ctx.app, cookie, 'POST', `/api/v1/projects/${p.body.id}/close`, { summary: '状态维护验收完成' })
+    expect(closed.status).toBe(200)
+    const readonly = await authed(ctx.app, cookie, 'PATCH', `/api/v1/milestones/${ms.body.id}`, { status: 'met' })
+    expect(readonly.status).toBe(409)
+    expect(readonly.body.message).toContain('只读')
+  })
+
   it('S5-2: 优先级调整立即生效并留事件痕迹（v0.47/S4-10：摘要写中文档位与操作人姓名）', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const p = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {

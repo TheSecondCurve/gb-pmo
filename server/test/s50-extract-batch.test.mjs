@@ -129,4 +129,61 @@ describe('S50 噪音预过滤与批量抽取', () => {
     const ev = db.prepare('SELECT * FROM project_events WHERE project_id = ? AND source_ref = ?').get(p.id, 'd2')
     expect(ev.event_type).toBe('progress')
   })
+
+  it('S50-5: 同项目跨分批同字段只应用最后明确值；同消息冲突转 pending', async () => {
+    ;({ db } = setupDb())
+    const members = seedMembers(db)
+    const p = createProject(db, { name: '跨批更新项目', typeCode: 'lianmai_365', leadMemberId: members.lead.id }, members.admin.id)
+    const ch = upsertChannel(db, { platform: 'feishu', groupKey: 'oc_cross_chunk', channelType: 'dedicated', projectId: p.id })
+    const target = p.tasks[0]
+    const t0 = Date.now() - 3600000
+    db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(t0 - 1000, target.id)
+    let calls = 0
+    const llm = fakeLlm(() => {
+      calls += 1
+      return JSON.stringify({ events: [{ msgIndex: 0, nature: 'suggestion', eventType: 'schedule_change', summary: `${target.title}改期`, targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'plan_end_date', targetValue: calls === 1 ? '2026-11-01' : '2026-11-10', confidence: 0.95 }] })
+    })
+    const messages = Array.from({ length: 10 }, (_, i) => ({ id: `cross_${i}`, speakerId: 'fs_zhang', text: `${target.title}更新 ${i}`, ts: t0 + i * 60000 }))
+    const stats = await ingestMessages(db, ch, messages, { llm })
+    expect(calls).toBe(2)
+    expect(stats.autoApplied).toBe(1)
+    expect(stats.suggestions).toBe(0)
+    expect(db.prepare('SELECT plan_end_date FROM tasks WHERE id = ?').get(target.id).plan_end_date).toBe('2026-11-10')
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM project_events WHERE target_task_id = ? AND nature = 'suggestion'`).get(target.id).n).toBe(1)
+
+    const conflictLlm = fakeLlm(() => JSON.stringify({ events: [
+      { msgIndex: 0, nature: 'suggestion', eventType: 'schedule_change', summary: '改到 11 日', targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'plan_end_date', targetValue: '2026-11-11', confidence: 0.96 },
+      { msgIndex: 0, nature: 'suggestion', eventType: 'schedule_change', summary: '改到 12 日', targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'plan_end_date', targetValue: '2026-11-12', confidence: 0.96 },
+    ] }))
+    const conflict = await ingestMessages(db, ch, [{ id: 'conflict_same_msg', speakerId: 'fs_zhang', text: `${target.title}改期但有歧义`, ts: t0 + 600000 }], { llm: conflictLlm })
+    expect(conflict.autoApplied).toBe(0)
+    expect(conflict.suggestions).toBe(1)
+    expect(db.prepare('SELECT plan_end_date FROM tasks WHERE id = ?').get(target.id).plan_end_date).toBe('2026-11-10')
+    expect(db.prepare(`SELECT status FROM project_events WHERE source_ref = 'conflict_same_msg'`).get().status).toBe('pending')
+  })
+
+  it('S50-6: 多消息批次缺 msgIndex 的更新不自动生效，只 pending；单消息可正常归因', async () => {
+    ;({ db } = setupDb())
+    const members = seedMembers(db)
+    const p = createProject(db, { name: '归因守卫项目', typeCode: 'lianmai_365', leadMemberId: members.lead.id }, members.admin.id)
+    const ch = upsertChannel(db, { platform: 'feishu', groupKey: 'oc_attribution', channelType: 'dedicated', projectId: p.id })
+    const target = p.tasks[0]
+    const llm = fakeLlm(() => JSON.stringify({ events: [{ nature: 'suggestion', eventType: 'status_change', summary: `${target.title}完成`, targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'status', targetValue: 'done', confidence: 0.97 }] }))
+    const stats = await ingestMessages(db, ch, [
+      { id: 'attr_1', speakerId: 'fs_zhang', text: `${target.title}完成了`, ts: Date.now() },
+      { id: 'attr_2', speakerId: 'fs_li', text: '另一条相关讨论', ts: Date.now() + 1000 },
+    ], { llm })
+    expect(stats.autoApplied).toBe(0)
+    expect(stats.suggestions).toBe(1)
+    expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get(target.id).status).toBe('todo')
+    expect(db.prepare(`SELECT status FROM project_events WHERE target_task_id = ? AND nature = 'suggestion'`).get(target.id).status).toBe('pending')
+
+    const noSource = p.tasks[1]
+    const noSourceLlm = fakeLlm(() => JSON.stringify({ events: [{ nature: 'suggestion', eventType: 'status_change', summary: `${noSource.title}完成`, targetObject: 'task', targetTaskId: noSource.id, targetName: noSource.title, targetField: 'status', targetValue: 'done', confidence: 0.97 }] }))
+    const noSourceStats = await ingestMessages(db, ch, [{ speakerId: 'fs_zhang', text: `${noSource.title}完成了`, ts: Date.now() + 2000 }], { llm: noSourceLlm })
+    expect(noSourceStats.autoApplied).toBe(0)
+    expect(noSourceStats.suggestions).toBe(1)
+    expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get(noSource.id).status).toBe('todo')
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM project_events WHERE target_task_id = ? AND nature = 'suggestion'`).get(noSource.id).n).toBe(1)
+  })
 })

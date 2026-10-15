@@ -263,6 +263,18 @@ export async function handleCardAction(db, cardEvt, opts = {}) {
           replyText = `已驳回：事件 #${e}，由 ${member.name} 操作。`
         }
       }
+    } else if (v.a === 'choose') {
+      if (hmac(secret, `choose:${v.e}:${v.o}`) !== v.s) {
+        replyText = '卡片签名校验失败，请重新发起指令'
+      } else if (!member) {
+        result = 'refused_permission'
+        replyText = '未识别操作者的飞书账号，无法选择候选对象'
+      } else {
+        const e = Number(v.e)
+        const confirmed = confirmEvent(db, e, member.id, { candidateIndex: Number(v.o) })
+        result = 'confirmed'
+        replyText = `已按所选对象生效：事件 #${e}（${confirmed.summary}），由 ${member.name} 确认。`
+      }
     } else if (v.a === 'bind') {
       if (hmac(secret, `bind:${v.g}:${v.p}`) !== v.s) {
         replyText = '卡片签名校验失败，请重新发起指令'

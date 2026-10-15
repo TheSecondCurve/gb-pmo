@@ -297,11 +297,18 @@ export function createMilestone(db, { projectId, name, planDate }, by) {
 export function updateMilestone(db, id, patch, by) {
   const cur = db.prepare('SELECT * FROM milestones WHERE id = ?').get(id)
   if (!cur) throw Object.assign(new Error('里程碑不存在'), { statusCode: 404 })
+  const project = db.prepare('SELECT status FROM projects WHERE id = ?').get(cur.project_id)
+  if (project?.status === 'closed' || project?.status === 'cancelled') {
+    throw Object.assign(new Error('项目已结项/取消，任务面只读'), { statusCode: 409 })
+  }
   const fields = {}
   if ('name' in patch) fields.name = patch.name
   if ('planDate' in patch) fields.plan_date = patch.planDate || null
   if ('actualDate' in patch) fields.actual_date = patch.actualDate || null
-  if ('status' in patch) fields.status = assertValue('milestoneStatus', patch.status)
+  if ('status' in patch) {
+    fields.status = assertValue('milestoneStatus', patch.status)
+    fields.actual_date = fields.status === 'met' ? (patch.actualDate || today()) : null
+  }
   if (!Object.keys(fields).length) return camelizeRow(cur)
   fields.updated_at = Date.now()
   const sets = Object.keys(fields).map((k) => `${k} = @${k}`).join(', ')

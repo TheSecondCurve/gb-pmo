@@ -45,6 +45,10 @@ function parseTables() {
       const list = tables.get(m[1])
       if (list) tables.set(m[1], list.filter((c) => c.name !== m[2]))
     }
+    for (const m of sql.matchAll(/ALTER TABLE (\w+) RENAME COLUMN (\w+) TO (\w+)/g)) {
+      const col = tables.get(m[1])?.find((c) => c.name === m[2])
+      if (col) col.name = m[3]
+    }
   }
   return tables
 }
@@ -128,7 +132,7 @@ client.sh action generate_person_digest '{}'
    - **tasks 已删行（deleted_at 非空，S36）一切查询都要排除**（\`AND deleted_at IS NULL\`）——它们已退出任务面/指标/结项校验。
    - 任务状态固定三档：todo/doing/done（v0.6，无 blocked/cancelled）；任务相互独立，无前置依赖。
    - 「任务参考资料」（S23，SOP/知识库链接）：\`SELECT title, url FROM task_refs WHERE task_id=<id> AND deleted_at IS NULL\`；写入补 created_by/created_at，删除=软删（UPDATE task_refs SET deleted_at=<epoch毫秒>）；日报/预警/个人梳理推送会自动附带给责任人。
-6. 建议事件的 target 字段组合：task → status/plan_start_date/plan_end_date/responsible_member_id；milestone → target_object='milestone' 且 plan_date。
+6. 建议事件的 target 字段组合：task → status/plan_start_date/plan_end_date/responsible_member_id；milestone → target_object='milestone' 且 plan_date/status（状态值 planned/met/missed/cancelled；met 自动落北京当天，其他状态清实际日期）。target_task_id 按 target_object 存任务或里程碑 id（历史字段名保留）。
 
 `
 

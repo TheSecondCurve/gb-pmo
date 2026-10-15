@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { setupDb, seedMembers } from './helpers.mjs'
 import { createProject } from '../engine/projects.js'
-import { addEvent, getEvent } from '../engine/events.js'
+import { addEvent, getEvent, confirmEvent } from '../engine/events.js'
 import { pushSuggestion } from '../brain/extract.js'
 import { handleCardAction } from '../brain/bot/command.js'
 import { BOT_SECRET, makeRecorder } from './bot-kit.mjs'
@@ -122,5 +122,43 @@ describe('S55 IM 建议确认卡闭环', () => {
     const s = crypto.createHmac('sha256', BOT_SECRET).update(`confirm:${evt.id}`).digest('hex').slice(0, 16)
     await handleCardAction(db, { operatorOpenId: 'fs_zhang', chatId: 'oc_x', value: { a: 'confirm', e: String(evt.id), s } }, { send, secret: BOT_SECRET })
     expect(db.prepare('SELECT status FROM milestones WHERE id = ?').get(ms.id).status).toBe('met')
+  })
+
+  it('S55-5: 任务与里程碑同名时卡片给候选对象按钮，选择后才按所选目标生效', async () => {
+    const p = db.prepare('SELECT id FROM projects WHERE name = ?').get('卡片项目')
+    const task = db.prepare('SELECT * FROM tasks WHERE project_id = ? ORDER BY id LIMIT 1').get(p.id)
+    db.prepare(`UPDATE tasks SET status = 'todo', actual_end_date = NULL WHERE id = ?`).run(task.id)
+    db.prepare(`INSERT INTO milestones (project_id, name, plan_date, status, created_at, updated_at) VALUES (?, ?, '2026-12-20', 'planned', ?, ?)`)
+      .run(p.id, task.title, Date.now(), Date.now())
+    const ms = db.prepare('SELECT * FROM milestones WHERE project_id = ? AND name = ?').get(p.id, task.title)
+    const evt = addEvent(db, {
+      projectId: p.id, businessTime: Date.now(), nature: 'suggestion', eventType: 'status_change',
+      summary: `「${task.title}」已完成（对象待确认）`, targetObject: 'task', targetTaskId: task.id,
+      targetField: 'status', targetValue: 'done', generatedBy: 'extraction', confidence: 0.96,
+      targetCandidates: [
+        { targetObject: 'task', targetTaskId: task.id, targetValue: 'done', label: `任务「${task.title}」` },
+        { targetObject: 'milestone', targetTaskId: ms.id, targetValue: 'met', label: `里程碑「${task.title}」` },
+      ],
+    })
+    expect(() => confirmEvent(db, evt.id, members.lead.id)).toThrow(/选择/)
+    expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id).status).toBe('todo')
+
+    const { send, sent } = makeRecorder()()
+    await pushSuggestion(db, getEvent(db, evt.id), { send, secret: BOT_SECRET })
+    const cardMsg = sent.find((m) => m.card)
+    const buttons = cardMsg.card.elements.flatMap((e) => e.actions || []).filter((a) => a.value?.a === 'choose')
+    expect(buttons).toHaveLength(2)
+    const milestoneBtn = buttons.find((a) => a.value.o === 1)
+    expect(milestoneBtn).toBeTruthy()
+    const ok = await handleCardAction(db, {
+      operatorOpenId: 'fs_zhang', chatId: 'oc_x', value: milestoneBtn.value,
+    }, { send, secret: BOT_SECRET })
+    expect(ok.result).toBe('confirmed')
+    expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get(task.id).status).toBe('todo')
+    expect(db.prepare('SELECT status FROM milestones WHERE id = ?').get(ms.id).status).toBe('met')
+    const after = db.prepare('SELECT status, decided_by, decided_candidate FROM project_events WHERE id = ?').get(evt.id)
+    expect(after.status).toBe('effective')
+    expect(after.decided_by).toBe(members.lead.id)
+    expect(JSON.parse(after.decided_candidate).targetObject).toBe('milestone')
   })
 })
