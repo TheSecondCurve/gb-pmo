@@ -67,8 +67,9 @@ export interface WikiBinding {
 /** S63（v0.68）：项目群全量汇总归档台账（wiki_archive_runs）。 */
 export interface WikiArchiveRun {
   id: number; projectId: number; status: 'running' | 'done' | 'failed'
-  stage?: 'fetch' | 'summarize' | 'images' | 'write' | 'done' | null
-  messageCount?: number | null; chunkCount?: number | null; quotesCount?: number | null; imageCount?: number | null
+  stage?: 'fetch' | 'summarize' | 'images' | 'files' | 'write' | 'done' | null
+  messageCount?: number | null; chunkCount?: number | null; quotesCount?: number | null
+  imageCount?: number | null; fileCount?: number | null; skippedFiles?: string | null
   truncated?: number; firstBlockId?: string | null; pageUrl?: string | null; error?: string | null
   createdBy?: number | null; createdAt: number; finishedAt?: number | null
 }
