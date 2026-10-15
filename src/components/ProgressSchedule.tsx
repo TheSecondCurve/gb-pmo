@@ -20,7 +20,7 @@ const MIN_DAY_PX = 2 // 轨道最小日宽：跨度长时撑出 min-width 触发
 const SEGS: { key: 'done' | 'doing' | 'todo'; label: string; cls: string }[] = [
   { key: 'done', label: '完成', cls: 'bg-[var(--color-ok)]' },
   { key: 'doing', label: '进行中', cls: 'bg-[var(--color-brand)]' },
-  { key: 'todo', label: '未开始', cls: 'bg-gray-300' },
+  { key: 'todo', label: '未开始', cls: 'bg-[var(--color-line-strong)]' },
 ]
 
 const BAR_COLOR: Record<TaskVisual, string> = {
@@ -46,15 +46,15 @@ export default function ProgressSchedule({ tasks, milestones, projectEndDate }: 
   )
 
   return (
-    <Card title={`进度与排期${s.total > 0 ? `（完成 ${s.done}/${s.total}）` : ''}`}>
+    <Card title={`01 · 进度与排期${s.total > 0 ? `（完成 ${s.done}/${s.total}）` : ''}`}>
       {s.total === 0 ? <Empty hint="暂无任务，进度与排期在创建任务后呈现" /> : (
         <>
           {/* 堆叠进度条：分段=状态，逾期计数独立徽章（双口径，逾期任务仍属 todo/doing 之一） */}
           <div data-testid="progress-strip">
             <div className="flex items-center gap-3">
-              <div className="flex h-2.5 min-w-24 flex-1 overflow-hidden rounded-full bg-gray-100">
+              <div className="flex h-2 min-w-24 flex-1 overflow-hidden rounded-full bg-[var(--color-panel)]">
                 {SEGS.map((seg) => s[seg.key] > 0 && (
-                  <div key={seg.key} data-seg={seg.key} className={seg.cls} style={{ width: `${(s[seg.key] / s.total) * 100}%` }} />
+                  <div key={seg.key} data-seg={seg.key} className={`progress-reveal ${seg.cls}`} style={{ width: `${(s[seg.key] / s.total) * 100}%` }} />
                 ))}
               </div>
               <span className="num shrink-0 text-[13px] font-medium">完成 {s.done}/{s.total}（{s.donePct}%）</span>
@@ -160,7 +160,7 @@ function TaskGantt({ tasks, milestones, axis, today, undated, est }: {
 
 function UndatedGroup({ undated }: { undated: TaskRow[] }) {
   return (
-    <div data-testid="task-gantt-unscheduled" className="mt-2 rounded-md bg-[var(--color-bg)] px-2.5 py-1.5 text-[12px] text-[var(--color-ink-soft)]">
+    <div data-testid="task-gantt-unscheduled" className="mt-3 rounded-[3px] bg-[var(--color-panel)] px-3 py-2 text-[12px] text-[var(--color-ink-soft)]">
       未排期（{undated.length}）：{undated.map((t) => t.title).join('、')}
     </div>
   )

@@ -40,7 +40,10 @@ export default function Chat() {
       } catch (e) { toast((e as Error).message, 'bad') }
     })()
   }, [activeId, toast])
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
+  useEffect(() => {
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+    bottomRef.current?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth' })
+  }, [messages])
 
   const create = async () => {
     const s = await api.createChatSession()
@@ -97,17 +100,17 @@ export default function Chat() {
   if (sessions == null) return <Spinner />
 
   return (
-    <div className="flex h-[calc(100dvh-6rem)] min-h-[26rem] gap-4 md:h-[calc(100dvh-7rem)]">
-      <aside className="hidden w-60 shrink-0 flex-col rounded-lg border border-[var(--color-line)] bg-[var(--color-card)] md:flex">
-        <div className="flex items-center justify-between border-b border-[var(--color-line)] px-3 py-2.5">
-          <span className="text-[13px] font-medium">会话</span>
+    <div className="editorial-enter flex h-[calc(100dvh-6rem)] min-h-[26rem] gap-5 md:h-[calc(100dvh-4rem)]">
+      <aside className="hidden w-60 shrink-0 flex-col rounded-[4px] border border-[var(--color-line)] bg-[var(--color-card)] md:flex">
+        <div className="flex items-center justify-between border-b border-[var(--color-line)] px-4 py-4">
+          <span className="display-type text-[19px] font-semibold">会话</span>
           <Btn small onClick={create}>＋ 新会话</Btn>
         </div>
-        <div className="flex-1 overflow-auto p-2 text-[13px]">
-          {sessions.length === 0 && <div className="px-2 py-4 text-[12px] text-[var(--color-ink-soft)]">还没有会话，点「新会话」开始。</div>}
+        <div className="flex-1 overflow-auto p-3 text-[13px]">
+          {sessions.length === 0 && <div className="px-2 py-4 text-[12px] leading-6 text-[var(--color-ink-soft)]">还没有会话，点「新会话」开始。</div>}
           {sessions.map((s) => (
             <div key={s.id}
-              className={`mb-1 rounded-md px-2 py-1.5 ${s.id === activeId ? 'bg-[var(--color-brand-soft)]' : 'hover:bg-[var(--color-bg)]'}`}>
+              className={`mb-1 rounded-[3px] border border-transparent px-3 py-2 transition-colors ${s.id === activeId ? 'border-[var(--color-line)] bg-[var(--color-brand-soft)] text-[var(--color-brand-deep)]' : 'hover:bg-[var(--color-panel)]'}`}>
               {editingId === s.id ? (
                 <input className={inputCls} value={editTitle} autoFocus
                   onChange={(e) => setEditTitle(e.target.value)}
@@ -131,7 +134,14 @@ export default function Chat() {
         </div>
       </aside>
 
-      <section className="flex min-w-0 flex-1 flex-col rounded-lg border border-[var(--color-line)] bg-[var(--color-card)]">
+      <section className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-[4px] border border-[var(--color-line)] bg-[var(--color-card)]">
+        <div className="hidden items-end justify-between border-b border-[var(--color-line)] px-5 py-4 md:flex">
+          <div>
+            <div className="editorial-kicker">Conversation / 03</div>
+            <h1 className="display-type mt-1 text-[24px] font-semibold">AI 助手</h1>
+          </div>
+          <div className="max-w-[260px] text-right text-[10px] leading-5 text-[var(--color-ink-faint)]">与飞书机器人同一大脑<br />先查后答，建议仍由你确认</div>
+        </div>
         {/* 移动端会话切换条（<768px，桌面用左栏）：下拉选会话 + 新建 */}
         <div className="flex items-center gap-2 border-b border-[var(--color-line)] px-3 py-2 md:hidden">
           <select
@@ -145,17 +155,20 @@ export default function Chat() {
           <Btn small onClick={() => void create()}>＋ 新会话</Btn>
         </div>
         {activeId == null ? (
-          <div className="flex flex-1 flex-col items-center justify-center gap-3 text-[var(--color-ink-soft)]">
-            <div className="text-[13px]">选择一个会话，或新建开始对话。</div>
+          <div className="flex flex-1 flex-col items-center justify-center gap-4 p-8 text-center text-[var(--color-ink-soft)]">
+            <div>
+              <div className="display-type text-[28px] text-[var(--color-ink)]">从一个问题开始。</div>
+              <div className="mt-2 text-[12px]">选择一个会话，或新建开始对话。</div>
+            </div>
             <Btn kind="primary" onClick={create}>＋ 新会话</Btn>
           </div>
         ) : (
           <>
-            <div className="flex-1 space-y-3 overflow-auto p-4">
+            <div className="flex-1 space-y-4 overflow-auto p-5 md:p-6">
               {messages.map((m) => (
                 <div key={m.id} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[80%] rounded-lg px-3 py-2 text-[13px] ${m.role === 'user'
-                    ? 'bg-[var(--color-brand-soft)] text-[var(--color-ink)]'
+                  <div className={`max-w-[78%] rounded-[4px] px-4 py-3 text-[13px] leading-6 ${m.role === 'user'
+                    ? 'bg-[var(--color-brand-soft)] text-[var(--color-brand-deep)]'
                     : 'border border-[var(--color-line)] bg-[var(--color-bg)]'}`}>
                     <div className="whitespace-pre-wrap break-words">{m.content}</div>
                     {m.role === 'assistant' && (m.meta?.eventId || m.meta?.proposalId) && (() => {
@@ -185,7 +198,7 @@ export default function Chat() {
               {busy && <div className="text-[12px] text-[var(--color-ink-soft)]">助手思考中…（先查后答，多轮可能要几秒）</div>}
               <div ref={bottomRef} />
             </div>
-            <div className="flex items-end gap-2 border-t border-[var(--color-line)] p-3">
+            <div className="flex items-end gap-3 border-t border-[var(--color-line)] bg-[var(--color-card)] p-4">
               <textarea className={inputCls + ' min-h-[2.6rem] resize-y'} rows={2} maxLength={2000}
                 placeholder={'试试：「现在有几个进行中的项目」「客户X系统登记风险：接口联调卡住」「1 号任务做完了」'}
                 value={input} disabled={busy}

@@ -38,10 +38,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   return (
     <Ctx.Provider value={{ member, ready, refresh, toast }}>
       {children}
-      <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2">
+      <div className="fixed bottom-5 right-5 z-50 flex max-w-[min(24rem,calc(100vw-2.5rem))] flex-col gap-2">
         {toasts.map((t) => (
-          <div key={t.id} className={`pop-in rounded-md px-3 py-2 text-[13px] shadow-md ${t.kind === 'bad' ? 'bg-[var(--color-bad)] text-white' : 'bg-[var(--color-ink)] text-white'}`}>
-            {t.msg}
+          <div key={t.id} className={`pop-in flex items-center gap-2.5 rounded-[4px] border px-4 py-3 text-[12px] leading-5 shadow-[var(--shadow-float)] ${t.kind === 'bad' ? 'border-[var(--color-bad)] bg-[var(--color-bad)] text-white' : 'border-[var(--color-ink)] bg-[var(--color-ink)] text-[var(--color-card)]'}`}>
+            <span aria-hidden="true" className={`h-1.5 w-1.5 shrink-0 rounded-full ${t.kind === 'bad' ? 'bg-white/75' : 'bg-[#9db1ff]'}`} />
+            <span>{t.msg}</span>
           </div>
         ))}
       </div>

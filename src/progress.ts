@@ -33,8 +33,8 @@ export function taskVisual(t: { status: string; isOverdue?: boolean }): TaskVisu
 
 /** 任务行整行浅底色（ProjectDetail 任务面）：todo 无底色保留 hover 反馈，其余状态各自浅底 */
 export const TASK_ROW_CLS: Record<TaskVisual, string> = {
-  todo: 'hover:bg-[var(--color-bg)]',
-  doing: 'bg-[var(--color-brand-soft)]',
-  done: 'bg-green-50',
-  overdue: 'bg-red-50',
+  todo: 'hover:bg-[var(--color-panel)]/55',
+  doing: 'bg-[var(--color-brand-soft)]/60',
+  done: 'bg-[var(--color-ok-soft)]/65',
+  overdue: 'bg-[var(--color-bad-soft)]/75',
 }
