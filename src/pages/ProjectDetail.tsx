@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { Sparkles } from 'lucide-react'
 import { fmtDateTime } from '../fmt'
 import { api } from '../api'
 import { useStore } from '../store'
 import { Badge, Btn, Card, Empty, Field, InlineSelect, InlineText, Modal, Spinner, inputCls } from '../components/ui'
+import { PageMasthead, SectionHeading } from '../components/editorial'
 import ProgressSchedule from '../components/ProgressSchedule'
 import { TASK_ROW_CLS, taskVisual } from '../progress'
 import {
@@ -96,7 +98,7 @@ export default function ProjectDetail({ id }: { id: number }) {
   ]
   const shownOther = otherEvents.filter((e) => !hiddenEventTypes.includes(e.eventType))
   const renderEvent = (e: EventRow) => (
-    <li key={e.id} className="rounded-md border border-[var(--color-line)] bg-[var(--color-card)] p-2.5 text-[13px]">
+    <li key={e.id} className="border-b border-[var(--color-line)] py-4 text-[13px] first:pt-0">
       <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px] text-[var(--color-ink-soft)]">
         <Badge tone={e.status === 'pending' ? 'warn' : e.status === 'effective' ? 'ok' : 'muted'}>{EVENT_STATUS_LABEL[e.status]}</Badge>
         <Badge tone="muted">{EVENT_TYPE_LABEL[e.eventType] || e.eventType}</Badge>
@@ -116,42 +118,53 @@ export default function ProjectDetail({ id }: { id: number }) {
   )
 
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <a className="text-[13px] text-[var(--color-brand)] hover:underline" href="#/projects">← 项目列表</a>
-        <h1 className="text-lg font-bold">{p.name}</h1>
-        <InlineSelect value={p.priority} options={PRIORITY_LABEL} onSubmit={async (v) => { await api.patchProject(id, { priority: v }); toast('优先级已调整并留痕'); await refresh() }} />
-        <Badge tone={p.status === 'active' ? 'ok' : 'muted'}>{PROJECT_STATUS_LABEL[p.status] || p.status}</Badge>
-        <span className="text-[12px] text-[var(--color-ink-soft)]">牵头人 {p.leadName}{p.clientName ? ` · 客户 ${p.clientName}` : ''}{readonly ? ' · 已归档只读' : ''}</span>
-        <span className="num flex items-center gap-1.5 text-[12px] text-[var(--color-ink-soft)]">
-          交付日期
-          {readonly ? (p.planEndDate || '—') : (
-            <InlineText type="date" value={p.planEndDate} onSubmit={async (v) => {
-              try { await api.patchProject(id, { planEndDate: v }); toast('交付日期已更新'); await refresh() } catch (e) { toast((e as Error).message, 'bad') }
-            }} />
-          )}
-          {p.daysToDelivery != null && (p.daysToDelivery >= 0
-            ? <Badge tone={p.daysToDelivery <= 3 ? 'warn' : 'muted'}>{p.daysToDelivery === 0 ? '今日交付' : `剩 ${p.daysToDelivery} 天`}</Badge>
-            : <Badge tone="bad">超期 {-p.daysToDelivery} 天</Badge>)}
-        </span>
-        <div className="ml-auto flex gap-2">
-          <Btn onClick={async () => setDigesting(true)} disabled={digesting}>🧠 生成梳理（S15）</Btn>
-          {!readonly && <Btn kind="danger" onClick={() => setClosing(true)}>结项（S8）</Btn>}
-          {!readonly && <Btn kind="ghost" onClick={() => setCancelling(true)}>取消项目</Btn>}
-          {/* S37 硬删除：物理抹除全部数据（与「取消」的留痕语义互补），仅管理员，双重确认 */}
-          {member?.role === 'admin' && (
-            <Btn kind="ghost" onClick={async () => {
-              if (!confirm(`彻底删除项目「${p.name}」？物理删除不可恢复：任务/里程碑/事件/渠道绑定等全部数据将从库中抹除（与「取消」的留痕语义不同）。`)) return
-              if (!confirm(`再次确认：删除后仅存一条审计快照，数据不可恢复。确定删除「${p.name}」？`)) return
-              try {
-                await api.deleteProject(p.id)
-                toast('项目已彻底删除')
-                location.hash = '#/projects'
-              } catch (e) { toast((e as Error).message, 'bad') }
-            }}>彻底删除</Btn>
-          )}
-        </div>
-      </div>
+    <div className="space-y-8 md:space-y-10">
+      <div><a className="editorial-link text-[12px] text-[var(--color-ink-soft)]" href="#/projects">← 返回项目组合</a></div>
+      <PageMasthead
+        kicker={`Project file / #${p.id}`}
+        title={p.name}
+        description={(
+          <div className="flex flex-wrap items-center gap-2">
+            <InlineSelect value={p.priority} options={PRIORITY_LABEL} onSubmit={async (v) => { await api.patchProject(id, { priority: v }); toast('优先级已调整并留痕'); await refresh() }} />
+            <Badge tone={p.status === 'active' ? 'ok' : 'muted'}>{PROJECT_STATUS_LABEL[p.status] || p.status}</Badge>
+            <span className="text-[12px] text-[var(--color-ink-soft)]">牵头人 {p.leadName}{p.clientName ? ` · 客户 ${p.clientName}` : ''}{readonly ? ' · 已归档只读' : ''}</span>
+          </div>
+        )}
+        aside={(
+          <div className="min-w-[180px] md:border-l md:border-[var(--color-line-strong)] md:pl-5">
+            <div className="text-[9px] font-semibold tracking-[0.16em] text-[var(--color-ink-faint)]">DELIVERY DATE</div>
+            <span className="num mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--color-ink-soft)]">
+              {readonly ? (p.planEndDate || '—') : (
+                <InlineText type="date" value={p.planEndDate} onSubmit={async (v) => {
+                  try { await api.patchProject(id, { planEndDate: v }); toast('交付日期已更新'); await refresh() } catch (e) { toast((e as Error).message, 'bad') }
+                }} />
+              )}
+              {p.daysToDelivery != null && (p.daysToDelivery >= 0
+                ? <Badge tone={p.daysToDelivery <= 3 ? 'warn' : 'muted'}>{p.daysToDelivery === 0 ? '今日交付' : `剩 ${p.daysToDelivery} 天`}</Badge>
+                : <Badge tone="bad">超期 {-p.daysToDelivery} 天</Badge>)}
+            </span>
+          </div>
+        )}
+        actions={(
+          <div className="flex max-w-[520px] flex-wrap gap-2 md:justify-end">
+            <Btn onClick={async () => setDigesting(true)} disabled={digesting}><Sparkles aria-hidden="true" size={14} />生成梳理（S15）</Btn>
+            {!readonly && <Btn kind="danger" onClick={() => setClosing(true)}>结项（S8）</Btn>}
+            {!readonly && <Btn kind="ghost" onClick={() => setCancelling(true)}>取消项目</Btn>}
+            {/* S37 硬删除：物理抹除全部数据（与「取消」的留痕语义互补），仅管理员，双重确认 */}
+            {member?.role === 'admin' && (
+              <Btn kind="ghost" onClick={async () => {
+                if (!confirm(`彻底删除项目「${p.name}」？物理删除不可恢复：任务/里程碑/事件/渠道绑定等全部数据将从库中抹除（与「取消」的留痕语义不同）。`)) return
+                if (!confirm(`再次确认：删除后仅存一条审计快照，数据不可恢复。确定删除「${p.name}」？`)) return
+                try {
+                  await api.deleteProject(p.id)
+                  toast('项目已彻底删除')
+                  location.hash = '#/projects'
+                } catch (e) { toast((e as Error).message, 'bad') }
+              }}>彻底删除</Btn>
+            )}
+          </div>
+        )}
+      />
 
       {readonly && p.closeoutSummary && (
         <Card title={`结束原因 / 复盘记录（${p.status === 'closed' ? '已结项' : '已取消'} · 只读）`}><div className="whitespace-pre-wrap text-[13px]">{p.closeoutSummary}</div></Card>
@@ -161,11 +174,11 @@ export default function ProjectDetail({ id }: { id: number }) {
           S57（v0.62）：进度与甘特只认工作类——纯提醒送达不算工作完成度（与 brief/metrics 口径一致，K40）。 */}
       <ProgressSchedule tasks={p.tasks.filter((t) => t.kind !== 'reminder')} milestones={p.milestones} projectEndDate={p.planEndDate} />
 
-      <Card title={`任务面（${p.tasks.length}）${readonly ? ' · 只读' : ''}`} actions={!readonly ? (
+      <Card title={`02 · 任务面（${p.tasks.length}）${readonly ? ' · 只读' : ''}`} actions={!readonly ? (
         <div className="flex gap-2">
           {/* S39：AI 初始分配——按类型初始化提示词批量产「责任人+排期」草案，人审后一键应用 */}
           {p.tasks.some((t) => t.status !== 'done') && (
-            <Btn small onClick={() => setInitAssigning(true)} title="按类型初始化提示词批量分配责任人与计划起止（草案可改，应用后生效）">✨ AI 初始分配</Btn>
+            <Btn small onClick={() => setInitAssigning(true)} title="按类型初始化提示词批量分配责任人与计划起止（草案可改，应用后生效）"><Sparkles aria-hidden="true" size={13} />AI 初始分配</Btn>
           )}
           <Btn small onClick={() => void 0} title="底部添加行">在下方添加</Btn>
         </div>
@@ -173,8 +186,8 @@ export default function ProjectDetail({ id }: { id: number }) {
         {p.tasks.length === 0 ? <Empty hint="暂无任务（自由创建项目可手工添加）" /> : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[44rem] text-[13px]">
-              <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
-                <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap">
+              <thead className="text-left text-[10px] font-medium tracking-[0.07em] text-[var(--color-ink-soft)]">
+                <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap [&>th]:px-3 [&>th]:py-3">
                   <th className="py-1.5">任务</th><th>责任人（唯一）</th><th>状态</th><th>计划开始</th><th>计划结束</th><th>备注</th><th>标记</th><th></th>
                 </tr>
               </thead>
@@ -184,8 +197,8 @@ export default function ProjectDetail({ id }: { id: number }) {
                   const visual = taskVisual(t)
                   const statusTone = TASK_STATUS_TONE[t.status] || 'muted'
                   return (
-                  <tr key={t.id} data-testid="task-row" data-visual={visual} className={`border-b border-[var(--color-line)] last:border-0 ${TASK_ROW_CLS[visual]}`}>
-                    <td className={`py-1 ${t.status === 'done' ? 'text-[var(--color-ink-soft)]' : ''}`}>
+                  <tr key={t.id} data-testid="task-row" data-visual={visual} className={`border-b border-[var(--color-line)] last:border-0 [&>td]:px-3 [&>td]:py-3 ${TASK_ROW_CLS[visual]}`}>
+                    <td className={`${t.status === 'done' ? 'text-[var(--color-ink-soft)]' : ''}`}>
                       {/* S2-4（v0.48）：标题旁展示稳定编号 #id——群内/任意渠道按编号锁定唯一任务（与机器人盘点/事件留痕同口径）；编号只读，不进标题编辑态 */}
                       <span className="num mr-1.5 text-[12px] text-[var(--color-ink-soft)]">#{t.id}</span>
                       {readonly ? t.title : (
@@ -246,7 +259,9 @@ export default function ProjectDetail({ id }: { id: number }) {
         {!readonly && <AddTask projectId={id} members={activeMembers} onDone={refresh} />}
       </Card>
 
-      <div className="grid gap-4 md:grid-cols-2">
+      <section>
+        <SectionHeading index="03" title="项目资产" />
+        <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
         <Card title={`里程碑（${p.milestones.length}）`}>
           {p.milestones.length === 0 ? <Empty hint="暂无里程碑" /> : (
             <ul className="space-y-1 text-[13px]">
@@ -309,9 +324,10 @@ export default function ProjectDetail({ id }: { id: number }) {
             </div>
           ) : <Empty hint="未绑定知识库页面——绑定后在群里说「记一下…」即可写入" />}
         </Card>
-      </div>
+        </div>
+      </section>
 
-      <Card title={`讨论面 · 事件流（${events.length}，append-only）`}>
+      <Card title={`04 · 讨论面 · 事件流（${events.length}，append-only）`}>
         {/* S4-7（v0.46/K25）：多条待确认建议时提供一键批量处理——同口子逐条应用，聚合回执 */}
         {pendingSuggestions.length >= 2 && (
           <div className="mb-3 flex items-center gap-2 rounded-md border border-[var(--color-line)] bg-[var(--color-panel)] p-2 text-[12px]">
@@ -321,7 +337,7 @@ export default function ProjectDetail({ id }: { id: number }) {
           </div>
         )}
         {events.length === 0 ? <Empty hint="暂无事件：绑定渠道后由大脑自动抽取，或手动添加" /> : (
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-6 md:grid-cols-2 2xl:grid-cols-4">
             {EVENT_PINNED_COLS.map((col) => (
               <EventColumn
                 key={col.key} title={col.title} testid={`event-col-${col.key}`}
@@ -385,14 +401,14 @@ function EventColumn({ title, testid, events, emptyHint, toolbar, renderItem }: 
   toolbar?: ReactNode; renderItem: (e: EventRow) => ReactNode
 }) {
   return (
-    <section data-testid={testid} className="flex flex-col rounded-md border border-[var(--color-line)]">
-      <header className="flex items-center gap-2 border-b border-[var(--color-line)] px-2.5 py-1.5 text-[12px] font-semibold">
+    <section data-testid={testid} className="flex flex-col border-t border-[var(--color-ink)] pt-1">
+      <header className="flex items-center gap-2 py-2.5 text-[12px] font-semibold">
         {title}
         <Badge tone="muted">{events.length}</Badge>
       </header>
       {toolbar}
-      {events.length === 0 ? <div className="p-2"><Empty hint={emptyHint} /></div> : (
-        <ul className="max-h-[28rem] space-y-2 overflow-y-auto p-2">{events.map(renderItem)}</ul>
+      {events.length === 0 ? <Empty hint={emptyHint} /> : (
+        <ul className="max-h-[28rem] space-y-0 overflow-y-auto pr-2">{events.map(renderItem)}</ul>
       )}
     </section>
   )

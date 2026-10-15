@@ -4,6 +4,7 @@ import ProjectAdmin from './admin/ProjectAdmin'
 import UserAdmin from './admin/UserAdmin'
 import IntegrationAdmin from './admin/IntegrationAdmin'
 import OpsAdmin from './admin/OpsAdmin'
+import { PageMasthead } from '../components/editorial'
 import { ADMIN_SECTIONS } from './admin/sections'
 
 // S17 配置台（PRD v0.5）：仅系统管理员；二级菜单 + 每页 Tab（#/admin/<section>/<tab> 直达可收藏）
@@ -23,31 +24,34 @@ export default function Admin({ section, tab }: { section?: string; tab?: string
 
   return (
     <div>
-      <h1 className="mb-3 text-lg font-bold">
-        配置台 <span className="text-[12px] font-normal text-[var(--color-ink-soft)]">仅系统管理员 · 变更即审计留痕（S17）</span>
-      </h1>
+      <PageMasthead
+        kicker="Studio / 05"
+        title="配置台"
+        description="系统参数、成员与外部依赖的编辑工作台。仅系统管理员可见，所有变更都会留下审计记录。"
+        aside={<div className="text-[11px] text-[var(--color-ink-soft)]">当前编辑者<br /><span className="mt-1 inline-block text-[13px] text-[var(--color-ink)]">{member?.name}</span></div>}
+      />
       {/* 移动端分区菜单（<768px）：横排胶囊替代桌面左侧竖栏 */}
-      <div data-nav="admin-sections" className="mb-3 flex gap-1 overflow-x-auto md:hidden">
+      <div data-nav="admin-sections" className="mb-5 mt-7 flex gap-1.5 overflow-x-auto md:hidden">
         {ADMIN_SECTIONS.map((s) => (
           <a
             key={s.key} href={`#/admin/${s.key}`}
-            className={`whitespace-nowrap rounded-md px-3 py-1.5 text-[13px] ${
-              s.key === sec.key ? 'bg-[var(--color-brand-soft)] font-medium text-[var(--color-brand)]' : 'bg-[var(--color-bg)] text-[var(--color-ink-soft)]'
+            className={`whitespace-nowrap rounded-full border px-3.5 py-1.5 text-[12px] transition-colors ${
+              s.key === sec.key ? 'border-[var(--color-ink)] bg-[var(--color-ink)] font-medium text-[var(--color-card)]' : 'border-[var(--color-line-strong)] text-[var(--color-ink-soft)]'
             }`}
           >{s.label}</a>
         ))}
       </div>
-      <div className="flex gap-5">
-        <aside className="hidden w-32 shrink-0 flex-col gap-0.5 md:flex">
-          {ADMIN_SECTIONS.map((s) => (
+      <div className="mt-8 flex gap-6 md:mt-10">
+        <aside className="hidden w-36 shrink-0 flex-col gap-1 border-t border-[var(--color-ink)] pt-3 md:flex">
+          <div className="editorial-kicker mb-3 px-3">Sections</div>
+          {ADMIN_SECTIONS.map((s, index) => (
             <a
               key={s.key} href={`#/admin/${s.key}`}
-              className={`rounded-md px-3 py-2 text-[13px] ${
-                s.key === sec.key ? 'bg-[var(--color-brand-soft)] font-medium text-[var(--color-brand)]' : 'hover:bg-[var(--color-bg)]'
+              className={`flex items-baseline gap-2 rounded-[3px] px-3 py-2.5 text-[13px] transition-colors ${
+                s.key === sec.key ? 'bg-[var(--color-brand-soft)] font-medium text-[var(--color-brand-deep)]' : 'text-[var(--color-ink-soft)] hover:bg-[var(--color-panel)] hover:text-[var(--color-ink)]'
               }`}
-            >{s.label}</a>
+            ><span aria-hidden="true" className="num text-[9px] opacity-55">0{index + 1}</span>{s.label}</a>
           ))}
-          <div className="mt-3 px-3 text-[11px] leading-5 text-[var(--color-ink-soft)]">{member?.name}</div>
         </aside>
         <div className="min-w-0 flex-1">
           <SectionPage tab={effTab} />
