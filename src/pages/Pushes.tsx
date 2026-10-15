@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api'
 import { Badge, Card, Empty, Spinner } from '../components/ui'
+import { PageMasthead } from '../components/editorial'
 import { fmtDateTime } from '../fmt'
 import type { PushRow } from '../types'
 
@@ -24,28 +25,33 @@ export default function Pushes() {
   if (!pushes) return <Spinner />
 
   return (
-    <div className="space-y-3">
-      <h1 className="text-lg font-bold">
-        通知 <span className="text-[12px] font-normal text-[var(--color-ink-soft)]">日报 / 预警 / 梳理与建议通知 · 仅本人可见</span>
-      </h1>
+    <div className="space-y-9">
+      <PageMasthead
+        kicker="Inbox / 04"
+        title="通知"
+        description="日报、预警、梳理与建议通知，按时间收进同一份收件记录。这里的内容仅本人可见。"
+        aside={<div className="num text-[11px] text-[var(--color-ink-soft)]">{pushes.length} 条记录</div>}
+      />
       {pushes.length === 0 ? (
         <Card><Empty hint="暂无推送记录——日报/预警/梳理产出后会出现在这里" /></Card>
       ) : (
-        pushes.map((p) => {
-          const st = PUSH_STATUS[p.status] ?? { label: p.status, tone: 'muted' as const }
-          return (
-            <Card key={p.id}>
-              <div className="mb-1 flex items-center gap-2 text-[12px] text-[var(--color-ink-soft)]">
-                <Badge tone="info">{PUSH_TYPE_LABEL[p.pushType] ?? p.pushType}</Badge>
-                <Badge tone={st.tone}>{st.label}</Badge>
-                <span>{fmtDateTime(p.createdAt)}</span>
-                {p.error && <span className="truncate" title={p.error}>（{p.error}）</span>}
-              </div>
-              <div className="text-[14px] font-medium">{p.title}</div>
-              <pre className="mt-1 whitespace-pre-wrap break-words font-[inherit] text-[13px] leading-5 text-[var(--color-ink)]">{p.body}</pre>
-            </Card>
-          )
-        })
+        <div className="editorial-enter-late border-t border-[var(--color-ink)]">
+          {pushes.map((p) => {
+            const st = PUSH_STATUS[p.status] ?? { label: p.status, tone: 'muted' as const }
+            return (
+              <article key={p.id} className="border-b border-[var(--color-line)] py-6 md:py-7">
+                <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px] text-[var(--color-ink-soft)]">
+                  <Badge tone="info">{PUSH_TYPE_LABEL[p.pushType] ?? p.pushType}</Badge>
+                  <Badge tone={st.tone}>{st.label}</Badge>
+                  <span className="num">{fmtDateTime(p.createdAt)}</span>
+                  {p.error && <span className="truncate" title={p.error}>（{p.error}）</span>}
+                </div>
+                <h2 className="display-type text-[20px] font-semibold leading-7">{p.title}</h2>
+                <pre className="mt-3 max-w-[760px] whitespace-pre-wrap break-words font-[inherit] text-[13px] leading-6 text-[var(--color-ink-soft)]">{p.body}</pre>
+              </article>
+            )
+          })}
+        </div>
       )}
     </div>
   )

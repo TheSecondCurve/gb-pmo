@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { Search } from 'lucide-react'
 import { api } from '../api'
 import { useStore } from '../store'
 import { bjToday, dateRangeForm, fmtDateRange } from '../fmt'
 import { barLayout, computeAxis, dayNum, monthTicks } from '../gantt'
 import { Badge, Btn, Card, Empty, Field, InlineSelect, Modal, Spinner, inputCls } from '../components/ui'
+import { PageMasthead } from '../components/editorial'
 import { PRIORITY_LABEL, PROJECT_STATUS_LABEL, type Member, type ProjectRow, type ProjectType } from '../types'
 
 // S30（v0.29）项目组合页：一次取回三态项目，四视图纯前端切换。
@@ -17,7 +19,7 @@ const VIEWS: { key: PortfolioView; label: string }[] = [
 const STATUS_KEYS = ['active', 'closed', 'cancelled'] as const
 const PRIORITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 }
 const PRIORITY_BAR: Record<string, string> = {
-  high: 'border-l-[var(--color-bad)]', medium: 'border-l-[var(--color-warn)]', low: 'border-l-[var(--color-line)]',
+  high: 'border-t-[var(--color-bad)]', medium: 'border-t-[var(--color-warn)]', low: 'border-t-[var(--color-line-strong)]',
 }
 type SortKey = 'priority' | 'delivery' | 'activity' | 'updated'
 const SORT_LABEL: Record<SortKey, string> = { priority: '优先级', delivery: '交付临近', activity: '最近活跃', updated: '最近更新' }
@@ -84,55 +86,84 @@ export default function Projects({ view }: { view: PortfolioView }) {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-lg font-bold">项目组合 {unassigned > 0 && <Badge tone="bad">未指派任务 {unassigned}</Badge>}</h1>
-        <Btn kind="primary" onClick={() => setCreating(true)}>+ 立项</Btn>
-      </div>
+    <div className="space-y-7 md:space-y-8">
+      <PageMasthead
+        testId="portfolio-masthead"
+        kicker="Portfolio / 02"
+        title="项目组合"
+        description="项目、负责人和交付节奏，在同一份索引里彼此对照。切换视图，但不丢失正在查看的上下文。"
+        aside={(
+          <div className="md:border-l md:border-[var(--color-line-strong)] md:pl-5">
+            <div className="text-[10px] font-semibold tracking-[0.16em] text-[var(--color-ink-faint)]">PROJECT INDEX</div>
+            <div className="num mt-2 text-[12px] text-[var(--color-ink-soft)]">{projects.length} 个档案 · {filtered.length} 个在视</div>
+          </div>
+        )}
+        actions={(
+          <>
+            {unassigned > 0 && <Badge tone="bad">未指派任务 {unassigned}</Badge>}
+            <Btn kind="primary" onClick={() => setCreating(true)}>+ 立项</Btn>
+          </>
+        )}
+      />
 
-      {/* 摘要条：三态/未排期/逾期任务计数，点击即过滤（S30） */}
-      <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
-        {STATUS_KEYS.map((s) => (
-          <FilterChip key={s} active={statuses.has(s)} onClick={() => toggleStatus(s)}>
-            {PROJECT_STATUS_LABEL[s]} {stats.byStatus[s]}
-          </FilterChip>
-        ))}
-        <FilterChip active={onlyUnscheduled} onClick={() => setOnlyUnscheduled(!onlyUnscheduled)}>未排期 {stats.unscheduled}</FilterChip>
-        <FilterChip active={onlyOverdue} onClick={() => setOnlyOverdue(!onlyOverdue)}>逾期任务 {stats.overdueTasks}</FilterChip>
-      </div>
+      <section data-testid="portfolio-toolbar" className="editorial-enter-late">
+        <div className="flex flex-col gap-4 border-y border-[var(--color-line)] py-4 xl:flex-row xl:items-center xl:justify-between">
+          {/* 摘要条：三态/未排期/逾期任务计数，点击即过滤（S30） */}
+          <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
+            {STATUS_KEYS.map((s) => (
+              <FilterChip key={s} active={statuses.has(s)} onClick={() => toggleStatus(s)}>
+                {PROJECT_STATUS_LABEL[s]} {stats.byStatus[s]}
+              </FilterChip>
+            ))}
+            <FilterChip active={onlyUnscheduled} onClick={() => setOnlyUnscheduled(!onlyUnscheduled)}>未排期 {stats.unscheduled}</FilterChip>
+            <FilterChip active={onlyOverdue} onClick={() => setOnlyOverdue(!onlyOverdue)}>逾期任务 {stats.overdueTasks}</FilterChip>
+          </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <input aria-label="搜索" className={`${inputCls} max-w-56`} placeholder="搜索项目 / 客户" value={q} onChange={(e) => setQ(e.target.value)} />
-        <select aria-label="优先级" className={`${inputCls} w-28`} value={priority} onChange={(e) => setPriority(e.target.value)}>
-          <option value="all">全部优先级</option>
-          {Object.entries(PRIORITY_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
-        {view === 'table' && (
-          <select aria-label="排序维度" className={`${inputCls} w-28`} value={sort}
-            onChange={(e) => { const v = e.target.value as SortKey; setSort(v); localStorage.setItem('pmo.projects.sort', v) }}>
-            {Object.entries(SORT_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-          </select>
+          <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
+            <div className="relative col-span-2 w-full sm:col-span-1 sm:w-56">
+              <Search aria-hidden="true" size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-ink-faint)]" />
+              <input aria-label="搜索" className={`${inputCls} pl-9`} placeholder="搜索项目 / 客户" value={q} onChange={(e) => setQ(e.target.value)} />
+            </div>
+            <div className="w-full sm:w-36">
+              <select aria-label="优先级" className={inputCls} value={priority} onChange={(e) => setPriority(e.target.value)}>
+                <option value="all">全部优先级</option>
+                {Object.entries(PRIORITY_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              </select>
+            </div>
+            {view === 'table' && (
+              <div className="w-full sm:w-36">
+                <select aria-label="排序维度" className={inputCls} value={sort}
+                  onChange={(e) => { const v = e.target.value as SortKey; setSort(v); localStorage.setItem('pmo.projects.sort', v) }}>
+                  {Object.entries(SORT_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                </select>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* 视图 Tabs：hash 深链可分享（S30-2） */}
+        <div data-nav="portfolio-views" className="flex flex-wrap gap-1 border-b border-[var(--color-line-strong)]">
+          {VIEWS.map((v, index) => (
+            <a key={v.key} href={`#/projects/${v.key}`}
+              className={`-mb-px flex items-baseline gap-2 border-b px-4 py-3 text-[13px] transition-colors duration-150 ${
+                view === v.key
+                  ? 'border-[var(--color-brand)] font-medium text-[var(--color-brand)]'
+                  : 'border-transparent text-[var(--color-ink-soft)] hover:text-[var(--color-ink)]'
+              }`}>
+              <span aria-hidden="true" className="num text-[9px] opacity-60">0{index + 1}</span>{v.label}
+            </a>
+          ))}
+        </div>
+      </section>
+
+      <div className="editorial-enter-late">
+        {filtered.length === 0 ? <Card><Empty hint="无符合条件的项目" /></Card> : (
+          view === 'board' ? <BoardView rows={filtered} />
+            : view === 'people' ? <PeopleView rows={filtered} />
+              : view === 'timeline' ? <TimelineView rows={filtered} />
+                : <TableView rows={sortedScheduled} unscheduled={unscheduled} onPriority={onPriority} />
         )}
       </div>
-
-      {/* 视图 Tabs：hash 深链可分享（S30-2） */}
-      <div data-nav="portfolio-views" className="flex flex-wrap gap-1 border-b border-[var(--color-line)]">
-        {VIEWS.map((v) => (
-          <a key={v.key} href={`#/projects/${v.key}`}
-            className={`-mb-px border-b-2 px-3 py-2 text-[13px] transition-colors ${
-              view === v.key
-                ? 'border-[var(--color-brand)] font-medium text-[var(--color-brand)]'
-                : 'border-transparent text-[var(--color-ink-soft)] hover:text-[var(--color-ink)]'
-            }`}>{v.label}</a>
-        ))}
-      </div>
-
-      {filtered.length === 0 ? <Card><Empty hint="无符合条件的项目" /></Card> : (
-        view === 'board' ? <BoardView rows={filtered} />
-          : view === 'people' ? <PeopleView rows={filtered} />
-            : view === 'timeline' ? <TimelineView rows={filtered} />
-              : <TableView rows={sortedScheduled} unscheduled={unscheduled} onPriority={onPriority} />
-      )}
 
       {creating && <CreateModal members={members} onClose={() => setCreating(false)} onDone={async () => { setCreating(false); toast('立项成功'); await refresh() }} />}
     </div>
@@ -142,10 +173,10 @@ export default function Projects({ view }: { view: PortfolioView }) {
 function FilterChip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
     <button type="button" onClick={onClick}
-      className={`rounded-full border px-2.5 py-1 transition-colors ${
+      className={`rounded-full border px-3 py-1.5 text-[11px] transition-[color,background-color,border-color] duration-150 ${
         active
-          ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)] font-medium text-[var(--color-brand)]'
-          : 'border-[var(--color-line)] bg-[var(--color-card)] text-[var(--color-ink-soft)] hover:border-[var(--color-brand)]'
+          ? 'border-[var(--color-ink)] bg-[var(--color-ink)] font-medium text-[var(--color-card)]'
+          : 'border-[var(--color-line-strong)] bg-transparent text-[var(--color-ink-soft)] hover:border-[var(--color-ink-soft)] hover:text-[var(--color-ink)]'
       }`}>{children}</button>
   )
 }
@@ -166,9 +197,9 @@ function DeliveryBadge({ p }: { p: ProjectRow }) {
 function MiniProgress({ done, total }: { done: number; total: number }) {
   const pct = Math.round((done / total) * 100)
   return (
-    <span data-testid="mini-progress" className="inline-flex items-center gap-1.5" title={`完成 ${done}/${total}（${pct}%）`}>
-      <span className="h-1.5 w-14 overflow-hidden rounded-full bg-gray-100">
-        <span className="block h-full bg-[var(--color-ok)]" style={{ width: `${pct}%` }} />
+    <span data-testid="mini-progress" className="inline-flex items-center gap-2" title={`完成 ${done}/${total}（${pct}%）`}>
+      <span className="h-[3px] w-16 overflow-hidden rounded-full bg-[var(--color-panel)]">
+        <span className="progress-reveal block h-full rounded-full bg-[var(--color-ok)]" style={{ width: `${pct}%` }} />
       </span>
       <span className="num text-[12px] text-[var(--color-ink-soft)]">{done}/{total}</span>
     </span>
@@ -179,67 +210,66 @@ function TableView({ rows, unscheduled, onPriority }: {
   rows: ProjectRow[]; unscheduled: ProjectRow[]; onPriority: (p: ProjectRow, v: string) => Promise<void>
 }) {
   const row = (p: ProjectRow) => (
-    <tr key={p.id} className="border-b border-[var(--color-line)] last:border-0 hover:bg-[var(--color-bg)]">
-      <td className="py-1">
-        <InlineSelect value={p.priority} options={PRIORITY_LABEL} onSubmit={(v) => onPriority(p, v)} />
+    <tr key={p.id} className="border-b border-[var(--color-line)] transition-colors last:border-0 hover:bg-[var(--color-panel)]/65 [&>td]:px-4 [&>td]:py-3.5">
+      <td><InlineSelect value={p.priority} options={PRIORITY_LABEL} onSubmit={(v) => onPriority(p, v)} /></td>
+      <td className="whitespace-nowrap">
+        <a className="display-type editorial-link text-[16px] font-semibold" href={`#/projects/${p.id}`}>{p.name}</a>
+        {p.clientName ? <span className="ml-2 text-[11px] text-[var(--color-ink-soft)]">{p.clientName}</span> : null}
       </td>
-      <td><a className="text-[var(--color-brand)] hover:underline" href={`#/projects/${p.id}`}>{p.name}</a>{p.clientName ? <span className="text-[var(--color-ink-soft)]">（{p.clientName}）</span> : null}</td>
-      <td>{p.leadName}</td>
+      <td className="whitespace-nowrap">{p.leadName}</td>
       <td><StatusBadge p={p} /></td>
       <td>{p.tasksTotal > 0 ? <MiniProgress done={p.tasksDone} total={p.tasksTotal} /> : <span className="text-[var(--color-ink-soft)]">—</span>}</td>
-      <td className={`num ${p.overdueTasks ? 'text-[var(--color-bad)]' : ''}`}>{p.overdueTasks}</td>
+      <td className={`num ${p.overdueTasks ? 'font-semibold text-[var(--color-bad)]' : ''}`}>{p.overdueTasks}</td>
       <td className="num whitespace-nowrap">
         {fmtDateRange(p.planStartDate, p.planEndDate)} <DeliveryBadge p={p} />
       </td>
-      <td className="text-[var(--color-ink-soft)]">{p.typeName || p.templateCode}</td>
+      <td className="text-[12px] text-[var(--color-ink-soft)]">{p.typeName || p.templateCode}</td>
     </tr>
   )
   return (
-    <Card>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[40rem] text-[13px]">
-          <thead className="text-left text-[12px] text-[var(--color-ink-soft)]">
-            <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap">
-              <th className="py-1.5">优先级</th><th>项目</th><th>牵头人</th><th>状态</th>
-              <th>进度</th><th className="num">逾期</th><th>交付周期（S21）</th><th>类型</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(row)}
-            {unscheduled.length > 0 && (
-              <>
-                <tr data-testid="unscheduled-group" className="border-b border-[var(--color-line)] bg-[var(--color-bg)]">
-                  <td colSpan={8} className="px-2 py-1.5 text-[12px] font-medium text-[var(--color-ink-soft)]">
-                    未排期（{unscheduled.length}）— 松散管理合法态，填计划日期后参与排序与时间线
-                  </td>
-                </tr>
-                {unscheduled.map(row)}
-              </>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </Card>
+    <div className="overflow-x-auto border-y border-[var(--color-line-strong)] bg-[var(--color-card)]/45">
+      <table className="w-full min-w-[40rem] text-[13px]">
+        <thead className="bg-[var(--color-panel)]/45 text-left text-[10px] font-medium tracking-[0.08em] text-[var(--color-ink-soft)]">
+          <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap [&>th]:px-4 [&>th]:py-3">
+            <th>优先级</th><th>项目</th><th>牵头人</th><th>状态</th>
+            <th>进度</th><th className="num">逾期</th><th>交付周期（S21）</th><th>类型</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(row)}
+          {unscheduled.length > 0 && (
+            <>
+              <tr data-testid="unscheduled-group" className="border-b border-[var(--color-line)] bg-[var(--color-panel)]/70">
+                <td colSpan={8} className="px-4 py-3 text-[11px] font-medium text-[var(--color-ink-soft)]">
+                  未排期（{unscheduled.length}）— 松散管理合法态，填计划日期后参与排序与时间线
+                </td>
+              </tr>
+              {unscheduled.map(row)}
+            </>
+          )}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
 function ProjectCard({ p }: { p: ProjectRow }) {
   return (
-    <div className={`rounded-md border border-[var(--color-line)] border-l-4 ${PRIORITY_BAR[p.priority]} bg-[var(--color-card)] p-2.5 text-[13px] ${p.status === 'cancelled' ? 'opacity-70' : ''}`}>
-      <div className="flex items-start justify-between gap-2">
-        <a className="font-medium text-[var(--color-brand)] hover:underline" href={`#/projects/${p.id}`}>{p.name}</a>
+    <div className={`group rounded-[4px] border border-[var(--color-line)] border-t-2 ${PRIORITY_BAR[p.priority]} bg-[var(--color-card)] p-5 text-[13px] transition-[transform,box-shadow,border-color] duration-150 hover:-translate-y-0.5 hover:shadow-[var(--shadow-float)] ${p.status === 'cancelled' ? 'opacity-65' : ''}`}>
+      <div className="flex items-start justify-between gap-3">
+        <a className="display-type editorial-link text-[17px] font-semibold leading-6" href={`#/projects/${p.id}`}>{p.name}</a>
         <StatusBadge p={p} />
       </div>
-      <div className="mt-1 truncate text-[12px] text-[var(--color-ink-soft)]">
+      <div className="mt-2 truncate text-[11px] text-[var(--color-ink-soft)]">
         {p.clientName ? `${p.clientName} · ` : ''}{p.typeName || p.templateCode} · {p.leadName}
       </div>
-      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[12px]">
+      <div className="mt-5 flex flex-wrap items-center gap-1.5 border-t border-[var(--color-line)] pt-3 text-[11px]">
         <span className="num text-[var(--color-ink-soft)]">{fmtDateRange(p.planStartDate, p.planEndDate)}</span>
         <DeliveryBadge p={p} />
         {p.overdueTasks > 0 && <Badge tone="bad">逾期 {p.overdueTasks}</Badge>}
         {p.status === 'active' && p.silentDays != null && p.silentDays >= 3 && <Badge tone="warn">静默 {p.silentDays} 天</Badge>}
       </div>
-      {p.tasksTotal > 0 && <div className="mt-1.5"><MiniProgress done={p.tasksDone} total={p.tasksTotal} /></div>}
+      {p.tasksTotal > 0 && <div className="mt-4"><MiniProgress done={p.tasksDone} total={p.tasksTotal} /></div>}
     </div>
   )
 }
@@ -247,20 +277,20 @@ function ProjectCard({ p }: { p: ProjectRow }) {
 function BoardView({ rows }: { rows: ProjectRow[] }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   return (
-    <div className="grid gap-4 md:grid-cols-3">
+    <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
       {STATUS_KEYS.map((s) => {
         const col = rows.filter((p) => p.status === s)
         return (
-          <section key={s} data-testid={`board-col-${s}`} className="rounded-lg border border-[var(--color-line)] bg-[var(--color-card)]">
-            <header className="flex items-center justify-between border-b border-[var(--color-line)] px-3 py-2 text-[13px] font-semibold">
-              <span>{PROJECT_STATUS_LABEL[s]} <span className="num font-normal text-[var(--color-ink-soft)]">{col.length}</span></span>
+          <section key={s} data-testid={`board-col-${s}`} className="rounded-[4px] border border-[var(--color-line)] bg-[var(--color-panel)]/45">
+            <header className="flex items-center justify-between border-b border-[var(--color-line)] px-4 py-3.5 text-[13px] font-semibold">
+              <span>{PROJECT_STATUS_LABEL[s]} <span className="num ml-1 font-normal text-[var(--color-ink-soft)]">{col.length}</span></span>
               {s !== 'active' && col.length > 0 && (
                 <Btn small kind="ghost" onClick={() => setCollapsed((c) => ({ ...c, [s]: !c[s] }))}>{collapsed[s] ? '展开' : '折叠'}</Btn>
               )}
             </header>
-            <div className="space-y-2 p-2">
+            <div className="space-y-3 p-3">
               {col.length === 0 ? <Empty hint="无" /> : collapsed[s] ? (
-                <button type="button" className="w-full rounded-md border border-dashed border-[var(--color-line)] px-2 py-2 text-[12px] text-[var(--color-ink-soft)] hover:border-[var(--color-brand)]"
+                <button type="button" className="w-full rounded-[3px] border border-dashed border-[var(--color-line-strong)] px-3 py-4 text-[12px] text-[var(--color-ink-soft)] transition-colors hover:border-[var(--color-brand)]"
                   onClick={() => setCollapsed((c) => ({ ...c, [s]: false }))}>已折叠 {col.length} 项，点击展开</button>
               ) : col.map((p) => <ProjectCard key={p.id} p={p} />)}
             </div>
@@ -288,22 +318,22 @@ function PeopleView({ rows }: { rows: ProjectRow[] }) {
       .sort((a, b) => b.activeCount - a.activeCount || b.projects.length - a.projects.length || a.leadName.localeCompare(b.leadName))
   }, [rows])
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       {groups.map((g) => (
-        <section key={`${g.leadName}-${g.projects[0]?.leadMemberId}`} data-testid="people-group" className="rounded-lg border border-[var(--color-line)] bg-[var(--color-card)]">
-          <header className="flex flex-wrap items-center gap-2 border-b border-[var(--color-line)] px-4 py-2 text-[13px]">
-            <span className="font-semibold">{g.leadName}</span>
-            <span className="text-[12px] text-[var(--color-ink-soft)]">
+        <section key={`${g.leadName}-${g.projects[0]?.leadMemberId}`} data-testid="people-group" className="border-y border-[var(--color-line-strong)] bg-[var(--color-card)]/40">
+          <header className="flex flex-wrap items-baseline gap-3 border-b border-[var(--color-line)] px-5 py-4 text-[13px]">
+            <span className="display-type text-[19px] font-semibold">{g.leadName}</span>
+            <span className="text-[11px] text-[var(--color-ink-soft)]">
               在跑 {g.activeCount} · 共 {g.projects.length}{g.overdue > 0 ? ` · 逾期任务 ${g.overdue}` : ''}
             </span>
           </header>
           <ul className="divide-y divide-[var(--color-line)]">
             {[...g.projects].sort((a, b) => PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority] || b.updatedAt - a.updatedAt).map((p) => (
-              <li key={p.id} className="flex flex-wrap items-center gap-2 px-4 py-1.5 text-[13px]">
-                <a className="text-[var(--color-brand)] hover:underline" href={`#/projects/${p.id}`}>{p.name}</a>
+              <li key={p.id} className="flex flex-wrap items-center gap-2 px-5 py-3.5 text-[13px] transition-colors hover:bg-[var(--color-panel)]/50">
+                <a className="display-type editorial-link text-[16px] font-semibold" href={`#/projects/${p.id}`}>{p.name}</a>
                 <StatusBadge p={p} />
                 <Badge tone={p.priority === 'high' ? 'bad' : p.priority === 'medium' ? 'warn' : 'muted'}>{PRIORITY_LABEL[p.priority]}</Badge>
-                <span className="num ml-auto text-[12px] text-[var(--color-ink-soft)]">{fmtDateRange(p.planStartDate, p.planEndDate)}</span>
+                <span className="num ml-auto text-[11px] text-[var(--color-ink-soft)]">{fmtDateRange(p.planStartDate, p.planEndDate)}</span>
                 {p.overdueTasks > 0 && <Badge tone="bad">逾期 {p.overdueTasks}</Badge>}
               </li>
             ))}

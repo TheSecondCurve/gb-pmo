@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll } from 'vitest'
+import { describe, it, expect, afterEach, afterAll, vi } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { projectBrief } from '../engine/brief.js'
 import { createProject } from '../engine/projects.js'
@@ -11,6 +11,8 @@ import { handleBotEvent } from '../brain/bot/command.js'
 const SECRET = 's27-test-bot-hmac-secret-32-bytes!'
 const NOW = Date.UTC(2026, 9, 2, 3, 0, 0) // 2026-10-02 11:00 北京（今天=2026-10-02）
 const DAY = 86_400_000
+
+afterEach(() => vi.useRealTimers())
 
 let ctx
 afterAll(() => ctx?.db.close())
@@ -132,6 +134,7 @@ describe('S27 项目 Brief', () => {
   it('S27-1: 飞书会话——整体问询优先 brief 动作一次取全，基于取回数据叙述；计入查询限额', async () => {
     ctx = await setupApp()
     const { pid } = await seedProject('客户S27乙系统')
+    vi.setSystemTime(NOW) // 夹具准备完成后冻结当前时刻，避免真实日期把近期事件挤出窗口
     const { llm, calls } = scriptedLlm(
       JSON.stringify({ action: 'brief', projectId: pid }),
       JSON.stringify({ action: 'reply', text: '【客户S27乙系统 Brief】进行中 1 项，逾期 1 项，风险 1 条。' })
@@ -167,6 +170,7 @@ describe('S27 项目 Brief', () => {
   it('S27-3: web 会话——同一 brief 动作（统一管线一次注册，两入口一致）', async () => {
     ctx = await setupApp()
     const { pid, cookie } = await seedProject('客户S27丙系统')
+    vi.setSystemTime(NOW)
     const sid = (await authed(ctx.app, cookie, 'POST', '/api/v1/chat/sessions', {})).body.id
 
     const capture = []

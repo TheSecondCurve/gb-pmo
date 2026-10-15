@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach, beforeAll } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup, within } from '@testing-library/react'
 import Login from './pages/Login'
 import App from './App'
+import Dashboard from './pages/Dashboard'
 import Admin from './pages/Admin'
 import Chat from './pages/Chat'
 import Projects from './pages/Projects'
@@ -21,9 +22,10 @@ beforeEach(() => {
 })
 
 describe('前端冒烟', () => {
-  it('Login 渲染品牌与表单，按钮在填写前禁用', () => {
+  it('Login 渲染编辑化品牌封面与表单，按钮在填写前禁用', () => {
     render(<Login onLogin={async () => {}} />)
-    expect(screen.getByText('🧠 项目大脑')).toBeTruthy()
+    expect(screen.getAllByText('项目大脑').length).toBeGreaterThan(0)
+    expect(screen.getByTestId('login-cover')).toBeTruthy()
     expect(screen.getAllByRole('textbox').length).toBe(1)
     expect((screen.getByRole('button', { name: '登录' }) as HTMLButtonElement).disabled).toBe(true)
   })
@@ -153,6 +155,23 @@ describe('移动端响应式冒烟', () => {
   })
 })
 
+describe('S5 全局看板编辑化总览', () => {
+  it('S5-4: 品牌页首、主指标区与在跑项目索引区齐全', async () => {
+    const dashboardFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      const data = url.startsWith('/api/v1/auth/me')
+        ? { member: { id: 1, name: '甲', role: 'admin' } }
+        : url.startsWith('/api/v1/projects') ? { projects: [] } : { rows: [] }
+      return new Response(JSON.stringify(data), { status: 200 })
+    })
+    globalThis.fetch = dashboardFetch as unknown as typeof fetch
+    render(<StoreProvider><Dashboard /></StoreProvider>)
+    expect(await screen.findByTestId('dashboard-masthead')).toBeTruthy()
+    expect(screen.getByTestId('dashboard-metrics')).toBeTruthy()
+    expect(screen.getByTestId('project-index')).toBeTruthy()
+  })
+})
+
 // PRD S30（v0.29）— 项目组合页冒烟：四视图 + 日期文案四式 + 未排期沉底 + 甘特形态。
 // jsdom 不量像素，断言结构契约（data-testid 锚点）；坐标正确性由 src/gantt.test.ts 纯函数锁定。
 describe('S30 项目组合页（v0.29）', () => {
@@ -269,6 +288,15 @@ describe('S30 项目组合页（v0.29）', () => {
       const link = within(tabs).getByRole('link', { name: label })
       expect(link.getAttribute('href')).toBe(href)
     }
+  })
+
+  it('S30-5: 编辑化页首与筛选/视图工具区齐全，四视图深链保持可用', async () => {
+    render(<StoreProvider><Projects view="table" /></StoreProvider>)
+    expect(await screen.findByTestId('portfolio-masthead')).toBeTruthy()
+    expect(screen.getByTestId('portfolio-toolbar')).toBeTruthy()
+    const views = screen.getByTestId('portfolio-toolbar').querySelector('[data-nav="portfolio-views"]')
+    expect(views).toBeTruthy()
+    expect(within(views as HTMLElement).getAllByRole('link').length).toBe(4)
   })
 })
 
