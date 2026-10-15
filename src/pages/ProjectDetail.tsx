@@ -270,7 +270,11 @@ export default function ProjectDetail({ id }: { id: number }) {
                   <span>{m.name}</span>
                   <span className="num flex items-center gap-2">
                     {readonly ? (m.planDate || '—') : <InlineText type="date" value={m.planDate} onSubmit={async (v) => { await api.patchMilestone(m.id, { planDate: v }); await refresh() }} />}
-                    <Badge tone={MILESTONE_STATUS_TONE[m.status] || 'muted'}>{MILESTONE_STATUS_LABEL[m.status] || m.status}</Badge>
+                    {readonly ? (
+                      <Badge tone={MILESTONE_STATUS_TONE[m.status] || 'muted'} data-testid="milestone-status-badge">{MILESTONE_STATUS_LABEL[m.status] || m.status}</Badge>
+                    ) : (
+                      <InlineSelect value={m.status} options={MILESTONE_STATUS_LABEL} tones={MILESTONE_STATUS_TONE} onSubmit={async (v) => { await api.patchMilestone(m.id, { status: v }); toast('里程碑状态已更新'); await refresh() }} />
+                    )}
                   </span>
                 </li>
               ))}

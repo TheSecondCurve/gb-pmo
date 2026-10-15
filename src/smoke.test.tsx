@@ -439,14 +439,15 @@ describe('S41/S42/S43 状态色彩与进度排期可视化（v0.44）', () => {
   const detailClosed = {
     ...detailActive, id: 2, name: '项目乙', status: 'closed', closeoutSummary: '已交付',
     tasks: [T(31, { title: '结项已完成任务', status: 'done' }), T(32, { title: '结项冻结任务' })],
-    milestones: [],
+    milestones: [{ id: 31, projectId: 2, name: '结项里程碑', planDate: null, actualDate: null, status: 'cancelled' }],
   }
   // 项目3（进行中，全部任务无日期）→ 甘特空态引导
   const detailUndated = { ...detailActive, id: 3, name: '项目丙', tasks: [T(41, { title: '无日期任务甲' })], milestones: [] }
 
-  const visFetch = vi.fn(async (input: RequestInfo | URL) => {
+  const visFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     if (url.startsWith('/api/v1/auth/me')) return json({ member: { id: 1, name: '甲', role: 'admin' } })
+    if (url.startsWith('/api/v1/milestones/') && init?.method === 'PATCH') return json({})
     if (url.startsWith('/api/v1/projects/1/events')) return json({ events: [] })
     if (url.startsWith('/api/v1/projects/1')) return json(detailActive)
     if (url.startsWith('/api/v1/projects/2/events')) return json({ events: [] })
@@ -510,6 +511,29 @@ describe('S41/S42/S43 状态色彩与进度排期可视化（v0.44）', () => {
       .filter((b) => modal.closest('.fixed')!.contains(b))
     expect(badges.length).toBe(4)
     expect(badges.map((b) => b.dataset.tone).sort()).toEqual(['info', 'info', 'muted', 'muted'])
+  })
+
+  it('S2-5: 项目详情里程碑四态可编辑并调用 PATCH；终态项目只展示状态徽章', async () => {
+    await renderDetail(1)
+    const item = (await screen.findByText('中期评审')).closest('li')!
+    const select = within(item).getByRole('combobox') as HTMLSelectElement
+    expect(Array.from(select.options).map((o) => [o.value, o.textContent])).toEqual([
+      ['planned', '计划中'], ['met', '已达成'], ['missed', '已延误'], ['cancelled', '已取消'],
+    ])
+    fireEvent.change(select, { target: { value: 'met' } })
+    await waitFor(() => expect(visFetch.mock.calls.some(([input, init]) =>
+      String(input) === '/api/v1/milestones/21' && init?.method === 'PATCH'
+    )).toBe(true))
+    const patch = visFetch.mock.calls.find(([input, init]) =>
+      String(input) === '/api/v1/milestones/21' && init?.method === 'PATCH'
+    )
+    expect(JSON.parse(String(patch?.[1]?.body))).toEqual({ status: 'met' })
+
+    cleanup()
+    await renderDetail(2)
+    const closedItem = (await screen.findByText('结项里程碑')).closest('li')!
+    expect(within(closedItem).queryByRole('combobox')).toBeNull()
+    expect(within(closedItem).getByTestId('milestone-status-badge').textContent).toBe('已取消')
   })
 
   it('S42-2: 进度卡渲染分段堆叠条 + 完成 x/y（z%）+ 逾期计数', async () => {

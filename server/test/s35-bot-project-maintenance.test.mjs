@@ -172,6 +172,49 @@ describe('S35 机器人项目维护面补全（v0.46 直改）', () => {
     const after = ctx.db.prepare('SELECT status, actual_date FROM milestones WHERE id = ?').get(ms.id)
     expect(after.status).toBe('met')
     expect(after.actual_date).toBe(today())
+
+    // 四态均可口述直改；非 met 状态清空实际日期
+    for (const status of ['missed', 'cancelled', 'planned']) {
+      const changed = await write(ctx.members.lead, 'suggest_event', { targetMilestoneId: ms.id, targetField: 'status', targetValue: status })
+      expect(changed.type).toBe('receipt')
+      const row = ctx.db.prepare('SELECT status, actual_date FROM milestones WHERE id = ?').get(ms.id)
+      expect(row.status).toBe(status)
+      expect(row.actual_date).toBeNull()
+    }
+
+    // 私聊完整链路：自然语言指令经统一会话管线直改里程碑状态并回执
+    const { llm } = scriptedLlm(
+      JSON.stringify({ action: 'write', kind: 'suggest_event', payload: { targetMilestoneId: ms.id, targetField: 'status', targetValue: 'met' } })
+    )
+    const rec = recorder()
+    const out = await handleBotEvent(ctx.db, p2p('fs_zhang', `把 ${p.name} 的正式发布标记为已达成`), { llm, send: rec.send, secret: SECRET })
+    expect(out.result).toBe('replied')
+    expect(rec.sent[0].text).toContain('已生效')
+    expect(rec.sent[0].card).toBeUndefined()
+    expect(ctx.db.prepare('SELECT status, actual_date FROM milestones WHERE id = ?').get(ms.id)).toEqual({ status: 'met', actual_date: today() })
+  })
+
+  it('S35-4: 无任务项目也能口述更新里程碑状态（事件目标 id 不依赖同号任务存在）', async () => {
+    const isolated = await setupApp()
+    try {
+      const cookie = await loginCookie(isolated.app, 'admin', 'admin-pass-123')
+      const p = await authed(isolated.app, cookie, 'POST', '/api/v1/projects', {
+        name: '无任务里程碑项目', typeCode: 'lianmai_365', leadMemberId: isolated.members.lead.id, tasks: [],
+      })
+      const ms = createMilestone(isolated.db, { projectId: p.body.id, name: '独立验收', planDate: '2026-12-01' }, isolated.members.lead.id)
+      expect(isolated.db.prepare('SELECT COUNT(*) AS n FROM tasks').get().n).toBe(0)
+
+      const out = await runWriteTool(isolated.db, {
+        kind: 'suggest_event', payload: { targetMilestoneId: ms.id, targetField: 'status', targetValue: 'met' },
+      }, { member: isolated.members.lead, evt: { ts: Date.now(), text: '独立验收已达成' } })
+      expect(out.type).toBe('receipt')
+      expect(isolated.db.prepare('SELECT status, actual_date FROM milestones WHERE id = ?').get(ms.id)).toEqual({ status: 'met', actual_date: today() })
+      const evt = isolated.db.prepare(`SELECT target_task_id, target_object FROM project_events WHERE project_id = ? AND target_object = 'milestone'`).get(p.body.id)
+      expect(evt.target_task_id).toBe(ms.id)
+      expect(evt.target_object).toBe('milestone')
+    } finally {
+      isolated.db.close()
+    }
   })
 
   it('S35-5: add_milestone 直改——名称空白/项目不真实拒绝；牵头人发起直接落 milestones(planned)', async () => {

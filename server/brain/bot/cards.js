@@ -19,8 +19,27 @@ function hmac(secret, canonical) {
  * S55 建议确认卡：待确认建议推送的交互形态——「确认生效/驳回」按钮 value 携带
  * {a:confirm|reject, e:事件id, s:HMAC}，由 handleCardAction 的 confirm/reject 分支承接（v0.46 兼容分支）。
  */
-export function buildSuggestionCard({ id, summary, projectName, typeLabel }, secret) {
+export function buildSuggestionCard({ id, summary, projectName, typeLabel, candidates = [] }, secret) {
   const value = (a) => ({ a, e: String(id), s: hmac(secret, `${a}:${id}`) })
+  if (candidates.length) {
+    return {
+      config: { wide_screen: true },
+      header: { template: 'orange', title: { tag: 'plain_text', content: `待确认对象 #${id}${typeLabel ? `（${typeLabel}）` : ''}` } },
+      elements: [
+        { tag: 'div', text: { tag: 'lark_md', content: `**${summary}**${projectName ? `\n项目：${projectName}` : ''}\n这句话指向多个可能对象，请选择后再生效；驳回则均不修改。` } },
+        {
+          tag: 'action',
+          actions: [
+            ...candidates.map((c, o) => ({
+              tag: 'button', text: { tag: 'plain_text', content: String(c.label || `${c.targetObject} #${c.targetTaskId}`).slice(0, 30) },
+              value: { a: 'choose', e: String(id), o, s: hmac(secret, `choose:${id}:${o}`) },
+            })),
+            { tag: 'button', text: { tag: 'plain_text', content: '驳回' }, type: 'danger', value: value('reject') },
+          ],
+        },
+      ],
+    }
+  }
   return {
     config: { wide_screen: true },
     header: { template: 'blue', title: { tag: 'plain_text', content: `待确认建议 #${id}${typeLabel ? `（${typeLabel}）` : ''}` } },
