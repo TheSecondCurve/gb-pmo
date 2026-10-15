@@ -450,6 +450,8 @@ client.sh action generate_person_digest '{}'
 | page_url | TEXT | 完成后页面可点链接 |
 | error | TEXT | failed 时中文原因 |
 | finished_at | INTEGER |  |
+| file_count | INTEGER |  |
+| skipped_files | TEXT |  |
 
 ## 枚举（值 ↔ 中文 label，双向对齐）
 

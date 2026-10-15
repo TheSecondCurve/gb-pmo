@@ -15,7 +15,7 @@ import { getLlm, parseJsonLoose } from '../brain/llm.js'
 import { mapSpeaker } from '../brain/extract.js'
 import {
   fetchChatHistory, listDocRootBlocks, insertDocBlocks, deleteDocChildren,
-  downloadChatImage, uploadDocImage,
+  downloadChatImage, uploadDocImage, downloadChatFile, uploadDocFile,
 } from '../brain/connectors/feishu.js'
 
 const MAX_MESSAGES = 20000 // 量护栏：超出取最近（连接器降序分页保证）并标 truncated
@@ -24,6 +24,8 @@ const MAX_CHUNKS = 24 // 超出均匀抽样（成本护栏）
 const MAX_HIGHLIGHTS = 8
 const MAX_QUOTES = 10
 const MAX_IMAGES = 30
+const MAX_FILES = 30
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024 // <20MB 小文件归档（含等于 20MB：fly docx_file 上限）
 const MAX_TIMELINE = 60
 const CHAPTER_TITLE = '项目汇总'
 const START_PREFIX = '🤖 项目大脑汇总' // 生成区首标记（幂等扫描前缀）
@@ -47,6 +49,7 @@ const heading2 = (content) => ({ block_type: 4, heading2: { elements: [{ text_ru
 const heading3 = (content) => ({ block_type: 5, heading3: { elements: [{ text_run: { content } }] } })
 const bullet = (content) => ({ block_type: 12, bullet: { elements: [{ text_run: { content } }] } })
 const imageBlock = (token) => ({ block_type: 27, image: { token } })
+const fileBlock = (token, name) => ({ block_type: 18, file: { token, name } })
 
 /** 读 block 纯文本（章节标题匹配/标记行扫描共用）。 */
 function blockText(b) {
@@ -112,10 +115,15 @@ export async function executeWikiArchive(db, runId, { llm: llmOverride } = {}) {
     const speakerName = (m) => mapSpeaker(db, 'feishu', m.speakerId)?.name ?? '未识别'
     const lines = []
     const images = []
+    const files = []
     for (const m of messages) {
       if (m.speakerType === 'app') continue // 机器人自身消息过滤
       if (m.msgType === 'image') {
         if (m.imageKey) images.push(m)
+        continue
+      }
+      if (m.msgType === 'file') {
+        if (m.fileKey) files.push(m)
         continue
       }
       const text = String(m.text || '').replace(/\s+/g, ' ').trim()
@@ -136,11 +144,15 @@ export async function executeWikiArchive(db, runId, { llm: llmOverride } = {}) {
 
     // ③ 群内图片：下载 → 上传文档素材 → image block（单张失败跳过不阻塞，计数如实）
     const { blocks: imgBlocks, done: imageCount } = await collectImageBlocks(db, cfg, binding.objToken, images)
-    patch({ stage: 'write', image_count: imageCount })
+    patch({ stage: 'files', image_count: imageCount })
+
+    // ③b 群内附件：<20MB 文件 → 下载 → 上传 docx_file 素材 → file block；超限/失败跳过并记录原因
+    const { blocks: fileBlocks, done: fileCount, skipped: skippedFiles, total: fileTotal } = await collectFileBlocks(db, cfg, binding.objToken, files)
+    patch({ stage: 'write', file_count: fileCount, skipped_files: JSON.stringify(skippedFiles).slice(0, 500) })
 
     // ④ 写入：定位最后一个「项目汇总」章节末尾；无则文末新建；重跑按锚点幂等替换
     const marker = `${START_PREFIX} · 生成于 ${fmtMinute(Date.now())} · 回读群消息 ${lines.length} 条（自项目创建起全量）${truncated ? '（超上限已截断/抽样，仅含最近部分）' : ''}`
-    const blocks = buildArchiveBlocks({ marker, timeline, highlights, quotes, quotesNote, imgBlocks, imageTotal: images.length })
+    const blocks = buildArchiveBlocks({ marker, timeline, highlights, quotes, quotesNote, imgBlocks, imageTotal: images.length, fileBlocks, fileTotal, skippedFiles })
     const firstBlockId = await writeArchiveSection(db, cfg, pid, binding.objToken, blocks)
     patch({
       status: 'done', stage: 'done', first_block_id: firstBlockId,
@@ -245,8 +257,32 @@ async function collectImageBlocks(db, cfg, documentId, images) {
   return { blocks, done }
 }
 
-/** 生成区结构：首标记行 → 关键时间线 → 重要内容 → 群内金句 → 群内图片 → 尾标记行。 */
-function buildArchiveBlocks({ marker, timeline, highlights, quotes, quotesNote, imgBlocks, imageTotal }) {
+/** 群内附件归档：下载（<20MB 边界）→ 上传 docx_file → [图注 text + file block]；单文件失败/超限跳过不阻塞。 */
+async function collectFileBlocks(db, cfg, documentId, files) {
+  const blocks = []
+  const skipped = []
+  let done = 0
+  for (const m of files.slice(0, MAX_FILES)) {
+    const name = String(m.fileName || m.fileKey)
+    try {
+      const { bytes, contentType } = await downloadChatFile(cfg, { messageId: m.id, fileKey: m.fileKey }, { maxBytes: MAX_ATTACHMENT_BYTES })
+      const token = await uploadDocFile(cfg, documentId, { fileName: name, bytes, contentType })
+      if (!token) throw new Error('素材上传未返回 file_token')
+      const speaker = mapSpeaker(db, 'feishu', m.speakerId)?.name ?? '未识别'
+      blocks.push(textBlock(`${today(m.ts)} ${speaker} · ${name}`))
+      blocks.push(fileBlock(token, name))
+      done++
+    } catch (e) {
+      skipped.push({ name, reason: String(e?.message || e).slice(0, 80) })
+    }
+  }
+  const overLimit = files.slice(MAX_FILES)
+  for (const m of overLimit) skipped.push({ name: String(m.fileName || m.fileKey), reason: `附件数量超 ${MAX_FILES} 上限未归档` })
+  return { blocks, done, skipped, total: files.length }
+}
+
+/** 生成区结构：首标记行 → 关键时间线 → 重要内容 → 群内金句 → 群内图片 → 群内附件 → 尾标记行。 */
+function buildArchiveBlocks({ marker, timeline, highlights, quotes, quotesNote, imgBlocks, imageTotal, fileBlocks, fileTotal, skippedFiles }) {
   const blocks = [textBlock(marker), heading3('关键时间线')]
   if (timeline.length) timeline.forEach((l) => blocks.push(bullet(l)))
   else blocks.push(textBlock('（事件流暂无记录）'))
@@ -259,6 +295,10 @@ function buildArchiveBlocks({ marker, timeline, highlights, quotes, quotesNote, 
   blocks.push(heading3('群内图片'))
   if (imgBlocks.length) blocks.push(...imgBlocks)
   else blocks.push(textBlock(imageTotal ? '（图片归档失败——检查飞书应用 im:resource 与素材上传权限后重新生成）' : '（群内无图片消息）'))
+  blocks.push(heading3('群内附件'))
+  if (fileBlocks.length) blocks.push(...fileBlocks)
+  if (skippedFiles.length) blocks.push(textBlock(`（以下附件未归档：${skippedFiles.map((f) => `${f.name}（${f.reason}）`).join('；')}）`))
+  if (!fileBlocks.length && !skippedFiles.length) blocks.push(textBlock(fileTotal ? '（附件归档失败——检查飞书应用 im:resource 与素材上传权限后重新生成）' : '（群内无附件消息）'))
   blocks.push(textBlock(END_MARKER))
   return blocks
 }

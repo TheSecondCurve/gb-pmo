@@ -21,9 +21,9 @@ afterEach(() => { globalThis.fetch = realFetch })
 const okJson = (data) => ({ ok: true, json: async () => ({ code: 0, data }) })
 const el = (t) => ({ elements: [{ text_run: { content: t } }] })
 
-/** 造一条飞书消息原始 item（list API 返回形态）。 */
-function msg(id, sec, senderId, text, { senderType = 'user', msgType = 'text', imageKey } = {}) {
-  const content = msgType === 'image' ? { image_key: imageKey } : { text }
+/** 造一条飞书消息原始 item（list API 返回形态）。file 附件消息传 fileKey/fileName。 */
+function msg(id, sec, senderId, text, { senderType = 'user', msgType = 'text', imageKey, fileKey, fileName } = {}) {
+  const content = msgType === 'image' ? { image_key: imageKey } : msgType === 'file' ? { file_key: fileKey, file_name: fileName } : { text }
   return {
     message_id: id, create_time: String(sec), msg_type: msgType,
     sender: { id: senderId, sender_type: senderType },
@@ -51,7 +51,7 @@ function stubFetch(handlers, calls = []) {
  * 归档阶段 fetch 桩：消息分页 pages、文档现有根块 blocks、图片下载 imageResponder。
  * 返回 calls 供断言（消息翻页、插入 index、batch_delete 区间）。
  */
-function stubArchiveFetch({ pages = [{ items: [], has_more: false }], blocks = [], insertResult, imageResponder, extra = [] } = {}) {
+function stubArchiveFetch({ pages = [{ items: [], has_more: false }], blocks = [], insertResult, imageResponder, fileResponder, extra = [], onUpload } = {}) {
   const calls = []
   let pageIdx = 0
   let uploadSeq = 0
@@ -63,11 +63,18 @@ function stubArchiveFetch({ pages = [{ items: [], has_more: false }], blocks = [
       if (imageResponder) return imageResponder(url)
       return { ok: false, status: 404, json: async () => ({ code: 404, msg: 'not found' }) }
     }
+    if (url.includes('/im/v1/messages/') && url.includes('/resources/')) {
+      if (fileResponder) return fileResponder(url)
+      return { ok: false, status: 404, json: async () => ({ code: 404, msg: 'not found' }) }
+    }
     if (url.includes('/im/v1/messages')) {
       const page = pages[Math.min(pageIdx++, pages.length - 1)]
       return okJson(page)
     }
-    if (url.includes('/drive/v1/medias/upload_all')) return okJson({ file_token: `ft_${++uploadSeq}` })
+    if (url.includes('/drive/v1/medias/upload_all')) {
+      if (onUpload) onUpload(opts)
+      return okJson({ file_token: `ft_${++uploadSeq}` })
+    }
     if (url.includes('/children/batch_delete')) return okJson({})
     if (url.includes('/docx/v1/documents/') && url.includes('/children')) {
       if ((opts.method ?? 'GET') === 'GET') return okJson({ items: blocks, has_more: false })
@@ -246,9 +253,9 @@ describe('S63 项目群全量汇总归档知识库', () => {
     expect(body.index).toBe(4) // 「附录」之前 = 项目汇总章节末
     expect(body.children[0].block_type).toBe(2) // 首标记行（章节已存在，不再新建标题）
     expect(body.children[0].text.elements[0].text_run.content).toContain('项目大脑汇总')
-    // 生成区结构：首标记 → 关键时间线 → 重要内容 → 群内金句 → 群内图片 → 尾标记
+    // 生成区结构：首标记 → 关键时间线 → 重要内容 → 群内金句 → 群内图片 → 群内附件 → 尾标记
     const headings = body.children.filter((b) => b.block_type === 5).map((b) => b.heading3.elements[0].text_run.content)
-    expect(headings).toEqual(['关键时间线', '重要内容', '群内金句', '群内图片'])
+    expect(headings).toEqual(['关键时间线', '重要内容', '群内金句', '群内图片', '群内附件'])
     expect(body.children.at(-1).text.elements[0].text_run.content).toContain('汇总结束')
 
     // 无「项目汇总」章节 → 文末新建 heading2，追加（不传 index）
@@ -350,6 +357,97 @@ describe('S63 项目群全量汇总归档知识库', () => {
     const captions = body.children.filter((b) => b.block_type === 2).map((b) => b.text.elements[0].text_run.content)
     expect(captions.some((t) => t.includes('李四'))).toBe(true) // 图注带说话人
     expect(captions.some((t) => t.includes('张三'))).toBe(true)
+  })
+
+  it('S65-1: file 附件消息解析出 file_key/file_name，且不再混入汇总文本行', async () => {
+    const p = fresh()
+    await bindWiki(p)
+    const createdSec = createdSecOf(p.id)
+    const calls = stubArchiveFetch({
+      pages: [
+        {
+          items: [
+            msg('f1', createdSec + 100, 'fs_zhang', '', { msgType: 'file', fileKey: 'fk_1', fileName: '验收清单.xlsx' }),
+          ],
+          has_more: true, page_token: 'p2',
+        },
+        { items: [msg('t1', createdSec + 200, 'fs_li', '方案已确认')], has_more: false },
+      ],
+      fileResponder: (_url) => ({ ok: true, status: 200, headers: { get: () => 'application/octet-stream' }, body: (async function* () { yield Uint8Array.from([1, 2, 3]) })() }),
+    })
+    const run = await startWikiArchive(db, p.id, members.admin.id, { defer: false })
+    expect(run.status).toBe('done')
+    expect(run.fileCount).toBe(1)
+    const body = insertedChildren(calls)
+    const text = JSON.stringify(body.children)
+    expect(text).toContain('验收清单.xlsx')
+    expect(text).not.toContain('file_key') // 附件消息不进汇总文本行
+    // 无 LLM 时「方案已确认」进有效文本行供 LLM 分块（本测试未配 LLM，故只断言未混入 file 消息内容）
+    expect(text).not.toContain('fk_1')
+  })
+
+  it('S65-2: <20MB 附件经消息资源下载→docx_file 上传→file block，命名/图注/上限计数如实', async () => {
+    const p = fresh()
+    await bindWiki(p)
+    const createdSec = createdSecOf(p.id)
+    const uploadParentTypes = []
+    const items = [
+      msg('t1', createdSec + 100, 'fs_zhang', '文件发你'),
+      msg('f1', createdSec + 200, 'fs_li', '', { msgType: 'file', fileKey: 'fk_a', fileName: '报价单.pdf' }),
+      msg('f2', createdSec + 300, 'fs_zhang', '', { msgType: 'file', fileKey: 'fk_b', fileName: 'fk_b' }), // 缺 file_name 时消息侧已兜底为 file_key
+    ]
+    const calls = stubArchiveFetch({
+      pages: [{ items, has_more: false }],
+      fileResponder: (_url) => ({ ok: true, status: 200, headers: { get: () => 'application/pdf' }, body: (async function* () { yield Uint8Array.from([9, 9]) })() }),
+      onUpload: (opts) => { const fd = opts.body; if (fd?.get) uploadParentTypes.push(fd.get('parent_type')) },
+    })
+    const run = await startWikiArchive(db, p.id, members.admin.id, { defer: false })
+    expect(run.status).toBe('done')
+    expect(run.fileCount).toBe(2)
+    const resCalls = calls.filter((c) => c.url.includes('/resources/'))
+    expect(resCalls.length).toBe(2)
+    const resUrls = resCalls.map((c) => c.url).sort()
+    expect(resUrls[0]).toContain(`messages/f1/resources/fk_a?type=file`)
+    expect(resUrls[1]).toContain(`messages/f2/resources/fk_b?type=file`)
+    const uploads = calls.filter((c) => c.url.includes('/drive/v1/medias/upload_all'))
+    expect(uploads.length).toBe(2)
+    expect(uploadParentTypes).toEqual(['docx_file', 'docx_file'])
+    const body = insertedChildren(calls)
+    const files = body.children.filter((b) => b.block_type === 18)
+    expect(files.length).toBe(2)
+    expect(files[0].file).toEqual({ token: 'ft_1', name: '报价单.pdf' })
+    expect(files[1].file.name).toBe('fk_b')
+    const captions = body.children.filter((b) => b.block_type === 2).map((b) => b.text.elements[0].text_run.content)
+    expect(captions.some((t) => t.includes('李四') && t.includes('报价单.pdf'))).toBe(true)
+    // 附件消息原文不混入汇总文本行；有效文本（t1）在无 LLM 时进 lines 供分块——这里只断言写入的生成区不含 file_key
+    expect(JSON.stringify(body.children)).not.toContain('file_key')
+  })
+
+  it('S65-3: 失败附件跳过不阻塞主流程，页面列明原因且 skipped_files 台账如实', async () => {
+    const p = fresh()
+    await bindWiki(p)
+    const createdSec = createdSecOf(p.id)
+    const items = [
+      msg('f_bad', createdSec + 100, 'fs_li', '', { msgType: 'file', fileKey: 'fk_bad', fileName: '坏文件.zip' }),
+      msg('f_ok', createdSec + 200, 'fs_zhang', '', { msgType: 'file', fileKey: 'fk_ok', fileName: '纪要.docx' }),
+      msg('t1', createdSec + 300, 'fs_li', '现场施工完成'),
+    ]
+    const fileResponder = (url) => {
+      if (url.includes('fk_bad')) return { ok: false, status: 404, json: async () => ({ code: 404, msg: 'not found' }) }
+      return { ok: true, status: 200, headers: { get: () => 'application/octet-stream' }, body: (async function* () { yield Uint8Array.from([7]) })() }
+    }
+    const calls = stubArchiveFetch({ pages: [{ items, has_more: false }], fileResponder })
+    const run = await startWikiArchive(db, p.id, members.admin.id, { defer: false })
+    expect(run.status).toBe('done')
+    expect(run.fileCount).toBe(1)
+    const skipped = JSON.parse(run.skippedFiles || '[]')
+    expect(skipped).toEqual([{ name: '坏文件.zip', reason: expect.stringContaining('404') }])
+    const body = insertedChildren(calls)
+    const text = JSON.stringify(body.children)
+    expect(text).toContain('坏文件.zip')
+    // 无 LLM 时「现场施工完成」进有效文本行供分块（本测试未配 LLM，故只断言主流程未因坏附件中断：done + 成功附件已写入）
+    expect(run.status).toBe('done')
+    expect(text).toContain('纪要.docx')
   })
 
   it('S63-7 补充：getLatestWikiArchiveRun 直读台账——运行中/完成/失败状态如实', async () => {

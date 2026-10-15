@@ -367,7 +367,8 @@ export async function appendDocBlocks(cfg, documentId, blocks) {
  * 全量回读一个群的历史消息（归档一次性回读，区别于增量 fetchMessages——不挪游标语义）。
  * 降序分页（ByCreateTimeDesc）：超 maxMessages 时保留最近段并标 truncated（K48：归档场景近期密度最高，
  * 全程骨架由事件流兜底）。返回翻正为时间正序的 { messages, truncated }，
- * 消息带类型：{ id, speakerId, speakerType, msgType, text, imageKey, ts }（image 消息 text 置空、imageKey 解析自 body）。
+ * 消息带类型：{ id, speakerId, speakerType, msgType, text, imageKey, fileKey, fileName, ts }；
+ * image 消息 text 置空、imageKey 解析自 body；file 附件消息带 fileKey/fileName（file_name 缺失时以 file_key 兜底命名）。
  */
 export async function fetchChatHistory(cfg, groupKey, { startSec = 0, maxMessages = 20000 } = {}) {
   const token = await tenantToken(cfg)
@@ -392,16 +393,27 @@ export async function fetchChatHistory(cfg, groupKey, { startSec = 0, maxMessage
       const sec = Number(item.create_time)
       const msgType = item.msg_type
       let imageKey = null
+      let fileKey = null
+      let fileName = null
       if (msgType === 'image') {
         try { imageKey = JSON.parse(item.body?.content || '{}').image_key || null } catch { /* 忽略坏载荷 */ }
+      }
+      if (msgType === 'file') {
+        try {
+          const content = JSON.parse(item.body?.content || '{}')
+          fileKey = content.file_key || null
+          fileName = content.file_name || fileKey
+        } catch { /* 忽略坏载荷 */ }
       }
       items.push({
         id: item.message_id,
         speakerId: item.sender?.id || '',
         speakerType: item.sender?.sender_type || '',
         msgType,
-        text: msgType === 'image' ? '' : normalizeText(item),
+        text: msgType === 'image' || msgType === 'file' ? '' : normalizeText(item),
         imageKey,
+        fileKey,
+        fileName,
         ts: sec * 1000,
       })
     }
@@ -409,7 +421,7 @@ export async function fetchChatHistory(cfg, groupKey, { startSec = 0, maxMessage
     if (items.length >= maxMessages) { truncated = Boolean(pageToken); pageToken = '' }
   } while (pageToken)
   const capped = items.length > maxMessages ? items.slice(0, maxMessages) : items
-  capped.reverse() // 降序拉取 → 翻正为时间正序供展示/分块
+  capped.sort((a, b) => a.ts - b.ts || String(a.id).localeCompare(String(b.id))) // 时间正序；同秒按 message_id 稳定排序，归档顺序确定
   return { messages: capped, truncated: truncated || items.length > maxMessages }
 }
 
@@ -459,15 +471,15 @@ export async function downloadChatImage(cfg, imageKey) {
   return { bytes: Buffer.from(await res.arrayBuffer()), contentType }
 }
 
-/** 上传图片为文档素材（drive/v1/medias/upload_all，parent_type=docx_image），返回 fileToken。 */
-export async function uploadDocImage(cfg, documentId, { fileName, bytes, contentType }) {
+/** 上传 docx 素材的公共实现：parent_type=docx_image|docx_file（docx_file 单文件上限 20MB，超限由下载侧边界截断）；返回 fileToken。 */
+async function uploadDocMedia(cfg, documentId, { parentType, fileName, bytes, contentType }) {
   const token = await tenantToken(cfg)
   const form = new FormData()
   form.append('file_name', fileName)
-  form.append('parent_type', 'docx_image')
+  form.append('parent_type', parentType)
   form.append('parent_node', documentId)
   form.append('size', String(bytes.length))
-  form.append('file', new Blob([bytes], { type: contentType || 'image/jpeg' }), fileName)
+  form.append('file', new Blob([bytes], { type: contentType || 'application/octet-stream' }), fileName)
   const res = await fetch('https://open.feishu.cn/open-apis/drive/v1/medias/upload_all', {
     method: 'POST', headers: { authorization: `Bearer ${token}` }, body: form,
   })
@@ -478,4 +490,47 @@ export async function uploadDocImage(cfg, documentId, { fileName, bytes, content
     throw Object.assign(new Error(`飞书素材上传失败(${code}): ${data?.msg || ''}${permHint}`), { statusCode: 502 })
   }
   return data.data?.file_token || null
+}
+
+/** 上传图片为文档素材（drive/v1/medias/upload_all，parent_type=docx_image），返回 fileToken。 */
+export async function uploadDocImage(cfg, documentId, { fileName, bytes, contentType }) {
+  return uploadDocMedia(cfg, documentId, { parentType: 'docx_image', fileName, bytes, contentType })
+}
+
+/**
+ * 下载群消息附件（file 消息，GET /im/v1/messages/:message_id/resources/:file_key?type=file）。
+ * 消息体拿不到体积，边下边计数，超过 maxBytes 即中止并抛「超出大小上限」——20MB 边界只认下载到的字节数。
+ * 403 附 im:resource 中文指引；成功返回 { bytes, contentType }。
+ */
+export async function downloadChatFile(cfg, { messageId, fileKey }, { maxBytes = 20 * 1024 * 1024 } = {}) {
+  const token = await tenantToken(cfg)
+  const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(fileKey)}?type=file`, {
+    headers: { authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) {
+    let code = res.status
+    let msg = ''
+    try { const j = await res.json(); code = j.code ?? res.status; msg = j.msg || '' } catch { /* 非 JSON 响应体 */ }
+    const permHint = res.status === 403 ? '——需给飞书应用开通 im:resource 权限（下载消息中的文件）' : ''
+    throw Object.assign(new Error(`飞书附件下载失败(${code}): ${msg}${permHint}`), { statusCode: 502 })
+  }
+  const chunks = []
+  let total = 0
+  for await (const chunk of res.body) {
+    const buf = Buffer.from(chunk)
+    total += buf.length
+    if (total > maxBytes) {
+      try { res.body?.cancel?.() } catch { /* 已中止 */ }
+      throw Object.assign(new Error(`附件超过 ${Math.round(maxBytes / 1024 / 1024)}MB，未归档`), { statusCode: 413 })
+    }
+    chunks.push(buf)
+  }
+  const bytes = Buffer.concat(chunks)
+  if (!bytes.length) throw Object.assign(new Error('附件下载为空'), { statusCode: 502 })
+  return { bytes, contentType: res.headers?.get?.('content-type') || 'application/octet-stream' }
+}
+
+/** 上传附件为文档文件素材（drive/v1/medias/upload_all，parent_type=docx_file），返回 fileToken。 */
+export async function uploadDocFile(cfg, documentId, { fileName, bytes, contentType }) {
+  return uploadDocMedia(cfg, documentId, { parentType: 'docx_file', fileName, bytes, contentType })
 }
