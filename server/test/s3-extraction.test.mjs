@@ -1,9 +1,10 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
-import { upsertChannel } from '../engine/tasks.js'
+import { upsertChannel, createMilestone } from '../engine/tasks.js'
 import { ingestMessages, runExtraction, mapSpeaker } from '../brain/extract.js'
 import { acceptanceAlarm } from '../engine/metrics.js'
 import { addEvent, confirmEvent } from '../engine/events.js'
+import { today } from '../db/time.js'
 
 // PRD S3 — IM 抽取与分拣（专题渠道 / 通用群 LLM 分拣 / 身份映射 / 完成信号建议 / 采纳率告警）
 
@@ -96,27 +97,64 @@ describe('S3 IM 抽取与分拣', () => {
     expect(ev.some((e) => e.target_field === 'responsible_member_id')).toBe(false)
   })
 
-  it('S3-4: 完成信号生成状态变更建议并推送责任人；确认后生效', async () => {
+  it('S3-4: 明确任务完成信号唯一匹配 → 直接生效；自动事件无人确认人，完成日取源消息北京日', async () => {
     const a = await mkProject('客户E系统', ctx.members.lead.id)
     const ch = upsertChannel(ctx.db, { platform: 'wecom', groupKey: 'wk_e', channelType: 'dedicated', projectId: a.id })
     const target = a.tasks.find((t) => t.title.includes('设备预检'))
+    const sourceTs = Date.now() - 2 * 86400000
+    ctx.db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(sourceTs - 1000, target.id)
     const llm = fakeLlm(() =>
-      JSON.stringify({ events: [{ nature: 'suggestion', eventType: 'status_change', summary: '设备预检已完成', targetTaskId: target.id, targetField: 'status', targetValue: 'done', confidence: 0.92 }] })
+      JSON.stringify({ events: [{ nature: 'suggestion', eventType: 'status_change', summary: '设备预检已完成', targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'status', targetValue: 'done', confidence: 0.92 }] })
     )
-    const stats = await ingestMessages(ctx.db, ch, [{ id: 'wm_1', speakerId: 'wk_wang', text: '设备预检完成了，都检查过了', ts: Date.now() }], { llm })
+    const stats = await ingestMessages(ctx.db, ch, [{ id: 'wm_1', speakerId: 'wk_wang', text: `${target.title}完成了，都检查过了`, ts: sourceTs }], { llm })
+    expect(stats.suggestions).toBe(0)
+    expect(stats.autoApplied).toBe(1)
+    const evt = ctx.db.prepare(`SELECT * FROM project_events WHERE target_task_id = ? AND target_object = 'task' ORDER BY id DESC`).get(target.id)
+    expect(evt.status).toBe('effective')
+    expect(evt.decided_by).toBeNull()
+    expect(evt.operation_key).toContain('wm_1')
+    const after = ctx.db.prepare('SELECT status, actual_end_date FROM tasks WHERE id = ?').get(target.id)
+    expect(after.status).toBe('done')
+    expect(after.actual_end_date).toBe(today(sourceTs))
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM pushes WHERE title LIKE '%待确认建议%' AND related_project_id = ?`).get(a.id).n).toBe(0)
+    const audit = ctx.db.prepare(`SELECT * FROM audit_logs WHERE action = 'extraction.apply' AND object_id = ?`).get(String(target.id))
+    expect(audit).toBeTruthy()
+  })
+
+  it('S3-4: 明确里程碑达成信号 → 直接更新里程碑；同名任务与里程碑无法判定时只 pending 不猜', async () => {
+    const a = await mkProject('客户E2系统', ctx.members.lead.id)
+    const ch = upsertChannel(ctx.db, { platform: 'feishu', groupKey: 'oc_e2', channelType: 'dedicated', projectId: a.id })
+    const ms = createMilestone(ctx.db, { projectId: a.id, name: '上线验收', planDate: '2026-12-20' }, ctx.members.lead.id)
+    const sourceTs = Date.now() - 86400000
+    ctx.db.prepare('UPDATE milestones SET updated_at = ? WHERE id = ?').run(sourceTs - 1000, ms.id)
+    const llm = fakeLlm(() => JSON.stringify({ events: [{ nature: 'suggestion', eventType: 'status_change', summary: '里程碑「上线验收」已达成', targetObject: 'milestone', targetTaskId: ms.id, targetName: '上线验收', targetField: 'status', targetValue: 'met', confidence: 0.95 }] }))
+    const stats = await ingestMessages(ctx.db, ch, [{ id: 'om_ms_auto', speakerId: 'fs_zhang', text: '里程碑「上线验收」已经完成', ts: sourceTs }], { llm })
+    expect(stats.autoApplied).toBe(1)
+    const after = ctx.db.prepare('SELECT status, actual_date FROM milestones WHERE id = ?').get(ms.id)
+    expect(after).toEqual({ status: 'met', actual_date: today(sourceTs) })
+
+    const target = a.tasks[0]
+    const duplicate = createMilestone(ctx.db, { projectId: a.id, name: target.title, planDate: '2026-12-25' }, ctx.members.lead.id)
+    const ambiguousLlm = fakeLlm(() => JSON.stringify({ events: [{ nature: 'suggestion', eventType: 'status_change', summary: `「${target.title}」已完成`, targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'status', targetValue: 'done', confidence: 0.96 }] }))
+    const pending = await ingestMessages(ctx.db, ch, [{ id: 'om_ambiguous', speakerId: 'fs_zhang', text: `「${target.title}」完成了`, ts: Date.now() }], { llm: ambiguousLlm })
+    expect(pending.autoApplied).toBe(0)
+    expect(pending.suggestions).toBe(1)
+    expect(ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(target.id).status).toBe('todo')
+    expect(ctx.db.prepare('SELECT status FROM milestones WHERE id = ?').get(duplicate.id).status).toBe('planned')
+    const evt = ctx.db.prepare(`SELECT * FROM project_events WHERE source_ref = 'om_ambiguous'`).get()
+    expect(evt.status).toBe('pending')
+    expect(JSON.parse(evt.target_candidates || '[]')).toHaveLength(2)
+  })
+
+  it('S3-4: 原话明确类型与唯一名称冲突时不张冠李戴，只 pending', async () => {
+    const a = await mkProject('客户E3系统', ctx.members.lead.id)
+    const ch = upsertChannel(ctx.db, { platform: 'feishu', groupKey: 'oc_e3', channelType: 'dedicated', projectId: a.id })
+    const target = a.tasks[0]
+    const llm = fakeLlm(() => JSON.stringify({ events: [{ nature: 'suggestion', eventType: 'status_change', summary: `里程碑「${target.title}」已完成`, targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'status', targetValue: 'done', confidence: 0.99 }] }))
+    const stats = await ingestMessages(ctx.db, ch, [{ id: 'om_type_conflict', speakerId: 'fs_zhang', text: `里程碑「${target.title}」已经完成`, ts: Date.now() }], { llm })
+    expect(stats.autoApplied).toBe(0)
     expect(stats.suggestions).toBe(1)
-    const evt = ctx.db.prepare(`SELECT * FROM project_events WHERE target_task_id = ? AND status = 'pending'`).get(target.id)
-    expect(evt).toBeTruthy()
-    // 推送责任人（牵头人）
-    const push = ctx.db.prepare(`SELECT * FROM pushes WHERE title LIKE '%待确认建议%' AND recipient_member_id = ?`).get(ctx.members.lead.id)
-    expect(push).toBeTruthy()
-    // 任务状态未被直接改动（信任边界）
-    const before = ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(target.id).status
-    expect(before).toBe('todo')
-    // 确认后生效
-    confirmEvent(ctx.db, evt.id, ctx.members.lead.id)
-    const after = ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(target.id).status
-    expect(after).toBe('done')
+    expect(ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(target.id).status).toBe('todo')
   })
 
   it('S3-5: 周采纳率低于阈值 → 告警管理员（runExtraction 附带告警）', async () => {
@@ -132,8 +170,15 @@ describe('S3 IM 抽取与分拣', () => {
         ctx.db.prepare(`UPDATE project_events SET status = 'rejected' WHERE id = ?`).run(e.id)
       }
     }
+    const beforeAuto = acceptanceAlarm(ctx.db)
+    addEvent(ctx.db, {
+      projectId: a.id, nature: 'suggestion', eventType: 'status_change', summary: '自动生效不计人工采纳率',
+      targetTaskId: a.tasks[0].id, targetField: 'status', targetValue: 'done', generatedBy: 'extraction', status: 'effective',
+    })
     const alarm = acceptanceAlarm(ctx.db)
     expect(alarm).toBeTruthy()
+    expect(alarm.generated).toBe(beforeAuto.generated)
+    expect(alarm.accepted).toBe(beforeAuto.accepted)
     expect(alarm.rate).toBeLessThan(0.7)
     // runExtraction（无渠道可拉）也会附带告警并推送管理员
     const res = await runExtraction(ctx.db, {}, { llm: fakeLlm(() => JSON.stringify({ events: [] })) })

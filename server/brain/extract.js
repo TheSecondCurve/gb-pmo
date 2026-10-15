@@ -1,14 +1,14 @@
 // 大脑·IM 抽取（S3）：专题渠道直接抽取；通用群先 LLM 分拣（低置信进未分拣池）。
-// 信任边界：记录型自动生效；建议型（状态/日期/责任人）一律 pending 等人确认。
+// K50：分批 LLM 只产候选，同一项目本轮汇总后明确更新自动生效，疑难候选才 pending 人审。
 // S50（v0.55，K33）：噪音确定性预过滤（不进 LLM、不产降级事件）；按项目归组分批抽取
 // （≤8 条且 ≤3000 字一批一次调用，事件按 msgIndex 归因源消息，缺省归批次末条）；
 // 通用群分拣维持逐条（合并判定会跨消息污染）。
 
 import { camelizeRows, camelizeRow } from '../db/index.mjs'
 import { getSetting } from '../engine/settings.js'
-import { addEvent, markPushedTo } from '../engine/events.js'
-import { addTaskRecord } from '../engine/tasks.js'
+import { markPushedTo } from '../engine/events.js'
 import { getLlm, parseJsonLoose } from './llm.js'
+import { persistExtractionEvents } from './extractionUpdates.js'
 import { routeMessage } from './routing.js'
 import { notifyMember, notifyAdmins, notifyProjectChannel } from './push.js'
 import { buildSuggestionCard } from './bot/cards.js' // S55：建议确认卡
@@ -45,7 +45,7 @@ export async function runExtraction(db, { channelId, projectId } = {}, { llm, se
       const { messages, nextCursor } = await CONN[ch.platform].fetchMessages(cfg, ch, ch.cursor)
       const ingested = await ingestMessages(db, ch, messages, { llm, send })
       db.prepare('UPDATE channels SET cursor = ?, last_pull_at = ? WHERE id = ?').run(nextCursor, Date.now(), ch.id)
-      Object.assign(row, { pulled: messages.length, events: (row.events ?? 0) + (ingested.events ?? 0), suggestions: (row.suggestions ?? 0) + (ingested.suggestions ?? 0), unrouted: (row.unrouted ?? 0) + (ingested.unrouted ?? 0), noiseSkipped: (row.noiseSkipped ?? 0) + (ingested.noiseSkipped ?? 0), bufferSkipped: (row.bufferSkipped ?? 0) + (ingested.bufferSkipped ?? 0) })
+      Object.assign(row, { pulled: messages.length, events: (row.events ?? 0) + (ingested.events ?? 0), suggestions: (row.suggestions ?? 0) + (ingested.suggestions ?? 0), autoApplied: (row.autoApplied ?? 0) + (ingested.autoApplied ?? 0), duplicates: (row.duplicates ?? 0) + (ingested.duplicates ?? 0), unrouted: (row.unrouted ?? 0) + (ingested.unrouted ?? 0), noiseSkipped: (row.noiseSkipped ?? 0) + (ingested.noiseSkipped ?? 0), bufferSkipped: (row.bufferSkipped ?? 0) + (ingested.bufferSkipped ?? 0) })
       // S60：收集本轮进展（排干缓冲与 API 两路都汇聚）
       for (const ev of ingested.progressEvents ?? []) {
         if (!progressByProject.has(ev.projectId)) progressByProject.set(ev.projectId, [])
@@ -140,7 +140,7 @@ function chunkBatches(items) {
  * S20-10：机器人已处理/已回复的消息（bot_commands 有 message_id）跳过，防同一消息双入库。
  */
 export async function ingestMessages(db, channel, messages, { llm: llmOverride, send } = {}) {
-  const stats = { events: 0, suggestions: 0, unrouted: 0, unknownSpeakers: 0, botProcessed: 0, noiseSkipped: 0, bufferSkipped: 0, taskRecords: 0, progressEvents: [] } // S60：progressEvents 供周期尾部播报聚合
+  const stats = { events: 0, suggestions: 0, autoApplied: 0, duplicates: 0, unrouted: 0, unknownSpeakers: 0, botProcessed: 0, noiseSkipped: 0, bufferSkipped: 0, taskRecords: 0, progressEvents: [] } // S60：progressEvents 供周期尾部播报聚合
   const projectNameCache = new Map() // S60：projectId → 项目名（播报卡片标题用，单次 ingest 内查一次）
   // S20-10 去重口径（v0.57 修订）：机器人「指令已处理/已回复」的消息跳过；refused_not_mentioned 的
   // 未@忽略行不算已处理——正是 S52 缓冲要抽取的内容，不排除（否则缓冲排干会被全部误跳）。
@@ -198,53 +198,28 @@ export async function ingestMessages(db, channel, messages, { llm: llmOverride, 
   }
   for (const [projectId, items] of byProject) {
     const llm = getLlm(db, llmOverride, { purpose: 'extraction', projectId })
+    const extracted = []
+    let sequence = 0
     for (const batch of chunkBatches(items)) {
-      const extracted = await extractEvents(llm, db, projectId, batch.map((i) => i.msg))
-      for (const evt of extracted) {
+      const fromBatch = await extractEvents(llm, db, projectId, batch.map((i) => i.msg))
+      for (const evt of fromBatch) {
         const source = evt.sourceMsg || batch[batch.length - 1].msg
         // S3-3：未识别发言人不得产生针对具体人的任务建议（按事件的源消息发言人判定，S50 批量延伸）
         if (evt.nature === 'suggestion' && evt.targetField === 'responsible_member_id' && !source.speakerMemberId) continue
-        const created = addEvent(db, {
-          projectId,
-          businessTime: source.ts,
-          nature: evt.nature,
-          eventType: evt.eventType,
-          summary: evt.summary,
-          rawSnapshot: source.text,
-          sourcePlatform: channel.platform,
-          sourceRef: source.id,
-          speakerMemberId: source.speakerMemberId,
-          speakerLabel: source.speakerName,
-          confidence: evt.confidence ?? null,
-          targetObject: evt.targetObject || 'task',
-          targetTaskId: evt.targetTaskId ?? null,
-          targetField: evt.targetField ?? null,
-          targetValue: evt.targetValue !== undefined ? String(evt.targetValue) : null,
-          generatedBy: 'extraction',
-        })
-        if (created.status === 'pending') {
-          stats.suggestions += 1
-          await pushSuggestion(db, created, { send })
-        } else {
-          stats.events += 1
-          // S60：record 型 progress 事件收集供周期尾部播报（不落台账、不阻塞，仅聚合摘要）
-          if (evt.eventType === 'progress') {
-            if (!projectNameCache.has(projectId)) {
-              projectNameCache.set(projectId, db.prepare('SELECT name FROM projects WHERE id = ?').get(projectId)?.name || `项目#${projectId}`)
-            }
-            stats.progressEvents.push({ projectId, projectName: projectNameCache.get(projectId), summary: evt.summary })
-          }
-          // S56（v0.61，K39）：记录型事件带合法任务归属 → 同步归档任务时间线
-          // （复用 addTaskRecord 既有守卫：终态项目/已删任务静默跳过，不阻塞事件与后续消息）
-          if (evt.targetTaskId) {
-            try {
-              addTaskRecord(db, { taskId: evt.targetTaskId, content: evt.summary }, source.speakerMemberId)
-              stats.taskRecords += 1
-            } catch { /* 终态只读/任务已删 → 静默跳过 */ }
-          }
-        }
+        evt.sequence = sequence++
+        evt.sourcePlatform = channel.platform
+        extracted.push(evt)
       }
     }
+    if (!projectNameCache.has(projectId)) {
+      projectNameCache.set(projectId, db.prepare('SELECT name FROM projects WHERE id = ?').get(projectId)?.name || `项目#${projectId}`)
+    }
+    // K50：本项目的全部分批候选先汇总，再统一去重/消歧/应用；推送在事务提交后执行。
+    const pending = persistExtractionEvents(db, {
+      projectId, channel, extracted, stats, projectName: projectNameCache.get(projectId),
+      batchId: `${channel.platform}:${channel.groupKey}:${Date.now()}:${projectId}`,
+    })
+    for (const created of pending) await pushSuggestion(db, created, { send })
   }
   return stats
 }
@@ -269,7 +244,10 @@ export async function pushSuggestion(db, evt, { send, secret } = {}) {
       const member = camelizeRow(m)
       // S55：卡片仅在「绑定飞书 + 有签名密钥」时有意义（按钮回调要能过签名校验）
       const card = member.feishuId && hmacSecret
-        ? buildSuggestionCard({ id: evt.id, summary: evt.summary, projectName: project?.name, typeLabel: label('eventType', evt.eventType) }, hmacSecret)
+        ? buildSuggestionCard({
+          id: evt.id, summary: evt.summary, projectName: project?.name, typeLabel: label('eventType', evt.eventType),
+          candidates: evt.targetCandidates ? JSON.parse(evt.targetCandidates) : [],
+        }, hmacSecret)
         : null
       await notifyMember(db, member, {
         pushType: 'digest',
@@ -355,29 +333,26 @@ export async function routeUnrouted(db, id, projectId, { llm: llmOverride, send 
   if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
   const llm = getLlm(db, llmOverride, { purpose: 'extraction', projectId: project.id })
   const extracted = await extractEvents(llm, db, project.id, [{ speakerName: row.speaker_label || '未识别发言人', text: row.content }])
-  let events = 0
-  let suggestions = 0
-  for (const evt of extracted) {
+  const candidates = []
+  for (const [sequence, evt] of extracted.entries()) {
     if (evt.nature === 'suggestion' && evt.targetField === 'responsible_member_id') continue // S3-3 同口径
-    const created = addEvent(db, {
-      projectId: project.id, businessTime: row.business_time, nature: evt.nature, eventType: evt.eventType,
-      summary: evt.summary, rawSnapshot: row.content, sourcePlatform: row.platform,
-      speakerMemberId: null, speakerLabel: row.speaker_label || '未识别发言人',
-      confidence: evt.confidence ?? null, targetObject: evt.targetObject || 'task',
-      targetTaskId: evt.targetTaskId ?? null, targetField: evt.targetField ?? null,
-      targetValue: evt.targetValue !== undefined ? String(evt.targetValue) : null,
-      generatedBy: 'extraction',
-    })
-    if (created.status === 'pending') { suggestions += 1; await pushSuggestion(db, created, { send }) } else {
-      events += 1
-      // S56：记录型事件带任务归属 → 同步归档任务时间线（终态/已删静默跳过）
-      if (evt.targetTaskId) {
-        try { addTaskRecord(db, { taskId: evt.targetTaskId, content: evt.summary }, null) } catch { /* 静默跳过 */ }
-      }
+    evt.sourceMsg = {
+      ...evt.sourceMsg, id: `unrouted:${id}`, ts: row.business_time,
+      speakerMemberId: null, speakerName: row.speaker_label || '未识别发言人', text: row.content,
     }
+    evt.sourceAttributed = true
+    evt.sourcePlatform = row.platform
+    evt.sequence = sequence
+    candidates.push(evt)
   }
+  const stats = { events: 0, suggestions: 0, autoApplied: 0, duplicates: 0, taskRecords: 0, progressEvents: [] }
+  const pending = persistExtractionEvents(db, {
+    projectId: project.id, channel: { platform: row.platform }, extracted: candidates, stats,
+    projectName: project.name, batchId: `unrouted:${id}:${Date.now()}`,
+  })
+  for (const created of pending) await pushSuggestion(db, created, { send })
   db.prepare(`UPDATE unrouted_messages SET status = 'routed', routed_project_id = ? WHERE id = ?`).run(project.id, id)
-  return { ok: true, projectId: project.id, projectName: project.name, events, suggestions }
+  return { ok: true, projectId: project.id, projectName: project.name, events: stats.events, suggestions: stats.suggestions, autoApplied: stats.autoApplied }
 }
 
 /**
@@ -413,8 +388,9 @@ export async function extractEvents(llm, db, projectId, messages) {
         role: 'system',
         content: `你是企业项目大脑的抽取器。从群聊消息中抽取项目事件，输出 JSON {"events":[...]}。
 每条事件：{"nature":"record"|"suggestion","eventType":"progress|risk|decision|blocker|finance|schedule_change|status_change|owner_change","summary":"一句中文摘要","confidence":0~1,
-"suggestion 时必填":"targetTaskId(上面任务清单里的#id)","targetField":"status|plan_end_date|plan_start_date","targetValue":"对应值(日期用YYYY-MM-DD)"}。
-规则：纯进展/风险/决策/财务事实描述 → record（财务类消息如回款/开票/费用沟通 eventType=finance，仅记录、不含金额字段）；消息明确在说某条任务的进展/情况时 record 事件也可带 targetTaskId（摘要会同步归档到该任务的更新记录，S56）；明确的任务完成/日期变化信号 → suggestion（如"已上线/完成了" → status=done，"推迟到X" → plan_end_date）；与项目无关的寒暄不要产出；没有把握不要编 targetTaskId。${multi ? '每条事件附 "msgIndex"（消息编号 [i] 的 i，0 基）指明来源消息；无法确定时省略。' : ''}只输出 JSON。`,
+"suggestion 时必填":"targetObject=task|milestone、targetTaskId=所选对象清单里的#id、targetName=原话指称的任务/里程碑名称、targetField、targetValue"}。
+字段与值：任务支持 status=todo|doing|done、plan_start_date/plan_end_date=YYYY-MM-DD、responsible_member_id=成员id；里程碑支持 status=planned|met|missed|cancelled、plan_date=YYYY-MM-DD。
+规则：纯进展/风险/决策/财务事实描述 → record（财务类消息如回款/开票/费用沟通 eventType=finance，仅记录、不含金额字段）；消息明确在说某条任务的进展/情况时 record 事件也可带 targetTaskId（摘要会同步归档到该任务的更新记录，S56）；明确的任务/里程碑完成或日期变化信号 → suggestion（任务完成 status=done，里程碑达成 status=met，推迟到X按对象写对应计划日期）；与项目无关的寒暄不要产出。targetName 必须保留原话中的对象名称，代码会同时在任务与里程碑中消歧；同名或没有把握不要硬猜，给较低 confidence，不得编造 id。${multi ? '每条事件附 "msgIndex"（消息编号 [i] 的 i，0 基）指明来源消息；更新候选尤其要准确归因，无法确定时省略并降低 confidence。' : ''}只输出 JSON。`,
       },
       {
         role: 'user',
@@ -426,22 +402,36 @@ export async function extractEvents(llm, db, projectId, messages) {
   const parsed = parseJsonLoose(out)
   if (!parsed || !Array.isArray(parsed.events)) return []
   const validTasks = new Set(tasks.map((t) => t.id))
+  const validMilestones = new Set(milestones.map((m) => m.id))
   return parsed.events
     .filter((e) => e && e.summary && e.eventType)
-    .filter((e) => e.nature !== 'suggestion' || (e.targetTaskId && validTasks.has(Number(e.targetTaskId)) && e.targetField && e.targetValue !== undefined))
+    .filter((e) => {
+      if (e.nature !== 'suggestion') return true
+      const targetObject = e.targetObject === 'milestone' || e.targetMilestoneId != null ? 'milestone' : 'task'
+      const targetId = Number(e.targetTaskId ?? e.targetMilestoneId)
+      const valid = targetObject === 'milestone' ? validMilestones : validTasks
+      return targetId && valid.has(targetId) && e.targetField && e.targetValue !== undefined
+    })
     .map((e) => {
-      const idx = Number.isInteger(e.msgIndex) && e.msgIndex >= 0 && e.msgIndex < messages.length ? e.msgIndex : messages.length - 1
-      // S56：记录型的 targetTaskId 也须属本项目未删任务——非法 id 丢弃字段不丢事件
-      const tid = e.targetTaskId && validTasks.has(Number(e.targetTaskId)) ? Number(e.targetTaskId) : null
+      const hasValidIndex = Number.isInteger(e.msgIndex) && e.msgIndex >= 0 && e.msgIndex < messages.length
+      const idx = hasValidIndex ? e.msgIndex : messages.length - 1
+      const targetObject = e.targetObject === 'milestone' || e.targetMilestoneId != null ? 'milestone' : 'task'
+      const rawId = Number(e.targetTaskId ?? e.targetMilestoneId)
+      const valid = targetObject === 'milestone' ? validMilestones : validTasks
+      const tid = rawId && valid.has(rawId) ? rawId : null
+      const confidence = Number(e.confidence)
       return {
         nature: e.nature === 'suggestion' ? 'suggestion' : 'record',
         eventType: String(e.eventType),
         summary: String(e.summary).slice(0, 200),
-        confidence: Number(e.confidence) || null,
+        confidence: Number.isFinite(confidence) ? Math.max(0, Math.min(1, confidence)) : null,
+        targetObject: e.nature === 'suggestion' ? targetObject : (tid ? 'task' : null),
         targetTaskId: tid,
+        targetName: e.targetName ? String(e.targetName).slice(0, 200) : null,
         targetField: e.targetField || null,
         targetValue: e.targetValue,
         sourceMsg: messages[idx], // S50：事件归因源消息（缺省/越界归批次末条）
+        sourceAttributed: messages.length === 1 || hasValidIndex,
       }
     })
 }

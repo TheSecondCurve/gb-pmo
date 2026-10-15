@@ -242,6 +242,7 @@ const IMPLEMENTATIONS = {
            ROUND(1.0 * SUM(CASE WHEN e.status = 'effective' THEN 1 ELSE 0 END) / COUNT(*), 4) AS acceptance_rate
          FROM project_events e LEFT JOIN projects p ON p.id = e.project_id
          WHERE e.nature = 'suggestion' AND e.created_at >= ?
+           AND NOT (e.generated_by = 'extraction' AND e.status = 'effective' AND e.decided_by IS NULL)
          GROUP BY ${dims}`
       )
       .all(cutoff)

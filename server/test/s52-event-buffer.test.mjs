@@ -108,4 +108,42 @@ describe('S52 事件驱动抽取缓冲', () => {
     expect(stats2.noiseSkipped).toBe(1)
     expect(stats2.events).toBe(0)
   })
+
+  it('S52-5: 自动更新与人工驳回均有 operation_key 幂等，重放不重复修改或复活', async () => {
+    const { db } = setupDb()
+    const members = seedMembers(db)
+    const { ingestMessages } = await import('../brain/extract.js')
+    const { rejectEvent } = await import('../engine/events.js')
+    const p = createProject(db, { name: '重放幂等项目', typeCode: 'lianmai_365', leadMemberId: members.lead.id }, members.admin.id)
+    const ch = upsertChannel(db, { platform: 'feishu', groupKey: 'oc_replay', channelType: 'dedicated', projectId: p.id })
+    const target = p.tasks[0]
+    const llm = fakeLlm((messages) => {
+      const needsHuman = messages[1].content.includes('需要人工判断')
+      return JSON.stringify({ events: [{ nature: 'suggestion', eventType: 'status_change', summary: `${target.title}完成`, targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'status', targetValue: 'done', confidence: needsHuman ? 0.5 : 0.95 }] })
+    })
+    const msg = { id: 'replay_done', speakerId: 'fs_zhang', text: `${target.title}完成了`, ts: Date.now() }
+    const first = await ingestMessages(db, ch, [msg], { llm })
+    expect(first.autoApplied).toBe(1)
+    expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get(target.id).status).toBe('done')
+    const eventCount = db.prepare('SELECT COUNT(*) AS n FROM project_events').get().n
+
+    // 模拟人工已重开后旧消息重放：不得按旧完成信号再次完成，也不重复落事件
+    db.prepare(`UPDATE tasks SET status = 'todo', actual_end_date = NULL WHERE id = ?`).run(target.id)
+    const replay = await ingestMessages(db, ch, [msg], { llm })
+    expect(replay.autoApplied).toBe(0)
+    expect(replay.suggestions).toBe(0)
+    expect(db.prepare('SELECT status FROM tasks WHERE id = ?').get(target.id).status).toBe('todo')
+    expect(db.prepare('SELECT COUNT(*) AS n FROM project_events').get().n).toBe(eventCount)
+
+    const pendingMsg = { id: 'replay_pending', speakerId: 'fs_zhang', text: `${target.title}需要人工判断后完成`, ts: Date.now() + 1000 }
+    const pending = await ingestMessages(db, ch, [pendingMsg], { llm })
+    expect(pending.suggestions).toBe(1)
+    const evt = db.prepare(`SELECT * FROM project_events WHERE source_ref = 'replay_pending'`).get()
+    rejectEvent(db, evt.id, members.lead.id)
+    const rejectedReplay = await ingestMessages(db, ch, [pendingMsg], { llm })
+    expect(rejectedReplay.suggestions).toBe(0)
+    expect(db.prepare(`SELECT status FROM project_events WHERE source_ref = 'replay_pending'`).get().status).toBe('rejected')
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM project_events WHERE source_ref = 'replay_pending'`).get().n).toBe(1)
+    db.close()
+  })
 })
