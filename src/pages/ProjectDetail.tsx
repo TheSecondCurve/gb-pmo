@@ -13,8 +13,8 @@ import {
   type ChannelRow, type EventRow, type InitAssignmentRow, type Member, type ProjectDetail, type TaskRecordRow, type TaskRefRow, type WikiArchiveRun, type WikiBinding,
 } from '../types'
 
-/** S63（v0.68）：汇总归档运行阶段中文标签（wiki_archive_runs.stage）。 */
-const ARCHIVE_STAGE_LABEL: Record<string, string> = { fetch: '回读群消息', summarize: '汇总提炼', images: '搬运图片', write: '写入页面' }
+/** S63（v0.68）：汇总归档运行阶段中文标签（wiki_archive_runs.stage）；S65：files=归档附件中。 */
+const ARCHIVE_STAGE_LABEL: Record<string, string> = { fetch: '回读群消息', summarize: '汇总提炼', images: '搬运图片', files: '归档附件中', write: '写入页面' }
 
 export default function ProjectDetail({ id }: { id: number }) {
   const { toast, member } = useStore()
@@ -318,7 +318,7 @@ export default function ProjectDetail({ id }: { id: number }) {
                   {archiveRun.status === 'running' && `⏳ 正在生成项目汇总：${ARCHIVE_STAGE_LABEL[archiveRun.stage ?? ''] ?? '处理中'}…`}
                   {archiveRun.status === 'done' && (
                     <span>
-                      ✅ 最近汇总 {fmtDateTime(archiveRun.finishedAt ?? archiveRun.createdAt)} · 消息 {archiveRun.messageCount ?? 0} 条 · 金句 {archiveRun.quotesCount ?? 0} 条 · 图片 {archiveRun.imageCount ?? 0} 张{archiveRun.truncated ? '（超上限已截断）' : ''}
+                      ✅ 最近汇总 {fmtDateTime(archiveRun.finishedAt ?? archiveRun.createdAt)} · 消息 {archiveRun.messageCount ?? 0} 条 · 金句 {archiveRun.quotesCount ?? 0} 条 · 图片 {archiveRun.imageCount ?? 0} 张 · 附件 {archiveRun.fileCount ?? 0} 个{archiveRun.truncated ? '（超上限已截断）' : ''}
                       {archiveRun.pageUrl && <> · <a className="text-[var(--color-primary)]" href={archiveRun.pageUrl} target="_blank" rel="noreferrer">查看</a></>}
                     </span>
                   )}

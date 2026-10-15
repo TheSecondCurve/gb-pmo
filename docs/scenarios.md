@@ -645,9 +645,9 @@ extraction 调度周期尾部，把本轮各项目沉淀的 record 型 `progress
 | S62-4 | 当项目未绑定页面且无默认父页面时，维持引导式拒绝（两种绑定方式明示） | `server/test/s62-wiki-default-parent.test.mjs` |
 | S62-5 | 当已绑定页面时，record_wiki 成功回执应带页面可点链接 | `server/test/s62-wiki-default-parent.test.mjs` |
 
-## S63（P0）— 牵头人/管理员（web）+ 系统（大脑·飞书知识库/IM 全量回读）— 项目群全量汇总归档知识库（v0.68）
+## S63（P0）— 牵头人/管理员（web）+ 系统（大脑·飞书知识库/IM 全量回读）— 项目群全量汇总归档知识库（v0.68；S65 v0.71 增补附件归档）
 
-web 项目详情页手动触发「生成项目汇总」：全量回读项目绑定专题群历史消息（不挪游标/不产事件），关键时间线取事件流+里程碑+任务（确定性），LLM 分块产重要内容与金句，群内图片下载后上传为文档图片块；写入绑定页面最后一个「项目汇总」章节（不存在则新建），重复触发幂等替换旧生成区。异步执行落 `wiki_archive_runs` 台账，前端轮询。决策见 design.md K48。
+web 项目详情页手动触发「生成项目汇总」：全量回读项目绑定专题群历史消息（不挪游标/不产事件），关键时间线取事件流+里程碑+任务（确定性），LLM 分块产重要内容与金句，群内图片下载后上传为文档图片块；群内 file 附件（<20MB）下载后上传为文档文件块（docx_file）；写入绑定页面最后一个「项目汇总」章节（不存在则新建），重复触发幂等替换旧生成区。异步执行落 `wiki_archive_runs` 台账（含附件统计），前端轮询。决策见 design.md K48。
 
 | # | 验收标准 | 对应测试 |
 |---|---|---|
@@ -655,10 +655,13 @@ web 项目详情页手动触发「生成项目汇总」：全量回读项目绑�
 | S63-2 | 当全量回读时，应从项目创建时刻起分页拉完绑定群历史（start_time=项目创建秒级时间戳、降序分页到量上限），过滤机器人自身消息与空文本；不挪 channels.cursor、不进 im_buffer、不产 project_events | `server/test/s63-wiki-archive.test.mjs` |
 | S63-3 | 当生成关键时间线时，应以系统事件流（record/effective）+里程碑+任务完成按日升序聚合（确定性生成）；LLM 缺席时时间线照样完整写入 | `server/test/s63-wiki-archive.test.mjs` |
 | S63-4 | 当 LLM 已配置时，消息按约 12000 字分块提取要点与金句候选，合并后重要内容 ≤8 条、金句 ≤10 条且带说话人；LLM 未配置时重要内容降级为事件流摘要、金句区如实标注「未配置 LLM」 | `server/test/s63-wiki-archive.test.mjs` |
-| S63-5 | 当写入页面时，应定位最后一个标题含「项目汇总」的章节并在其章节末尾插入；无该章节则在文末新建 heading2「项目汇总」；生成区结构=首标记行（生成时刻+回读口径）+关键时间线+重要内容+群内金句+群内图片+尾标记行 | `server/test/s63-wiki-archive.test.mjs` |
+| S63-5 | 当写入页面时，应定位最后一个标题含「项目汇总」的章节并在其章节末尾插入；无该章节则在文末新建 heading2「项目汇总」；生成区结构=首标记行（生成时刻+回读口径）+关键时间线+重要内容+群内金句+群内图片+群内附件+尾标记行 | `server/test/s63-wiki-archive.test.mjs` |
 | S63-6 | 当重复触发时，应先删除上次生成区（runs 锚点 firstBlockId，丢失时按标记行前缀扫描兜底）再原位写入新版，页面只留最新一版 | `server/test/s63-wiki-archive.test.mjs` |
-| S63-7 | 当查询运行状态时，POST 应立即返回 running 台账行；完成后 GET 返回统计（消息数/分块数/金句数/图片数）与页面链接；失败时状态 failed 且带中文错误 | `server/test/s63-wiki-archive.test.mjs` |
+| S63-7 | 当查询运行状态时，POST 应立即返回 running 台账行；完成后 GET 返回统计（消息数/分块数/金句数/图片数/附件数/跳过附件明细）与页面链接；失败时状态 failed 且带中文错误 | `server/test/s63-wiki-archive.test.mjs` |
 | S63-8 | 当群内存在图片消息时，应下载 image_key → 上传文档素材 → 插入 image block 至「群内图片」小节（按时间序 ≤30 张，图注带日期+说话人）；单张失败跳过不阻塞整体，imageCount 计数如实 | `server/test/s63-wiki-archive.test.mjs` |
+| S65-1 | 当全量回读解析到 file 附件消息时，应提取 file_key/file_name（file_name 缺失以 file_key 兜底），附件消息不再混入汇总文本行 | `server/test/s63-wiki-archive.test.mjs` |
+| S65-2 | 当附件字节数 <20MB 时，应经消息资源接口下载 → upload_all（parent_type=docx_file）→ 插入 file block（block_type 18，标注行带日期/说话人/文件名）至「群内附件」小节，按时间序 ≤30 个；file_count 计数如实 | `server/test/s63-wiki-archive.test.mjs` |
+| S65-3 | 当附件达到/超过 20MB、下载/上传失败或数量超上限时，不应阻塞汇总主流程；应在「群内附件」小节列出未归档文件名与原因，skipped_files 台账字段如实记录；重跑时页面仍只保留最新一版（不叠加） | `server/test/s63-wiki-archive.test.mjs` |
 
 ## S64（P0）— 全员（web+项目群）— 初始分配要求叠加与机器人触发（v0.69）
 
