@@ -30,8 +30,8 @@ jobs:
           push: true
           provenance: false
           tags: |
-            ${{ secrets.ACR_REGISTRY }}/girlboss/gb-pmo:${{ github.sha }}
-            ${{ secrets.ACR_REGISTRY }}/girlboss/gb-pmo:main
+            ${{ secrets.ACR_REGISTRY }}/thesecondcurve/gb-pmo:${{ github.sha }}
+            ${{ secrets.ACR_REGISTRY }}/thesecondcurve/gb-pmo:main
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
