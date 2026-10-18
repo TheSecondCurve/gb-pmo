@@ -1,0 +1,44 @@
+# 合并 main 即发布:GitHub 托管 runner(public 仓库免费)构建 gb-pmo 镜像推 ACR,
+# 再经 SSH 受限密钥(forced command)回源部署到香港测试机(与 gb-crm 同模式,
+# 绕开 org runner group 清单限制)。
+# provenance: false——个人版 ACR 不收 buildx attestation 的 OCI empty manifest。
+name: deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 登录 ACR(重试抗瞬断)
+        run: |
+          for i in 1 2 3 4 5; do
+            echo "${{ secrets.ACR_PASSWORD }}" | docker login "${{ secrets.ACR_REGISTRY }}" -u "${{ secrets.ACR_USERNAME }}" --password-stdin && break
+            echo "login 失败,第 $i 次重试"; sleep 5
+          done
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          provenance: false
+          tags: |
+            ${{ secrets.ACR_REGISTRY }}/girlboss/gb-pmo:${{ github.sha }}
+            ${{ secrets.ACR_REGISTRY }}/girlboss/gb-pmo:main
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: SSH 受限部署到测试机
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "${{ secrets.DEPLOY_HOST_KEY }}" > ~/.ssh/known_hosts
+          ssh -i ~/.ssh/deploy_key deploy@38.55.194.35
