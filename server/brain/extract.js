@@ -10,10 +10,9 @@ import { markPushedTo } from '../engine/events.js'
 import { getLlm, parseJsonLoose } from './llm.js'
 import { persistExtractionEvents } from './extractionUpdates.js'
 import { routeMessage } from './routing.js'
-import { notifyMember, notifyAdmins, notifyProjectChannel } from './push.js'
+import { notifyMember, notifyProjectChannel } from './push.js'
 import { buildSuggestionCard } from './bot/cards.js' // S55：建议确认卡
 import { label } from '../engine/enums.js'
-import { acceptanceAlarm } from '../engine/metrics.js'
 import * as feishu from './connectors/feishu.js'
 import * as wecom from './connectors/wecom.js'
 
@@ -58,16 +57,6 @@ export async function runExtraction(db, { channelId, projectId } = {}, { llm, se
   }
   // S60：抽取后群进展播报（周期尾部，三道闸任一不过即静默）
   await broadcastProgress(db, progressByProject, { send })
-  // S3-5：采纳率告警（周窗口低于阈值 → 告警管理员）
-  const alarm = acceptanceAlarm(db)
-  if (alarm) {
-    await notifyAdmins(db, {
-      pushType: 'alert',
-      title: `大脑抽取采纳率低于阈值（${Math.round(alarm.rate * 100)}% < ${Math.round(alarm.threshold * 100)}%）`,
-      body: `近 7 天生成建议 ${alarm.generated} 条，被采纳 ${alarm.accepted} 条。请在配置台调整抽取策略或阈值。`,
-    }, { send })
-    results.push({ acceptanceAlarm: alarm })
-  }
   return { channels: results }
 }
 

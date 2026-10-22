@@ -254,15 +254,3 @@ function badDim(metric, dim) {
   return Object.assign(new Error(`指标 ${metric} 不支持维度 ${dim}`), { statusCode: 400 })
 }
 
-/** S3-5：采纳率低于阈值时给管理员的告警判定（供 brain/alert 使用与测试）。 */
-export function acceptanceAlarm(db) {
-  const th = getSetting(db, 'thresholds')
-  const r = IMPLEMENTATIONS.suggestion_acceptance(db, { groupBy: 'project', days: 7 })
-  const total = r.rows.reduce((s, x) => s + x.generated, 0)
-  if (total === 0) return null
-  const accepted = r.rows.reduce((s, x) => s + x.accepted, 0)
-  const rate = accepted / total
-  if (rate >= th.acceptanceAlarm) return null
-  return { rate, threshold: th.acceptanceAlarm, generated: total, accepted }
-}
-

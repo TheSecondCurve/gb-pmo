@@ -358,7 +358,7 @@ function ChannelsCard({ channels, onDone }: { channels: ChannelRow[]; onDone: ()
 
 // —— Tab 3：阈值与推送 ——
 
-interface Thresholds { silentDays: number; keypersonMaxProjects: number; acceptanceAlarm: number; suggestTimeoutHours: number; routingConfidence: number }
+interface Thresholds { silentDays: number; keypersonMaxProjects: number; suggestTimeoutHours: number; routingConfidence: number }
 interface ChatCfg { quotaPerDay: number }
 interface SchedulerCfg {
   extractionCron: string; extractionEnabled: boolean
@@ -400,10 +400,9 @@ function ParamsTab() {
   return (
     <div className="space-y-4">
       <Card title="阈值（第 6 章指标口径，保存后全局视图即时刷新 S17-3）">
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Field label="沉默天数">{num('silentDays')}</Field>
           <Field label="关键人并行上限">{num('keypersonMaxProjects')}</Field>
-          <Field label="采纳率告警线">{num('acceptanceAlarm')}</Field>
           <Field label="建议超时（小时）">{num('suggestTimeoutHours')}</Field>
           <Field label="通用群分拣置信度">{num('routingConfidence')}</Field>
         </div>
