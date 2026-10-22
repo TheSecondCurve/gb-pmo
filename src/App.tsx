@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Bell, FolderKanban, LayoutDashboard, LogOut, Menu, Settings2, Sparkles, X } from 'lucide-react'
+import { Bell, FolderKanban, LayoutDashboard, ListChecks, LogOut, Menu, Settings2, Sparkles, X } from 'lucide-react'
 import { api } from './api'
 import { useStore } from './store'
 import { Btn } from './components/ui'
@@ -7,6 +7,7 @@ import { Brand } from './components/editorial'
 import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Projects, { type PortfolioView } from './pages/Projects'
+import MyTasks from './pages/MyTasks'
 import ProjectDetail from './pages/ProjectDetail'
 import Admin from './pages/Admin'
 import Chat from './pages/Chat'
@@ -46,6 +47,7 @@ export default function App() {
   if (path === '/' || path === '/dashboard') page = <Dashboard />
   else if (path === '/projects') page = <Projects view="table" />
   else if (pvm) page = <Projects view={pvm[1] as PortfolioView} />
+  else if (path === '/my') page = <MyTasks /> // S66 我的任务工作台（全员）
   else if (path === '/chat') page = <Chat /> // S24 AI 助手（全员）
   else if (path === '/pushes') page = <Pushes /> // S46 通知收件箱（全员，仅本人）
   else if (m) page = <ProjectDetail id={Number(m[1])} />
@@ -61,6 +63,7 @@ export default function App() {
   const navItems = [
     { href: '#/dashboard', label: '全局看板', icon: LayoutDashboard },
     { href: '#/projects', label: '项目列表', icon: FolderKanban },
+    { href: '#/my', label: '我的任务', icon: ListChecks }, // S66 我的任务工作台
     { href: '#/chat', label: 'AI 助手', icon: Sparkles },
     { href: '#/pushes', label: '通知', icon: Bell }, // S46 通知收件箱
     ...(member.role === 'admin' ? [{ href: '#/admin', label: '配置台', icon: Settings2 }] : []),
