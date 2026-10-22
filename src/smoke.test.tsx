@@ -9,6 +9,8 @@ import Admin from './pages/Admin'
 import Chat from './pages/Chat'
 import Projects from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
+import MyTasks from './pages/MyTasks'
+import { bjToday } from './fmt'
 import { StoreProvider } from './store'
 
 const loginFetch = vi.fn(async () =>
@@ -721,5 +723,95 @@ describe('S47 LLM 用量记账（v0.52）', () => {
     expect(within(usage).getByText('extraction')).toBeTruthy()
     expect(within(usage).getByText('42')).toBeTruthy()
     expect(within(usage).getByText('1000/200')).toBeTruthy()
+  })
+})
+
+// —— S66（v0.73）我的任务工作台：统计带 + 项目分组任务甘特 + 未排期沉底 ——
+describe('S66 我的任务工作台', () => {
+  // 日期相对北京今日构造（K16：不 UTC 反解），保证任何时区/任何跑测日形态稳定
+  const shift = (iso: string, n: number) => {
+    const [y, m, d] = iso.split('-').map(Number)
+    const t = new Date(Date.UTC(y!, m! - 1, d! + n))
+    return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`
+  }
+  const T = bjToday()
+  const board = {
+    today: T,
+    stats: { total: 4, overdue: 1, dueThisWeek: 1, pending: 2 },
+    projects: [
+      {
+        projectId: 11, projectName: '客户A系统',
+        tasks: [
+          { id: 101, title: '联调接口', status: 'doing', kind: 'work', planStartDate: shift(T, -40), planEndDate: shift(T, 5), projectId: 11, projectName: '客户A系统', isReminder: false, overdueDays: 0 },
+          { id: 102, title: '逾期未完的活', status: 'todo', kind: 'work', planStartDate: null, planEndDate: shift(T, -4), projectId: 11, projectName: '客户A系统', isReminder: false, overdueDays: 4 },
+        ],
+      },
+      {
+        projectId: 22, projectName: '客户B小程序',
+        tasks: [
+          { id: 201, title: '给客户发周报', status: 'todo', kind: 'reminder', planStartDate: null, planEndDate: shift(T, 1), projectId: 22, projectName: '客户B小程序', isReminder: true, overdueDays: 0 },
+          { id: 202, title: '还没排期', status: 'todo', kind: 'work', planStartDate: null, planEndDate: null, projectId: 22, projectName: '客户B小程序', isReminder: false, overdueDays: 0 },
+        ],
+      },
+    ],
+  }
+  const myFetch = vi.fn(async () =>
+    new Response(JSON.stringify(board), { status: 200 })
+  ) as unknown as typeof fetch
+
+  it('S66-2: 页首统计带四项计数渲染（逾期红、本周黄、待确认蓝）', async () => {
+    globalThis.fetch = myFetch
+    render(<StoreProvider><MyTasks /></StoreProvider>)
+    expect(await screen.findByTestId('myt-masthead')).toBeTruthy()
+    expect(document.querySelector('[data-testid="myt-stat-total"]')!.textContent).toContain('4')
+    const overdue = document.querySelector('[data-testid="myt-stat-overdue"]')!
+    expect(overdue.textContent).toContain('1')
+    expect(overdue.querySelector('div:nth-child(2)')!.className).toContain('text-[var(--color-bad)]')
+    expect(document.querySelector('[data-testid="myt-stat-week"]')!.textContent).toContain('1')
+    expect(document.querySelector('[data-testid="myt-stat-pending"]')!.textContent).toContain('2')
+  })
+
+  it('S66-1 + S66-3: 按项目分组 + 任务甘特（四形态/今日线/月刻度）+ 逾期红与 ⏰ 标注 + 未排期沉底', async () => {
+    globalThis.fetch = myFetch
+    render(<StoreProvider><MyTasks /></StoreProvider>)
+    // 项目分组（两组，组名即详情页链接锚文本）
+    const groups = await waitFor(() => {
+      const els = Array.from(document.querySelectorAll('[data-testid="myt-project"]')) as HTMLElement[]
+      expect(els.length).toBe(2)
+      return els
+    })
+    expect(groups[0]!.textContent).toContain('客户A系统')
+    expect(groups[1]!.textContent).toContain('客户B小程序')
+    // 甘特：A 组区间条 + 截止旗（逾期红优先）；B 组截止旗 + 今日线 + 月刻度（S30 口径复用）
+    const g = groups[0]!
+    expect(g.querySelectorAll('[data-testid="gantt-bar"]').length).toBeGreaterThanOrEqual(2)
+    expect(g.querySelector('[data-testid="gantt-today"]')).toBeTruthy()
+    expect(g.querySelectorAll('[data-testid="gantt-tick"]').length).toBeGreaterThanOrEqual(1)
+    // 逾期徽章 + 逾期条红色（S41 逾期红优先于状态色）
+    expect(g.textContent).toContain('逾期 4 天')
+    const overdueBar = Array.from(g.querySelectorAll('[data-testid="gantt-bar"]'))
+      .find((el) => (el as HTMLElement).style.backgroundColor === 'var(--color-bad)')
+    expect(overdueBar).toBeTruthy()
+    // 日期文案四式之一（S30-4 区间式，S30 甘特同口径载于条 tooltip）
+    const firstBar = g.querySelector('[data-testid="gantt-bar"]') as HTMLElement
+    expect(firstBar.getAttribute('title')).toContain(`${shift(T, -40)} ~ ${shift(T, 5)}`)
+    // 纯提醒 ⏰ 标注 + 未排期沉底不进轴
+    expect(groups[1]!.querySelectorAll('[data-testid="myt-reminder"]').length).toBe(1)
+    const unsched = groups[1]!.querySelector('[data-testid="unscheduled-group"]') as HTMLElement
+    expect(unsched.textContent).toContain('还没排期')
+    expect(unsched.textContent).toContain('未排期（1）')
+  })
+
+  it('S66-1: #/my 路由可达，侧边栏含「我的任务」入口', async () => {
+    const appFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/v1/my-tasks')) return new Response(JSON.stringify(board), { status: 200 })
+      return new Response(JSON.stringify({ member: { id: 1, name: '甲', role: 'admin' } }), { status: 200 })
+    }) as unknown as typeof fetch
+    globalThis.fetch = appFetch
+    location.hash = '#/my'
+    render(<StoreProvider><App /></StoreProvider>)
+    expect(await screen.findByTestId('myt-masthead')).toBeTruthy()
+    expect(screen.getByRole('link', { name: '我的任务' })).toBeTruthy()
   })
 })

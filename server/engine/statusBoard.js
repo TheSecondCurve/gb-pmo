@@ -33,6 +33,45 @@ export function myWork(db, memberId) {
   return { taskCount: tasks.length, overdueCount, dueTomorrow, pendingCount: pending.length, text: sections.join('\n') }
 }
 
+/**
+ * S66（v0.73，K52）：我的任务工作台——跨在跑项目聚合本人未完任务（/my 同口径），
+ * 按项目分组供 web #/my 页时间线渲染。纯读。
+ * 「本周到期」= 北京自然周（周一~周日）且不早于今日——逾期任务不重复计入本周。
+ */
+export function myTasksBoard(db, memberId, { now = Date.now() } = {}) {
+  const rows = camelizeRows(
+    db.prepare(
+      `SELECT t.id, t.title, t.status, t.kind, t.note, t.plan_start_date, t.plan_end_date,
+              p.id AS project_id, p.name AS project_name
+       FROM tasks t JOIN projects p ON p.id = t.project_id
+       WHERE t.responsible_member_id = ? AND t.status != 'done' AND t.deleted_at IS NULL AND p.status = 'active'
+       ORDER BY p.id, t.plan_start_date IS NULL, t.plan_start_date, t.plan_end_date, t.id`
+    ).all(memberId)
+  )
+  const todayDay = today(now)
+  const sunday = addDays(today(bjWeekStartMs(now)), 6)
+  const tasks = rows.map((t) => ({
+    ...t,
+    isReminder: t.kind === 'reminder',
+    overdueDays: t.planEndDate && t.planEndDate < todayDay ? dayDiff(t.planEndDate, todayDay) : 0,
+  }))
+  const byProject = new Map()
+  for (const t of tasks) {
+    if (!byProject.has(t.projectId)) byProject.set(t.projectId, { projectId: t.projectId, projectName: t.projectName, tasks: [] })
+    byProject.get(t.projectId).tasks.push(t)
+  }
+  return {
+    today: todayDay,
+    stats: {
+      total: tasks.length,
+      overdue: tasks.filter((t) => t.overdueDays > 0).length,
+      dueThisWeek: tasks.filter((t) => t.planEndDate && t.planEndDate >= todayDay && t.planEndDate <= sunday).length,
+      pending: pendingSuggestionsFor(db, memberId).length,
+    },
+    projects: [...byProject.values()],
+  }
+}
+
 /** /week：本北京自然周（周一~周日）到期任务与计划中里程碑；定域=单项目或全部在跑项目。 */
 export function weekAhead(db, { projectId = null, now = Date.now() } = {}) {
   const mondayMs = bjWeekStartMs(now)

@@ -92,6 +92,9 @@ export const api = {
   pushes: (limit?: number) =>
     req<{ pushes: import('./types').PushRow[] }>('GET', `/api/v1/pushes${limit ? `?limit=${limit}` : ''}`),
 
+  // S66（v0.73）：我的任务工作台（纯读，按会话成员定域）
+  myTasks: () => req<import('./types').MyTasksBoard>('GET', '/api/v1/my-tasks'),
+
   // S47（v0.52）：LLM 用量聚合（仅管理员）
   llmUsage: (days = 7) =>
     req<{ days: number; byPurpose: { purpose: string; calls: number; promptTokens: number; completionTokens: number; avgDurationMs: number | null; errors: number }[]; byDay: { day: string; calls: number; tokens: number; errors: number }[] }>(

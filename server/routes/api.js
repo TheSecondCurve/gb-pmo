@@ -14,6 +14,7 @@ import { queryMetric, listMetrics } from '../engine/metrics.js'
 import { assertValue } from '../engine/enums.js'
 import { listPushes } from '../brain/push.js' // S46 通知收件箱
 import { llmUsage } from '../engine/llmUsage.js' // S47 LLM 用量
+import { myTasksBoard } from '../engine/statusBoard.js' // S66 我的任务工作台
 
 export function registerApiRoutes(app) {
   const db = app.db
@@ -296,6 +297,9 @@ export function registerApiRoutes(app) {
   })
 
   app.get('/api/v1/events/pending', async (req) => ({ events: events.pendingSuggestionsFor(db, req.member.id) }))
+
+  // S66：我的任务工作台（按会话成员定域，纯读）
+  app.get('/api/v1/my-tasks', async (req) => myTasksBoard(db, req.member.id))
 
   app.post('/api/v1/events', async (req, reply) => {
     return reply.status(201).send(
