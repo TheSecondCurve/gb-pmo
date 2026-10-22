@@ -101,3 +101,16 @@ export const EVENT_PINNED_COLS: { key: string; title: string; types: string[] }[
   { key: 'finance', title: '财务记录', types: ['finance'] },
 ]
 export const EVENT_STATUS_LABEL: Record<string, string> = { pending: '待确认', effective: '已生效', rejected: '已驳回', expired: '已超时' }
+
+// S66（v0.73，K52）：我的任务工作台（GET /api/v1/my-tasks，纯读，按会话成员定域）
+export interface MyTaskRow {
+  id: number; title: string; status: string; kind: string; note?: string | null
+  planStartDate: string | null; planEndDate: string | null
+  projectId: number; projectName: string
+  isReminder: boolean; overdueDays: number
+}
+export interface MyTasksBoard {
+  today: string
+  stats: { total: number; overdue: number; dueThisWeek: number; pending: number }
+  projects: Array<{ projectId: number; projectName: string; tasks: MyTaskRow[] }>
+}
