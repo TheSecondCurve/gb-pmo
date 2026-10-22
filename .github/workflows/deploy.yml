@@ -40,5 +40,5 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          echo "${{ secrets.DEPLOY_HOST_KEY }}" > ~/.ssh/known_hosts
+          echo "${{ secrets.DEPLOY_HOSTKEY }}" > ~/.ssh/known_hosts
           ssh -i ~/.ssh/deploy_key deploy@38.55.194.35
