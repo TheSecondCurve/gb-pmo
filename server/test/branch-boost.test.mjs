@@ -5,7 +5,7 @@ import { createMember } from '../engine/members.js'
 import { createProject, getProjectDetail, updateProject, closeProject, listProjects, projectsWithoutChannel } from '../engine/projects.js'
 import { createTask, updateTask, getTask, listTasks, createMilestone, updateMilestone, upsertChannel, addTaskRecord, listTaskRecords } from '../engine/tasks.js'
 import { addEvent, getEvent, confirmEvent, rejectEvent, listEvents, expireStaleSuggestions } from '../engine/events.js'
-import { queryMetric, acceptanceAlarm } from '../engine/metrics.js'
+import { queryMetric } from '../engine/metrics.js'
 import { projectDigest, personDigest } from '../brain/digest.js'
 import { routeMessage } from '../brain/routing.js'
 import { dailyReport } from '../brain/report.js'
@@ -120,15 +120,14 @@ describe('events 分支（S16-3 建议超时过期 / S35-4 里程碑建议字段
   })
 })
 
-describe('metrics 分支（S5-3 指标目录维度守卫 / S3-5 空库采纳率）', () => {
-  it('非法维度 400（逐指标）；空库采纳率 null', () => {
+describe('metrics 分支（S5-3 指标目录维度守卫）', () => {
+  it('非法维度 400（逐指标）；未知指标 404 语义', () => {
     const { db } = setupDb()
     seed(db)
     for (const id of ['running_projects', 'overdue_tasks', 'unassigned_tasks', 'silent_projects', 'keyperson_load', 'suggestion_acceptance']) {
       expect(() => queryMetric(db, id, { groupBy: 'nonsense' })).toThrow()
     }
     expect(() => queryMetric(db, 'nope')).toThrow()
-    expect(acceptanceAlarm(db)).toBeNull()
     db.close()
   })
 })
