@@ -2,11 +2,11 @@ import { describe, it, expect, afterAll } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { upsertChannel, createMilestone } from '../engine/tasks.js'
 import { ingestMessages, runExtraction, mapSpeaker } from '../brain/extract.js'
-import { acceptanceAlarm } from '../engine/metrics.js'
 import { addEvent, confirmEvent } from '../engine/events.js'
+import { getSetting } from '../engine/settings.js'
 import { today } from '../db/time.js'
 
-// PRD S3 — IM 抽取与分拣（专题渠道 / 通用群 LLM 分拣 / 身份映射 / 完成信号建议 / 采纳率告警）
+// PRD S3 — IM 抽取与分拣（专题渠道 / 通用群 LLM 分拣 / 身份映射 / 完成信号建议）
 
 let ctx
 afterAll(() => ctx?.db.close())
@@ -157,8 +157,8 @@ describe('S3 IM 抽取与分拣', () => {
     expect(ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(target.id).status).toBe('todo')
   })
 
-  it('S3-5: 周采纳率低于阈值 → 告警管理员（runExtraction 附带告警）', async () => {
-    // 造 10 条建议：2 条 effective，8 条 rejected → 20% < 70%
+  it('S3-5: 【已废弃 v0.72】采纳率告警已裁撤：低于旧阈值不再推送告警、thresholds 无 acceptanceAlarm 键', async () => {
+    // K51：告警整体移除。造 10 条建议（2 生效 / 8 驳回 → 20%，低于旧告警线 70%）验证不再告警
     const a = await mkProject('客户F系统', ctx.members.lead.id)
     for (let i = 0; i < 10; i++) {
       const e = addEvent(ctx.db, {
@@ -170,21 +170,10 @@ describe('S3 IM 抽取与分拣', () => {
         ctx.db.prepare(`UPDATE project_events SET status = 'rejected' WHERE id = ?`).run(e.id)
       }
     }
-    const beforeAuto = acceptanceAlarm(ctx.db)
-    addEvent(ctx.db, {
-      projectId: a.id, nature: 'suggestion', eventType: 'status_change', summary: '自动生效不计人工采纳率',
-      targetTaskId: a.tasks[0].id, targetField: 'status', targetValue: 'done', generatedBy: 'extraction', status: 'effective',
-    })
-    const alarm = acceptanceAlarm(ctx.db)
-    expect(alarm).toBeTruthy()
-    expect(alarm.generated).toBe(beforeAuto.generated)
-    expect(alarm.accepted).toBe(beforeAuto.accepted)
-    expect(alarm.rate).toBeLessThan(0.7)
-    // runExtraction（无渠道可拉）也会附带告警并推送管理员
     const res = await runExtraction(ctx.db, {}, { llm: fakeLlm(() => JSON.stringify({ events: [] })) })
-    expect(res.channels.find((c) => c.acceptanceAlarm)).toBeTruthy()
-    const alert = ctx.db.prepare(`SELECT * FROM pushes WHERE push_type = 'alert' AND title LIKE '%采纳率%' AND recipient_member_id = ?`).get(ctx.members.admin.id)
-    expect(alert).toBeTruthy()
+    expect(res.channels.find((c) => c.acceptanceAlarm)).toBeFalsy()
+    expect(ctx.db.prepare(`SELECT * FROM pushes WHERE push_type = 'alert' AND title LIKE '%采纳率%'`).get()).toBeFalsy()
+    expect(getSetting(ctx.db, 'thresholds').acceptanceAlarm).toBeUndefined()
   })
 
   it('S3-6: 新建渠道绑定 cursor=绑定时刻（首拉不回灌）；改名/改绑不重置游标', async () => {

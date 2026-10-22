@@ -79,7 +79,6 @@ export const DEFAULT_SETTINGS = {
   thresholds: {
     silentDays: 7,
     keypersonMaxProjects: 3,
-    acceptanceAlarm: 0.7,
     suggestTimeoutHours: 48,
     routingConfidence: 0.6,
     healthRed: { silentDays: 7, overdue: 3 },
