@@ -31,7 +31,7 @@ export const ENUMS = {
   },
   eventStatus: { pending: '待确认', effective: '已生效', rejected: '已驳回', expired: '已超时' },
   eventGenerator: { extraction: 'IM 抽取', digest: '梳理建议', agent: 'Agent 口述', web: '页面操作', system: '系统' },
-  pushType: { daily_report: '日报', digest: '梳理', alert: '预警', reminder: '提醒', test: '测试' },
+  pushType: { daily_report: '日报', digest: '梳理', alert: '预警', reminder: '提醒', morning: '晨报', test: '测试' },
   tokenScope: { read: '只读', write: '读写' },
   // S20 机器人指令通道：指令/卡片/机器人回复三类记录 + 结果枚举（bot_commands.result）
   botCommandKind: { command: '指令', card: '卡片回调', bot_reply: '机器人回复' },
@@ -72,7 +72,7 @@ export const LLM_PROVIDERS = {
 
 // S51（v0.56，K34）：按用途模型覆盖（llm.purposeModels）的用途白名单——高频低价路径（extraction/routing）
 // 可独立指向便宜模型，低频叙事路径维持主模型。
-export const LLM_PURPOSES = ['extraction', 'routing', 'digest', 'closeout', 'draft', 'init_assign', 'chat']
+export const LLM_PURPOSES = ['extraction', 'routing', 'digest', 'closeout', 'draft', 'init_assign', 'chat', 'morning']
 
 // 阈值默认值（配置台 settings 可覆盖；PRD K5）
 export const DEFAULT_SETTINGS = {
@@ -100,6 +100,8 @@ export const DEFAULT_SETTINGS = {
     backupEnabled: true,
     digestCron: '0 9 * * 1',           // 每周梳理 + 老板周报（S49，默认周一 09:00；周级幂等——本周已推周报则整轮跳过）
     digestEnabled: true,
+    morningCron: '30 9 * * *',         // 每日项目群晨报（S68，默认每日 09:30；项目级日幂等——当日已推不重发）
+    morningEnabled: true,
   },
   // S22 项目日历：feishuCalendarId 空=未初始化（配置台「外部依赖→飞书」初始化写入；同步任务静默跳过）
   calendar: { feishuCalendarId: '' },

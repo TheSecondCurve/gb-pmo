@@ -174,7 +174,7 @@ function BackupCard() {
       <Card title="数据库异地备份（S34）：SQLite 在线快照 → gzip → S3 兼容对象存储（阿里云 OSS / Cloudflare R2 / AWS S3 / MinIO）">
         <p className="mb-3 text-[12px] leading-5 text-[var(--color-ink-soft)]">
           单机 SQLite 是全部数据的唯一载体，本地备份与容器同生共死；本页把定时快照推进对象存储实现异地容灾（本地 scripts/backup.sh 保留，两层叠加）。
-          定时备份由「项目管理→阈值与推送」的 <b>数据库备份</b> cron 驱动（当前 <span className="num">{sched.backupCron}</span>，{sched.backupEnabled ? '已启用' : '已停用'}，保存即热生效）；
+          定时备份由配置台「定时任务」页的 <b>数据库备份</b> cron 驱动（S67）（当前 <span className="num">{sched.backupCron}</span>，{sched.backupEnabled ? '已启用' : '已停用'}，保存即热生效）；
           存储未配全时定时/手动均跳过。备份对象名 <span className="num">gb-pmo-YYYYMMDD-HHMMSS.db.gz</span>（北京时刻），云端滚动保留最新 {cfg.keepCount} 份。
         </p>
         <div className="mb-2 flex flex-wrap items-center gap-2 text-[12px]">
