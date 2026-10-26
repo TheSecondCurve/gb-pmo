@@ -360,42 +360,22 @@ function ChannelsCard({ channels, onDone }: { channels: ChannelRow[]; onDone: ()
 
 interface Thresholds { silentDays: number; keypersonMaxProjects: number; suggestTimeoutHours: number; routingConfidence: number }
 interface ChatCfg { quotaPerDay: number }
-interface SchedulerCfg {
-  extractionCron: string; extractionEnabled: boolean
-  alertCron: string; alertEnabled: boolean
-  reportCron: string; reportEnabled: boolean
-  calendarSyncCron: string; calendarSyncEnabled: boolean
-  backupCron: string; backupEnabled: boolean
-  digestCron: string; digestEnabled: boolean
-}
+// S67（v0.75，K53）：调度配置已迁配置台「定时任务」独立分区（SchedulerAdmin），本页只留阈值与 AI 助手限额
 
 function ParamsTab() {
   const { toast } = useStore()
   const [thresholds, setThresholds] = useState<Thresholds | null>(null)
-  const [sched, setSched] = useState<SchedulerCfg | null>(null)
   const [chat, setChat] = useState<ChatCfg | null>(null)
   useEffect(() => {
     void (async () => {
       const s = await api.settings()
       setThresholds(s.thresholds as Thresholds)
-      setSched(s.scheduler as SchedulerCfg)
       setChat(s.chat as ChatCfg)
     })()
   }, [])
-  if (!thresholds || !sched || !chat) return <Spinner />
+  if (!thresholds || !chat) return <Spinner />
   const num = (k: keyof Thresholds) => (
     <input type="number" step="0.05" className={inputCls} value={thresholds[k]} onChange={(e) => setThresholds({ ...thresholds, [k]: Number(e.target.value) })} />
-  )
-  const task = (cronKey: 'extractionCron' | 'alertCron' | 'reportCron' | 'calendarSyncCron' | 'backupCron' | 'digestCron', enabledKey: 'extractionEnabled' | 'alertEnabled' | 'reportEnabled' | 'calendarSyncEnabled' | 'backupEnabled' | 'digestEnabled', label: string) => (
-    <div className="flex items-end gap-2">
-      <Field label={label}>
-        <input className={inputCls + ' font-mono !w-40'} value={sched[cronKey]} onChange={(e) => setSched({ ...sched, [cronKey]: e.target.value })} />
-      </Field>
-      <label className="flex items-center gap-1 pb-2 text-[12px]">
-        <input type="checkbox" checked={sched[enabledKey]} onChange={(e) => setSched({ ...sched, [enabledKey]: e.target.checked })} />
-        启用
-      </label>
-    </div>
   )
   return (
     <div className="space-y-4">
@@ -417,25 +397,9 @@ function ParamsTab() {
           <Btn kind="primary" onClick={async () => { await api.putSetting('chat', chat); toast('AI 助手限额已保存'); const s = await api.settings(); setChat(s.chat as ChatCfg) }}>保存</Btn>
         </div>
       </Card>
-      <Card title="大脑调度（S18，v0.7）：标准 cron「分 时 日 月 周」+ 每任务开关，保存即生效无需重启">
-        <div className="flex flex-wrap items-end gap-3">
-          {task('extractionCron', 'extractionEnabled', '信息更新对齐')}
-          {task('alertCron', 'alertEnabled', '预警提醒')}
-          {task('reportCron', 'reportEnabled', '日报提醒')}
-          {task('calendarSyncCron', 'calendarSyncEnabled', '项目日历同步')}
-          {task('backupCron', 'backupEnabled', '数据库备份')}
-          {task('digestCron', 'digestEnabled', '每周梳理与周报')}
-          <Btn kind="primary" onClick={async () => {
-            try {
-              await api.putSetting('scheduler', sched)
-              toast('调度配置已保存')
-            } catch (e) { toast((e as Error).message, 'bad') }
-          }}>保存</Btn>
-        </div>
-        <p className="mt-2 text-[12px] leading-5 text-[var(--color-ink-soft)]">
-          调度器随进程默认运行，心跳每分钟按配置判定。支持 *、*/n、a-b、a,b 与数字（周 0/7 均为周日）。日报停机错过时点当日补发、当日已发不重复。项目日历同步（S22）为对账式——初始化与手动同步在「外部依赖→飞书」。数据库备份（S34）的存储配置与连通性测试在「运维诊断→数据库备份」，存储未配全时静默跳过。
-        </p>
-      </Card>
+      <p className="text-[12px] text-[var(--color-ink-soft)]">
+        各定时任务（信息更新对齐 / 预警 / 日报 / 晨报 / 日历同步 / 备份 / 周梳理）的 cron 与开关集中在配置台「定时任务」页配置（S67）。
+      </p>
     </div>
   )
 }

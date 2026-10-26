@@ -4,6 +4,7 @@ import ProjectAdmin from './admin/ProjectAdmin'
 import UserAdmin from './admin/UserAdmin'
 import IntegrationAdmin from './admin/IntegrationAdmin'
 import OpsAdmin from './admin/OpsAdmin'
+import SchedulerAdmin from './admin/SchedulerAdmin'
 import { PageMasthead } from '../components/editorial'
 import { ADMIN_SECTIONS } from './admin/sections'
 
@@ -20,7 +21,7 @@ export default function Admin({ section, tab }: { section?: string; tab?: string
     if (location.hash !== want) location.hash = want
   }, [sec.key, effTab])
 
-  const SectionPage = sec.key === 'project' ? ProjectAdmin : sec.key === 'users' ? UserAdmin : sec.key === 'ops' ? OpsAdmin : IntegrationAdmin
+  const SectionPage = sec.key === 'project' ? ProjectAdmin : sec.key === 'scheduler' ? SchedulerAdmin : sec.key === 'users' ? UserAdmin : sec.key === 'ops' ? OpsAdmin : IntegrationAdmin
 
   return (
     <div>

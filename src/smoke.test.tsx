@@ -121,6 +121,51 @@ describe('移动端响应式冒烟', () => {
     expect(screen.getByText(/30 3 \* \* \*/)).toBeTruthy() // 定时状态行回显 cron
   })
 
+  // S67（v0.75，K53）：配置台「定时任务」集中页——全部 7 项任务 cron+开关一页纵览（含 S68 新增晨报），
+  // 纯提醒发送门槛 fireAfterHour 同页收口；「项目管理→阈值与推送」不再承载调度卡
+  it('Admin：定时任务页集中呈现全部调度任务（S67-1，含每日项目群晨报）与提醒门槛', async () => {
+    location.hash = '#/admin/scheduler/tasks'
+    const sFetch = vi.fn(async () => new Response(JSON.stringify({
+      member: { id: 1, name: '甲', role: 'admin' },
+      scheduler: {
+        extractionCron: '0 * * * *', extractionEnabled: true,
+        alertCron: '*/15 * * * *', alertEnabled: true,
+        reportCron: '0 18 * * *', reportEnabled: true,
+        morningCron: '30 9 * * *', morningEnabled: true,
+        calendarSyncCron: '*/30 * * * *', calendarSyncEnabled: true,
+        backupCron: '30 3 * * *', backupEnabled: true,
+        digestCron: '0 9 * * 1', digestEnabled: true,
+      },
+      reminder: { fireAfterHour: 9 },
+    }), { status: 200 }))
+    globalThis.fetch = sFetch as unknown as typeof fetch
+    render(<StoreProvider><Admin section="scheduler" tab="tasks" /></StoreProvider>)
+    const bar = document.querySelector('[data-nav="admin-sections"]')
+    expect(within(bar as HTMLElement).getByRole('link', { name: '定时任务' })).toBeTruthy()
+    await screen.findByText('信息更新对齐')
+    for (const label of ['预警提醒', '日报提醒', '每日项目群晨报', '项目日历同步', '数据库备份', '每周梳理与周报']) {
+      expect(screen.getByText(label)).toBeTruthy()
+    }
+    expect((await screen.findByLabelText(/每日项目群晨报/) as HTMLInputElement).value).toBe('30 9 * * *')
+    expect((screen.getByLabelText(/信息更新对齐/) as HTMLInputElement).value).toBe('0 * * * *')
+    expect((screen.getByLabelText(/纯提醒发送门槛（北京时，0~23）/) as HTMLInputElement).value).toBe('9')
+    expect(screen.getByRole('button', { name: '保存' })).toBeTruthy()
+  })
+
+  it('Admin：项目管理→阈值与推送不再含调度卡（S67，调度已迁独立页）', async () => {
+    location.hash = '#/admin/project/params'
+    const sFetch = vi.fn(async () => new Response(JSON.stringify({
+      member: { id: 1, name: '甲', role: 'admin' },
+      thresholds: { silentDays: 7, keypersonMaxProjects: 3, suggestTimeoutHours: 48, routingConfidence: 0.6 },
+      chat: { quotaPerDay: 50 },
+    }), { status: 200 }))
+    globalThis.fetch = sFetch as unknown as typeof fetch
+    render(<StoreProvider><Admin section="project" tab="params" /></StoreProvider>)
+    await screen.findByText(/保存阈值/)
+    expect(screen.queryByText(/大脑调度/)).toBeNull()
+    expect(screen.queryByLabelText(/每日项目群晨报/)).toBeNull()
+  })
+
   // S40-4（v0.43）：LLM 卡片可编辑超时——默认 120s（K22：GLM 大 JSON 实测约 117s），删掉即红
   it('Admin：LLM 配置卡含超时编辑字段（S40-4，默认 120s）', async () => {
     location.hash = '#/admin/integrations/llm'
