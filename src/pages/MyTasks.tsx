@@ -1,20 +1,13 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
 import { TASK_STATUS_LABEL, TASK_STATUS_TONE, type MyTaskRow, type MyTasksBoard } from '../types'
 import { PageMasthead, SectionHeading } from '../components/editorial'
 import { Badge, Card, Empty, Spinner } from '../components/ui'
 import { dateRangeForm, fmtDateRange } from '../fmt'
-import { barLayout, computeAxis, dayNum, monthTicks } from '../gantt'
 
-// S66（v0.73，K52）我的任务工作台：跨在跑项目聚合本人未完任务（/my 斜杠同口径），
-// 按项目分组 + 任务级甘特——复用 S30 gantt.ts 纯函数与四形态、S41 状态色、S30-4 文案四式；
-// 逾期红优先于状态色；今日线；无日期任务沉底「未排期」不虚构（K52：每项目独立轴）。
-
-const LABEL_W = 236
-const STATUS_BAR_COLOR: Record<string, string> = {
-  todo: 'var(--color-ink-soft)',
-  doing: 'var(--color-brand)',
-}
+// S66（v0.73 K52 建 / v0.75 K55 展示改版）我的任务工作台：跨在跑项目聚合本人未完任务（/my 斜杠同口径），
+// 按项目分组的 todolist 待办清单——项目内按计划时间升序（有截止日按截止日、仅有开工日按开工日），
+// 逾期整行红提示（行底红晕 + 红日期 + 红徽章）；无日期任务沉底「未排期」不虚构；不画甘特（K55）。
 
 export default function MyTasks() {
   const [board, setBoard] = useState<MyTasksBoard | null>(null)
@@ -41,7 +34,7 @@ export default function MyTasks() {
         testId="myt-masthead"
         kicker="Workspace / 03"
         title="我的任务"
-        description="跨项目聚合你名下的全部未完任务——按项目分组、按计划起止排上时间线。逾期标红、本周到期标黄，纯提醒任务带 ⏰。"
+        description="跨项目聚合你名下的全部未完任务——按项目分组的待办清单，按时间排序。逾期标红、本周到期标黄，纯提醒任务带 ⏰。"
         aside={<div className="num text-[11px] tracking-[0.12em] text-[var(--color-ink-soft)]">今日 {board.today} · 北京时间</div>}
       />
 
@@ -60,7 +53,7 @@ export default function MyTasks() {
       ) : (
         <div className="space-y-8">
           {board.projects.map((g, i) => (
-            <ProjectBlock key={g.projectId} group={g} today={board.today} index={i} />
+            <ProjectBlock key={g.projectId} group={g} index={i} />
           ))}
         </div>
       )}
@@ -68,18 +61,12 @@ export default function MyTasks() {
   )
 }
 
-/** 单项目分组：SectionHeading + 任务甘特卡（未排期任务沉底收组） */
-function ProjectBlock({ group, today, index }: { group: MyTasksBoard['projects'][number]; today: string; index: number }) {
+/** 单项目分组：todolist 清单按计划时间升序（逾期日期在过去自然排前），未排期沉底收组 */
+function ProjectBlock({ group, index }: { group: MyTasksBoard['projects'][number]; index: number }) {
   const dated = useMemo(() => group.tasks.filter((t) => dateRangeForm(t.planStartDate, t.planEndDate) !== 'none'), [group.tasks])
   const unscheduled = useMemo(() => group.tasks.filter((t) => dateRangeForm(t.planStartDate, t.planEndDate) === 'none'), [group.tasks])
-  const axis = useMemo(() => computeAxis(dated, today, 3), [dated, today])
-  const dayPx = axis ? Math.max(3, Math.min(14, 1100 / axis.totalDays)) : 0
-  const trackW = axis ? Math.ceil(axis.totalDays * dayPx) : 0
-  const todayLeftPx = axis ? LABEL_W + (trackW * ((dayNum(today) - axis.start) / axis.totalDays)) : 0
-  const ticks = axis ? monthTicks(axis) : []
   const sorted = useMemo(() => [...dated].sort((a, b) =>
-    dayNum(a.planStartDate || a.planEndDate!) - dayNum(b.planStartDate || b.planEndDate!)
-    || a.planEndDate!.localeCompare(b.planEndDate!)), [dated])
+    (a.planEndDate || a.planStartDate)!.localeCompare((b.planEndDate || b.planStartDate)!)), [dated])
 
   return (
     <section data-testid="myt-project" aria-label={group.projectName}>
@@ -89,46 +76,16 @@ function ProjectBlock({ group, today, index }: { group: MyTasksBoard['projects']
         aside={<span className="num text-[11px] tracking-[0.1em] text-[var(--color-ink-soft)]">{group.tasks.length} 项未完 · 前往项目 →</span>}
       />
       <Card>
-        {axis ? (
-          <div className="overflow-x-auto">
-            <div style={{ width: LABEL_W + trackW }}>
-              <div className="flex border-b border-[var(--color-line)]">
-                <div className="sticky left-0 z-20 shrink-0 border-r border-[var(--color-line)] bg-[var(--color-card)] px-3 py-1.5 text-[12px] text-[var(--color-ink-soft)]" style={{ width: LABEL_W }}>任务（#{group.tasks.length}）</div>
-                <div className="relative h-7 shrink-0" style={{ width: trackW }}>
-                  {ticks.map((t) => (
-                    <span key={t.label} data-testid="gantt-tick" className="absolute top-0 h-full border-l border-[var(--color-line)] pl-1 text-[11px] text-[var(--color-ink-soft)]" style={{ left: `${t.leftPct}%` }}>{t.label}</span>
-                  ))}
-                </div>
-              </div>
-              <div className="relative">
-                {sorted.map((t) => {
-                  const b = barLayout(t, axis)!
-                  const overdue = t.overdueDays > 0
-                  return (
-                    <div key={t.id} className="flex border-b border-[var(--color-line)] last:border-0 hover:bg-[var(--color-bg)]">
-                      <div className="sticky left-0 z-10 flex shrink-0 items-center gap-1.5 overflow-hidden border-r border-[var(--color-line)] bg-[var(--color-card)] px-3 py-1.5" style={{ width: LABEL_W }}>
-                        <span className="num shrink-0 text-[10px] text-[var(--color-ink-faint)]">#{t.id}</span>
-                        <a className="truncate text-[12px] text-[var(--color-ink)] hover:text-[var(--color-brand)]" href={`#/projects/${t.projectId}`} title={t.title}>{t.title}</a>
-                        {t.isReminder && <span data-testid="myt-reminder" className="shrink-0" title="纯提醒任务（S57：到期推送后自动完成，不进追踪口径）">⏰</span>}
-                        <Badge tone={TASK_STATUS_TONE[t.status] || 'muted'}>{TASK_STATUS_LABEL[t.status] || t.status}</Badge>
-                        {overdue && <Badge tone="bad" >逾期 {t.overdueDays} 天</Badge>}
-                      </div>
-                      <div className="relative shrink-0" style={{ width: trackW, height: 34 }}>
-                        <TaskBar t={t} b={b} />
-                      </div>
-                    </div>
-                  )
-                })}
-                <div data-testid="gantt-today" className="pointer-events-none absolute inset-y-0 z-10 w-px bg-[var(--color-brand)]" style={{ left: todayLeftPx }} />
-              </div>
-            </div>
-          </div>
+        {sorted.length > 0 ? (
+          <ul data-testid="myt-task-list">
+            {sorted.map((t) => <TaskRow key={t.id} t={t} />)}
+          </ul>
         ) : (
           <Empty hint="该项目名下任务均未排期（见下方未排期组）" />
         )}
         {unscheduled.length > 0 && (
-          <div data-testid="unscheduled-group" className={axis ? 'mt-3 border-t border-[var(--color-line)] pt-3' : ''}>
-            <div className="editorial-kicker mb-2">未排期（{unscheduled.length}）——补齐计划日期后进入时间线</div>
+          <div data-testid="unscheduled-group" className={sorted.length > 0 ? 'mt-3 border-t border-[var(--color-line)] pt-3' : ''}>
+            <div className="editorial-kicker mb-2">未排期（{unscheduled.length}）——补齐计划日期后进入清单排序</div>
             <ul className="flex flex-wrap gap-2">
               {unscheduled.map((t) => (
                 <li key={t.id} className="flex items-center gap-1.5 rounded-[3px] border border-[var(--color-line)] bg-[var(--color-panel)]/50 px-2.5 py-1.5 text-[12px]">
@@ -146,28 +103,17 @@ function ProjectBlock({ group, today, index }: { group: MyTasksBoard['projects']
   )
 }
 
-/** 任务条：S30 四形态 + S41 状态色；逾期红优先于状态色（title 原生 tooltip，零依赖） */
-function TaskBar({ t, b }: {
-  t: MyTaskRow
-  b: { form: 'range' | 'deadline' | 'open'; leftPct: number; widthPct: number }
-}) {
+/** 清单行：标题链接 + 状态徽章 + S30-4 日期文案；逾期整行红提示（行底红晕 + 红日期 + 红徽章） */
+function TaskRow({ t }: { t: MyTaskRow }) {
   const overdue = t.overdueDays > 0
-  const color = overdue ? 'var(--color-bad)' : STATUS_BAR_COLOR[t.status] || 'var(--color-ink-soft)'
-  const tip = `${t.title} · ${fmtDateRange(t.planStartDate, t.planEndDate)} · ${TASK_STATUS_LABEL[t.status] || t.status}${overdue ? ` · 逾期 ${t.overdueDays} 天` : ''}`
-  if (b.form === 'deadline') {
-    return (
-      <>
-        <div className="absolute top-1/2 border-t border-dashed border-[var(--color-line)]" style={{ left: 0, width: `${b.widthPct}%` }} title={tip} />
-        <div data-testid="gantt-bar" className="absolute top-1 h-4 w-[2px]" style={{ left: `${b.widthPct}%`, backgroundColor: overdue ? 'var(--color-bad)' : 'var(--color-warn)' }} title={tip} />
-      </>
-    )
-  }
-  if (b.form === 'open') {
-    const style: CSSProperties = {
-      left: `${b.leftPct}%`, width: `${b.widthPct}%`, height: 10,
-      backgroundImage: `linear-gradient(to right, ${color}, transparent)`, // 渐隐=无期限，右端不封口
-    }
-    return <div data-testid="gantt-bar" className="absolute top-1/2 -translate-y-1/2 rounded-l-full" style={style} title={tip} />
-  }
-  return <div data-testid="gantt-bar" className="absolute top-1/2 h-2.5 -translate-y-1/2 rounded-full" style={{ left: `${b.leftPct}%`, width: `${b.widthPct}%`, backgroundColor: color }} title={tip} />
+  return (
+    <li data-testid="myt-task-row" className={`flex items-center gap-2 border-b border-[var(--color-line)] px-3 py-2.5 last:border-0 hover:bg-[var(--color-bg)] ${overdue ? 'bg-[var(--color-bad-soft)]' : ''}`}>
+      <span className="num w-11 shrink-0 text-right text-[10px] text-[var(--color-ink-faint)]">#{t.id}</span>
+      <a className="min-w-0 flex-1 truncate text-[13px] text-[var(--color-ink)] hover:text-[var(--color-brand)]" href={`#/projects/${t.projectId}`} title={t.title}>{t.title}</a>
+      {t.isReminder && <span data-testid="myt-reminder" className="shrink-0" title="纯提醒任务（S57：到期推送后自动完成，不进追踪口径）">⏰</span>}
+      <Badge tone={TASK_STATUS_TONE[t.status] || 'muted'}>{TASK_STATUS_LABEL[t.status] || t.status}</Badge>
+      <span data-testid="myt-task-date" className={`num shrink-0 text-[12px] ${overdue ? 'font-semibold text-[var(--color-bad)]' : 'text-[var(--color-ink-soft)]'}`}>{fmtDateRange(t.planStartDate, t.planEndDate)}</span>
+      {overdue && <Badge tone="bad">逾期 {t.overdueDays} 天</Badge>}
+    </li>
+  )
 }

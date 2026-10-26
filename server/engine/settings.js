@@ -13,15 +13,21 @@ export function getSetting(db, key) {
 // 值校验器（按 key）：保存前拦截非法值，中文错误带 400。
 const VALIDATORS = {
   scheduler(value) {
-    for (const k of ['extractionCron', 'alertCron', 'reportCron', 'calendarSyncCron', 'backupCron', 'digestCron']) {
+    for (const k of ['extractionCron', 'alertCron', 'reportCron', 'calendarSyncCron', 'backupCron', 'digestCron', 'morningCron']) {
       if (value?.[k] === undefined) continue
       parseCron(value[k]) // 非法即 throw（statusCode 400，含字段与原因）
     }
-    for (const k of ['extractionEnabled', 'alertEnabled', 'reportEnabled', 'calendarSyncEnabled', 'backupEnabled', 'digestEnabled']) {
+    for (const k of ['extractionEnabled', 'alertEnabled', 'reportEnabled', 'calendarSyncEnabled', 'backupEnabled', 'digestEnabled', 'morningEnabled']) {
       if (value?.[k] === undefined) continue
       if (typeof value[k] !== 'boolean') {
         throw Object.assign(new Error(`scheduler.${k} 须为布尔值（true/false）`), { statusCode: 400 })
       }
+    }
+  },
+  // S67（v0.75，K53）：纯提醒发送门槛收口到「定时任务」页——0~23 整数（北京时间过点后才推提醒，凌晨静默）
+  reminder(value) {
+    if (value?.fireAfterHour !== undefined && (!Number.isInteger(value.fireAfterHour) || value.fireAfterHour < 0 || value.fireAfterHour > 23)) {
+      throw Object.assign(new Error('reminder.fireAfterHour 须为 0~23 的整数（北京时小时数）'), { statusCode: 400 })
     }
   },
   // S17-11（v0.14）：LLM 类别枚举校验；baseUrl/model 不强校验（归一化见 NORMALIZERS.llm）
