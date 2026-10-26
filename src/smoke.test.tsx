@@ -771,7 +771,7 @@ describe('S47 LLM 用量记账（v0.52）', () => {
   })
 })
 
-// —— S66（v0.73）我的任务工作台：统计带 + 项目分组任务甘特 + 未排期沉底 ——
+// —— S66（v0.73 建 / v0.75 K55 展示改版）我的任务工作台：统计带 + 项目分组 todolist 清单 + 未排期沉底 ——
 describe('S66 我的任务工作台', () => {
   // 日期相对北京今日构造（K16：不 UTC 反解），保证任何时区/任何跑测日形态稳定
   const shift = (iso: string, n: number) => {
@@ -816,7 +816,7 @@ describe('S66 我的任务工作台', () => {
     expect(document.querySelector('[data-testid="myt-stat-pending"]')!.textContent).toContain('2')
   })
 
-  it('S66-1 + S66-3: 按项目分组 + 任务甘特（四形态/今日线/月刻度）+ 逾期红与 ⏰ 标注 + 未排期沉底', async () => {
+  it('S66-1 + S66-3: 按项目分组 todolist 清单（按时间升序）+ 逾期整行红提示 + ⏰ 标注 + 未排期沉底，且不再渲染甘特', async () => {
     globalThis.fetch = myFetch
     render(<StoreProvider><MyTasks /></StoreProvider>)
     // 项目分组（两组，组名即详情页链接锚文本）
@@ -827,20 +827,28 @@ describe('S66 我的任务工作台', () => {
     })
     expect(groups[0]!.textContent).toContain('客户A系统')
     expect(groups[1]!.textContent).toContain('客户B小程序')
-    // 甘特：A 组区间条 + 截止旗（逾期红优先）；B 组截止旗 + 今日线 + 月刻度（S30 口径复用）
+    // K55 去甘特化：全页不再有甘特条 / 今日线 / 月刻度
+    expect(document.querySelector('[data-testid="gantt-bar"]')).toBeNull()
+    expect(document.querySelector('[data-testid="gantt-today"]')).toBeNull()
+    expect(document.querySelector('[data-testid="gantt-tick"]')).toBeNull()
+    // 清单行按计划时间升序：A 组「逾期未完的活」（交付 T-4）排在「联调接口」（T+5 到期）之前
     const g = groups[0]!
-    expect(g.querySelectorAll('[data-testid="gantt-bar"]').length).toBeGreaterThanOrEqual(2)
-    expect(g.querySelector('[data-testid="gantt-today"]')).toBeTruthy()
-    expect(g.querySelectorAll('[data-testid="gantt-tick"]').length).toBeGreaterThanOrEqual(1)
-    // 逾期徽章 + 逾期条红色（S41 逾期红优先于状态色）
-    expect(g.textContent).toContain('逾期 4 天')
-    const overdueBar = Array.from(g.querySelectorAll('[data-testid="gantt-bar"]'))
-      .find((el) => (el as HTMLElement).style.backgroundColor === 'var(--color-bad)')
-    expect(overdueBar).toBeTruthy()
-    // 日期文案四式之一（S30-4 区间式，S30 甘特同口径载于条 tooltip）
-    const firstBar = g.querySelector('[data-testid="gantt-bar"]') as HTMLElement
-    expect(firstBar.getAttribute('title')).toContain(`${shift(T, -40)} ~ ${shift(T, 5)}`)
-    // 纯提醒 ⏰ 标注 + 未排期沉底不进轴
+    const rows = Array.from(g.querySelectorAll('[data-testid="myt-task-row"]')) as HTMLElement[]
+    expect(rows.length).toBe(2)
+    const [a, b] = rows.map((r) => r.textContent!)
+    expect(a).toContain('逾期未完的活')
+    expect(b).toContain('联调接口')
+    expect(a!).toContain('逾期 4 天')
+    // 逾期整行红提示：行底红晕 + 红日期（S30-4 deadline 式「交付 YYYY-MM-DD」）
+    const overdueRow = rows[0]!
+    expect(overdueRow.className).toContain('bg-[var(--color-bad-soft)]')
+    const overdueDate = overdueRow.querySelector('[data-testid="myt-task-date"]') as HTMLElement
+    expect(overdueDate.textContent).toContain(`交付 ${shift(T, -4)}`)
+    expect(overdueDate.className).toContain('text-[var(--color-bad)]')
+    // 日期文案四式之一（S30-4 区间式）直接展示在行内，不藏在 tooltip
+    const rangeDate = rows[1]!.querySelector('[data-testid="myt-task-date"]') as HTMLElement
+    expect(rangeDate.textContent).toContain(`${shift(T, -40)} ~ ${shift(T, 5)}`)
+    // 纯提醒 ⏰ 标注 + 未排期沉底不进清单主体
     expect(groups[1]!.querySelectorAll('[data-testid="myt-reminder"]').length).toBe(1)
     const unsched = groups[1]!.querySelector('[data-testid="unscheduled-group"]') as HTMLElement
     expect(unsched.textContent).toContain('还没排期')
