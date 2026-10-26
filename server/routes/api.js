@@ -33,6 +33,7 @@ export function registerApiRoutes(app) {
     const { member, sid } = auth.login(db, req.body?.username, req.body?.password)
     reply.setCookie('pmo_session', sid, {
       httpOnly: true, sameSite: 'lax', path: '/', signed: true,
+      maxAge: Math.floor(auth.SESSION_TTL_MS / 1000), // 秒；与服务端 sessions.expires_at 同一常量（K53）
     })
     return { member }
   })

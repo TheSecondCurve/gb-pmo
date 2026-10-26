@@ -695,6 +695,7 @@ web 侧边栏新增 `#/my` 页：跨在跑项目聚合本人未完任务（/my �
 |---|---|
 | can() 权限矩阵 / 401/403/越权 | `server/test/security-auth.test.mjs` |
 | bootstrap（零 admin 缺密码拒启）/ 令牌过期吊销 / 禁用用户联动 | 同上 |
+| 会话有效期 ≥1 年（v0.74，K53）：登录 `Set-Cookie` 带 Max-Age ≥365 天；服务端 `sessions.expires_at − created_at` ≥365 天（与 cookie 同一常量）；会话整体回拨 364 天后 `/auth/me` 仍 200（一年不活动不被踢回登录） | 同上 |
 | 迁移幂等 + fresh 库全量迁移可启动 | `server/test/db-migrations.test.mjs` |
 | 备份恢复冒烟 | `server/test/db-migrations.test.mjs`（backup + restore + 应用可启动） |
 | SQL 端点对抗用例表 | `server/test/s4-agent.test.mjs` |

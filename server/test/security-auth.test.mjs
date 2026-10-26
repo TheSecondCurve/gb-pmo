@@ -79,6 +79,28 @@ describe('认证边界', () => {
     expect(res.statusCode).toBe(401)
   })
 
+  it('会话有效期 ≥1 年（K53）：登录 Set-Cookie 带 Max-Age、服务端 session 过期同口径、回拨 364 天仍免登录', async () => {
+    const ONE_YEAR_MS = 365 * 24 * 3600 * 1000
+    const res = await ctx.app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { username: 'admin', password: 'admin-pass-123' } })
+    expect(res.statusCode).toBe(200)
+    const set = res.headers['set-cookie']
+    const raw = Array.isArray(set) ? set[0] : set
+    // 浏览器层：不带 Max-Age 就是会话 cookie（关浏览器即丢），必须显式 ≥ 1 年
+    const maxAgeSec = Number(/;\s*Max-Age=(\d+)/i.exec(raw)?.[1])
+    expect(maxAgeSec).toBeGreaterThanOrEqual(ONE_YEAR_MS / 1000)
+    // 服务端层：cookie 还在但 sessions.expires_at 先到期同样被踢回登录，两层必须同口径
+    const cookie = raw.split(';')[0]
+    const sid = ctx.app.unsignCookie(decodeURIComponent(cookie.slice('pmo_session='.length))).value
+    const row = ctx.db.prepare('SELECT created_at, expires_at FROM sessions WHERE id = ?').get(sid)
+    expect(row.expires_at - row.created_at).toBeGreaterThanOrEqual(ONE_YEAR_MS)
+    // 行为：会话整体回拨 364 天（一年没碰），/auth/me 仍 200
+    const back = 364 * 24 * 3600 * 1000
+    ctx.db.prepare('UPDATE sessions SET created_at = created_at - ?, expires_at = expires_at - ? WHERE id = ?').run(back, back, sid)
+    const me = await authed(ctx.app, cookie, 'GET', '/api/v1/auth/me')
+    expect(me.status).toBe(200)
+    expect(me.body.member.name).toBe('管理员')
+  })
+
   it('S17-7: 最后一名在职系统管理员不可被降级/离职；存在第二名时允许', async () => {
     const local = await setupApp()
     try {
