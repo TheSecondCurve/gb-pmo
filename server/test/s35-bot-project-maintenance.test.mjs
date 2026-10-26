@@ -317,3 +317,89 @@ describe('S35 软校验拒绝分支（工具层：不真实 id / 非法值一律
     expect(t3.text).toMatch(/http/)
   })
 })
+
+describe('S35-7 批量建任务（v0.74，K25 修订：批量在一个 write 内表达，写即终止不变）', () => {
+  it('S35-7: tasks[] 批量逐条独立生效、一条汇总回执；部分失败单列原因不整体回滚；全部失败/空数组/超 20 条拒绝', async () => {
+    const p = await mkProject('客户S35G系统', ctx.members.lead.id)
+
+    // 3 条批量：纯字符串标题 / 带责任人+截止 / 纯提醒——逐条生效、汇总回执（审计逐条落）
+    const out = await write(ctx.members.lead, 'propose', {
+      kind: 'add_task', projectId: p.id,
+      tasks: [
+        '批量任务甲',
+        { title: '批量任务乙', responsibleMemberId: ctx.members.dev.id, planEndDate: '2026-11-30' },
+        { title: '批量任务丙', taskKind: 'reminder', planEndDate: '2026-12-01' },
+      ],
+    })
+    expect(out.type).toBe('receipt')
+    expect(out.text).toContain('已生效 3 项')
+    expect(out.text).toContain('批量任务甲')
+    expect(out.text).toContain('未指派')
+    const rows = ctx.db.prepare(`SELECT title, kind, status, responsible_member_id, plan_end_date FROM tasks WHERE project_id = ? AND title LIKE '批量任务%'`).all(p.id)
+    expect(rows).toHaveLength(3)
+    const jia = rows.find((r) => r.title === '批量任务甲')
+    expect(jia.status).toBe('todo')
+    expect(jia.responsible_member_id).toBeNull()
+    const yi = rows.find((r) => r.title === '批量任务乙')
+    expect(yi.responsible_member_id).toBe(ctx.members.dev.id)
+    expect(yi.plan_end_date).toBe('2026-11-30')
+    const bing = rows.find((r) => r.title === '批量任务丙')
+    expect(bing.kind).toBe('reminder')
+    expect(bing.plan_end_date).toBe('2026-12-01')
+    const audits = ctx.db.prepare(`SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'task.create' AND object_id IN (SELECT CAST(id AS TEXT) FROM tasks WHERE project_id = ? AND title LIKE '批量任务%')`).get(p.id).n
+    expect(audits).toBe(3)
+
+    // 部分失败：坏条目单列原因（best-effort），好条目照常生效
+    const partial = await write(ctx.members.lead, 'propose', {
+      kind: 'add_task', projectId: p.id,
+      tasks: [{ title: '批量任务丁' }, { title: '坏责任人任务', responsibleMemberId: 999999 }],
+    })
+    expect(partial.type).toBe('receipt')
+    expect(partial.text).toContain('已生效 1 项')
+    expect(partial.text).toContain('失败 1 项')
+    expect(partial.text).toContain('不存在或已离职')
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND title = '批量任务丁'`).get(p.id).n).toBe(1)
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE title = '坏责任人任务'`).get().n).toBe(0)
+
+    // 全部失败 → refused；空数组 / 超 20 条 → refused
+    const allBad = await write(ctx.members.lead, 'propose', { kind: 'add_task', projectId: p.id, tasks: [{ title: '  ' }, { taskKind: 'urgent' }] })
+    expect(allBad.type).toBe('refused')
+    expect(allBad.text).toContain('批量建任务全部失败')
+    const empty = await write(ctx.members.lead, 'propose', { kind: 'add_task', projectId: p.id, tasks: [] })
+    expect(empty.type).toBe('refused')
+    const tooMany = await write(ctx.members.lead, 'propose', {
+      kind: 'add_task', projectId: p.id, tasks: Array.from({ length: 21 }, (_, i) => ({ title: `超限任务${i}` })),
+    })
+    expect(tooMany.type).toBe('refused')
+    expect(tooMany.text).toContain('20 条')
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE title LIKE '超限任务%'`).get().n).toBe(0)
+  })
+
+  it('S35-7: 批量权限与单条一致（一次校验、拒绝不落库）；协议提示词含批量用法；私聊全链路一条指令建多条', async () => {
+    const p = await mkProject('客户S35H系统', ctx.members.lead.id)
+
+    // 权限前置与单条同矩阵：非牵头人非管理员 → refused_permission，一条都不落
+    const denied = await write(ctx.members.dev, 'propose', { kind: 'add_task', projectId: p.id, tasks: [{ title: '越权批量任务' }] })
+    expect(denied.type).toBe('refused')
+    expect(denied.result).toBe('refused_permission')
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE title = '越权批量任务'`).get().n).toBe(0)
+
+    // 协议系统提示词含批量用法（一条消息列多个任务用 tasks 一次建完）
+    const sys = buildSystemPrompt(ctx.db, {
+      member: ctx.members.lead, channel: { channel_type: 'dedicated', project_id: p.id }, chatType: 'group', surface: 'im',
+    })
+    expect(sys).toContain('"tasks"')
+    expect(sys).toContain('一次建完')
+
+    // 全链路：一条口述列多个任务 → 单个批量 write → 全部落库、汇总回执（写即终止下一次办完）
+    const { llm } = scriptedLlm(
+      JSON.stringify({ action: 'write', kind: 'propose', payload: { kind: 'add_task', projectId: p.id, tasks: [{ title: '链路任务一' }, { title: '链路任务二' }, { title: '链路任务三' }] } })
+    )
+    const rec = recorder()
+    const out = await handleBotEvent(ctx.db, p2p('fs_zhang', '建三个任务：链路任务一、链路任务二、链路任务三'), { llm, send: rec.send, secret: SECRET })
+    expect(out.result).toBe('replied')
+    expect(rec.sent[0].text).toContain('已生效 3 项')
+    expect(rec.sent[0].card).toBeUndefined()
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND title LIKE '链路任务%'`).get(p.id).n).toBe(3)
+  })
+})
