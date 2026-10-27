@@ -314,6 +314,7 @@ S3 兼容对象存储（阿里云 OSS / Cloudflare R2 / AWS S3 / MinIO 一套打
 | S34-2 | 当管理员测试连通性时，应按「HEAD 桶 → PUT 探针对象 → DELETE 探针」验证并把失败映射为明确原因（桶不存在 / AccessKey 权限或签名被拒 / 网络不通）；请求须为 S3 SigV4 签名（以 AWS 官方文档示例向量为单测锚点）；表单未保存的值可直接先测（同 S17-4 语义） | 同上 |
 | S34-3 | 当执行备份时，应产生在线快照的 gzip 对象（key=前缀+`gb-pmo-YYYYMMDD-HHMMSS.db.gz`，北京时刻），内容解压后为完整 SQLite 库（含备份前写入的数据）；成功与失败均落审计，历史端点可读最近记录 | 同上 |
 | S34-4 | 当云端备份对象数超过保留份数时，应只删除最旧的超出部分；当存储未配全时定时/手动备份应跳过（skipped+原因）且不发起网络请求；调度器判定应包含 backup 任务（enabled 开关生效、心跳驱动执行） | 同上 |
+| S34-5 | 当管理员打开「远端备份对象」时，应经 ListObjectsV2 解析 Key/LastModified/Size：只列命名规则对象、新→旧、带时间戳与大小、合计与保留上限对照；未配全 skipped+原因；成员 403（v0.77） | 同上 |
 
 ## S35（P0）— 成员/全线 — 机器人项目维护面补全（v0.39；v0.46 直改化；S35-7 v0.74 批量建任务；S35-8 v0.76 按类型清单补任务）
 
@@ -702,17 +703,19 @@ web 侧边栏 `#/my` 页：跨在跑项目聚合本人未完任务（/my 斜杠�
 | S67-2 | 当保存调度配置时，非法 cron（400 带字段名）与非布尔开关（400）应被拒绝；合法值保存后回读一致，调度器下一拍按新配置判定 | `server/test/s67-scheduler-admin.test.mjs` |
 | S67-3 | 当管理员配置纯提醒发送门槛时，`reminder.fireAfterHour` 应可保存（0-23 整数，越界/非整数 400），预警巡检按新门槛触发纯提醒推送 | `server/test/s67-scheduler-admin.test.mjs` |
 | S67-4 | 当调度开关变化时，心跳应即时遵从（停用任务不再触发，重新启用后按 cron 补判定） | `server/test/s67-scheduler-admin.test.mjs` |
+| S67-5 | 当管理员点击某任务的「运行」时，应立即以与调度器同一 runner 表执行一次并回显结果；幂等语义与定时一致（晨报当日已推跳过、周报本周已推跳过）；`scheduler.run` 审计留痕；成员 403、未知任务 400、失败 200+ok:false（v0.77） | `server/test/s67-scheduler-admin.test.mjs` |
+| S67-6 | 当任务执行（cron 或手动）时，应统一落 `scheduler_runs` 台账行（任务/origin/开始时刻/耗时/成败/摘要、手动带操作人），单任务失败不阻塞同拍其余任务且失败同样落行；「运行记录」Tab 可读最近记录，成员 403（v0.77） | `server/test/s67-scheduler-admin.test.mjs` |
 
-## S68（P0）— 系统（大脑·晨报推送）— 每日项目群晨报（v0.75）
+## S68（P0）— 系统（大脑·晨报推送）— 每日项目群晨报（v0.75；v0.77 锚点修订）
 
-调度器新增 `morning` 任务（默认每日 09:30，锚今日 00:00 补跑）：向每个绑定飞书专题群的在跑项目群推送当日晨报——数据底座复用 S28 `engine/morning.js` 确定性块 + 近期开工窗口（7 天），LLM 只写综述段（purpose=morning），正文骨架代码拼装分节 list。项目级日幂等；dedicated-only；LLM 缺席降级。决策见 design.md K54。
+调度器新增 `morning` 任务（默认每日 09:30；v0.77 起初始锚点=进程启动时刻，重启/停机跨过时点不补跑，错过当日可经 S67-5「运行」手动触发）：向每个绑定飞书专题群的在跑项目群推送当日晨报——数据底座复用 S28 `engine/morning.js` 确定性块 + 近期开工窗口（7 天），LLM 只写综述段（purpose=morning），正文骨架代码拼装分节 list。项目级日幂等；dedicated-only；LLM 缺席降级。决策见 design.md K54/K58。
 
 | # | 验收标准 | 对应测试 |
 |---|---|---|
 | S68-1 | 当任务触发时，应为每个绑定专题群的在跑项目推送结构化晨报：正文含【项目概况】【逾期任务】【近期开工】【昨日以来动态】分节与 list 行，逾期带超期天数与责任人，近期开工带计划开工日；pushes 行 push_type=morning 且 group_key 留痕 | `server/test/s68-morning-push.test.mjs` |
 | S68-2 | 当 LLM 撰写综述时，应仅产出综述段并落 purpose=morning 用量台账；LLM 未配置或调用失败时综述降级确定性一句、分节结构不变，单项目失败不阻塞其余项目 | 同上 |
-| S68-3 | 当同一项目当日已推送过时，应跳过不重发（重启补跑安全）；无绑定专题群的项目与终态项目静默跳过、不落 pushes 行 | 同上 |
-| S68-4 | 当调度配置时，`morningCron`/`morningEnabled` 默认「30 9 * * *」/启用；dueTasks 按 cron 判定、停用不跑；`initialLastRun` 锚定今日 00:00 | 同上 |
+| S68-3 | 当同一项目当日已推送过时，应跳过不重发（同日手动触发同样跳过）；无绑定专题群的项目与终态项目静默跳过、不落 pushes 行 | 同上 |
+| S68-4 | 当调度配置时，`morningCron`/`morningEnabled` 默认「30 9 * * *」/启用；dueTasks 按 cron 判定、停用不跑；`initialLastRun` 锚定进程启动时刻（v0.77 修订：重启不补跑） | 同上 |
 
 ## 必测清单（engineering-standards §4）
 

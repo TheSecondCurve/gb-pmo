@@ -8,7 +8,7 @@ import zlib from 'node:zlib'
 import { setupDb, setupApp, loginCookie, authed, waitFor } from './helpers.mjs'
 import { getSetting, setSetting } from '../engine/settings.js'
 import { signAwsV4, resolveRegion, s3Client } from '../engine/s3.js'
-import { runBackup, testBackupConnection, backupConfigError } from '../engine/backup.js'
+import { runBackup, testBackupConnection, backupConfigError, listRemoteBackups } from '../engine/backup.js'
 import { dueTasks, startScheduler } from '../brain/scheduler.js'
 
 const CFG = {
@@ -46,7 +46,7 @@ function fakeS3({ putStatus = 200, objects = [] } = {}) {
       const prefix = u.searchParams.get('prefix') || ''
       const matching = state.objects.filter((k) => k.startsWith(prefix))
       const xml = `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult>${matching
-        .map((k) => `<Contents><Key>${k}</Key></Contents>`)
+        .map((k, i) => `<Contents><Key>${k}</Key><LastModified>2026-10-26T00:00:0${i % 10}.000Z</LastModified><Size>${1024 + i}</Size></Contents>`)
         .join('')}</ListBucketResult>`
       return new Response(xml, { status: 200 })
     }
@@ -236,6 +236,7 @@ describe('S34 备份执行语义（engine 直调）', () => {
     clock += 26 * 3600 * 1000 // 越过每日时点
     await waitFor(() => ran.length >= 1) // 正向断言轮询，抗并行负载抖动
     sched.stop()
+    await new Promise((r) => setTimeout(r, 20)) // 让在途 tick 收尾（S67-6 台账落行），避免与 db.close() 竞态
     expect(ran.length).toBeGreaterThanOrEqual(1)
     ctx.db.close()
   })
@@ -336,3 +337,50 @@ function s3FailPut() {
     return new Response('', { status: 200 })
   }
 }
+
+describe('S34-5 远端备份对象清单', () => {
+  it('S34-5: s3 list 解析 Key/LastModified/Size；listRemoteBackups 过滤命名规则、新→旧、未配全 skipped；端点成员 403', async () => {
+    // s3 层：全量 Contents 解析（keys 与 objects 并存）
+    const xml = `<?xml version="1.0"?><ListBucketResult>
+      <Contents><Key>backups/gb-pmo-20261027-033051.db.gz</Key><LastModified>2026-10-26T19:30:51.000Z</LastModified><Size>359219</Size></Contents>
+      <Contents><Key>backups/other.txt</Key><LastModified>2026-10-26T10:00:00.000Z</LastModified><Size>5</Size></Contents>
+      <Contents><Key>backups/gb-pmo-20261026-150209.db.gz</Key><LastModified>2026-10-26T07:02:09.000Z</LastModified><Size>339251</Size></Contents>
+    </ListBucketResult>`
+    const c = s3Client({ ...CFG }, { fetchImpl: async () => new Response(xml, { status: 200 }) })
+    const list = await c.list('backups/')
+    expect(list.ok).toBe(true)
+    expect(list.keys).toHaveLength(3)
+    expect(list.objects[0]).toEqual({ key: 'backups/gb-pmo-20261027-033051.db.gz', lastModified: '2026-10-26T19:30:51.000Z', size: 359219 })
+
+    // 引擎层：存储未配全 → skipped+原因，不发起网络
+    const bare = setupDb()
+    const out0 = await listRemoteBackups(bare.db)
+    expect(out0).toMatchObject({ ok: false, skipped: true })
+    expect(out0.reason).toMatch(/备份未配置/)
+    bare.db.close()
+
+    // 路由层：fakeS3 预置对象（含非命名规则对象，应被过滤）；新→旧；成员 403
+    const s3 = fakeS3({ objects: ['backups/gb-pmo-20261026-150209.db.gz', 'backups/gb-pmo-20261027-033051.db.gz', 'backups/probe.txt'] })
+    const { app, db } = await setupApp({ backupFetch: s3.fetchImpl })
+    setSetting(db, 'backup', CFG, 1)
+    const admin = await loginCookie(app, 'admin', 'admin-pass-123')
+    const lead = await loginCookie(app, 'zhangsan', 'pass-123456')
+
+    const member = await authed(app, lead, 'GET', '/api/v1/admin/backup/remote')
+    expect(member.status).toBe(403)
+
+    const r = await authed(app, admin, 'GET', '/api/v1/admin/backup/remote')
+    expect(r.status).toBe(200)
+    expect(r.body.ok).toBe(true)
+    expect(r.body.objects.map((o) => o.key)).toEqual([
+      'backups/gb-pmo-20261027-033051.db.gz',
+      'backups/gb-pmo-20261026-150209.db.gz',
+    ])
+    expect(r.body.count).toBe(2)
+    expect(r.body.keepCount).toBe(30)
+    expect(r.body.totalBytes).toBeGreaterThan(0)
+    expect(r.body.objects[0].bytes).toBeGreaterThan(0)
+    expect(r.body.objects[0].lastModifiedMs).toBeTypeOf('number')
+    db.close()
+  })
+})

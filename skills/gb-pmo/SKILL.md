@@ -453,6 +453,19 @@ client.sh action generate_person_digest '{}'
 | file_count | INTEGER |  |
 | skipped_files | TEXT |  |
 
+### scheduler_runs
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| task | TEXT |  |
+| origin | TEXT |  |
+| started_at | INTEGER |  |
+| duration_ms | INTEGER |  |
+| ok | INTEGER |  |
+| summary | TEXT |  |
+| member_id | INTEGER |  |
+
 ## 枚举（值 ↔ 中文 label，双向对齐）
 
 - **memberRole**: admin=系统管理员、member=成员
