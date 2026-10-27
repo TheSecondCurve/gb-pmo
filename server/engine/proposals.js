@@ -98,6 +98,15 @@ export const PROPOSAL_KINDS = {
       return tasks.createMilestone(db, { projectId: Number(payload.projectId), name: payload.name, planDate: payload.planDate || null }, by)
     },
   },
+  // S35-8（v0.76，K57）：已有项目按自身类型清单补任务——LLM 只给 projectId，清单由引擎从 project_type_tasks 拷入
+  // （不经转述，无 ≤20 条护栏）；权限同 add_task 矩阵（牵头人/管理员），直改路径 platform='bot' 留痕。
+  apply_type_tasks: {
+    label: '按类型清单补任务',
+    canConfirm: canConfirmProjectOp,
+    apply(db, payload, by) {
+      return projects.applyTypeTasks(db, Number(payload.projectId), by, { platform: 'bot' })
+    },
+  },
   update_project: {
     label: '项目信息变更',
     canConfirm: canConfirmProjectOp,
