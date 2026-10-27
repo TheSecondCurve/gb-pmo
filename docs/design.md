@@ -353,3 +353,21 @@
 - 决策：新增引擎函数 `projects.applyTypeTasks(db, projectId, by, { platform })`——读项目**自身绑定类型**（`projects.project_type_id`）的内嵌清单（`typeTaskItems`，含默认备注与参考），按**标题精确匹配**跳过项目既有未删任务，其余单事务拷入：与立项模板路径同口径（`source='template'`、`todo`、责任人 NULL、计划开始=今天、计划结束 NULL、refs 创建人=发起人），**一条** decision 事件「按类型「X」清单补建任务 N 项（跳过已存在 M 项）」+ **一条** `project.applyTypeTasks` 审计（detail: typeCode/added/skipped/taskIds），不逐任务落进展事件。守卫：项目 404、终态 409 只读、项目无类型或类型无清单 400、全部已存在 400「无需补建」（不落任何记录）；类型停用不阻断。机器人面作为 propose kind `apply_type_tasks {projectId}` 接入 K25 直改路径：`PROPOSAL_KINDS.apply_type_tasks`（`canConfirm` 复用牵头人/管理员矩阵，`apply` 调引擎 platform='bot'），`softValidateProposal` 预算「待补 N / 跳过 M」写进回执摘要；协议提示词补动作行。web/Agent 入口暂不开（引擎已通用）。`add_task` 的 ≤20 条护栏（S35-7）不动。
 - 理由：用户 2026-10-27 反馈——已有项目要「参考项目模板再初始化一批任务」，被 `add_task` 批量 ≤20 条拦住。问题的本质不是数字太小，而是**清单本来就在库里**（`project_type_tasks`），却要绕一圈让 LLM 把几十个标题逐条转述回来：token 开销、抄写误差、还撞「写即终止」下一条指令一个 write 的结构限制。把「拷清单」下沉为引擎能力后，LLM 只需给一个项目 id，20 条上限天然无关；提高上限只是把转述路径放宽，不解决根因。只认项目自身类型，是因为「换一个类型套用」会让项目类型与任务来源脱钩，且 S1 立项时已可改选类型/自定义清单，没有事后换模板的既定场景。按标题去重而非「只允许空项目」，是因为真实场景是项目已手工建了一部分任务再想补齐模板——幂等重放比一次性闸门更贴合「初始化」的口语语义；精确匹配而非模糊匹配，是为了拒绝的理由可解释（同名即跳过），不引入猜测。只增不改、不排期、不分配，是「类型只影响未来立项」（v0.18/K11）与 S38/K20「责任人默认未指派」的既有口径延续；排期与分配已有 S39/S64 初始分配专门承接。一条事件一条审计而非逐任务落进展，与 `createProject` 同模式——批量初始化刷 N 条「🆕 新增任务」进展是噪音（S59 的逐任务进展面向手工单建）。
 - 推翻：无（S35 负面清单原条目维持；K25 直改路径、K11 类型内嵌清单、K20 缺省未指派均不动）。补注 S35-7：≤20 条护栏仅约束 LLM 转述型批量，模板类批量走本路径。
+
+## K58 定时任务手动触发 + 晨报锚点改进程启动时刻（S67-5 / S68-4 修订，v0.77）
+
+- 决策：①`brain/scheduler.js` 导出 `runTask(db, key, { llm, runners })`——与调度器同一 `DEFAULT_RUNNERS` 表（可注入覆盖，未知键 400）；新路由 `POST /api/v1/admin/scheduler/run`（requireAdmin；runner 失败沿用 v0.21 网关折返 200+`{ok:false,error}`；每次触发一条 `scheduler.run` 审计），「定时任务」页每任务行加「运行」按钮并回显结果。幂等语义与定时完全一致——**不在手动路径绕过判重**（晨报当日已推项目跳过、周报本周已推整轮跳过、备份存储未配跳过）：群通知类推送宁漏勿扰，手动补发的诉求由「再点一次也不炸群」的判重保护兜住。②`initialLastRun` 的 morning 锚点由「今日 00:00」改为 `nowMs`（进程启动时刻，与 extraction 等增量任务同档）。
+- 理由：用户 2026-10-27 反馈——每次发版重启（时刻晚于 09:30 且当日未推）冷启动 tick 即向全部项目群补发一轮晨报，发布窗口与推送窗口重叠时每次发版都「炸群」一次。停机补跑的收益（偶尔少发一轮）小于打扰成本，改为「错过不补、手动可补」组合；两个改动配套——去掉自动补跑后，「运行」按钮是当日错过的唯一补救口，也是运行记录缺失现状下最直接的可见反馈。digest（周级、打扰面小）与 report（个人私信 + 当日去重）锚点维持不变。
+- 推翻：K54「锚今日 00:00 停机当日补发」的 morning 部分（K54 的正文结构、项目级日幂等、dedicated-only 口径不动；S68-3 判重保留并转而保护 S67-5 手动触发路径）。
+
+## K59 定时任务运行台账与「运行记录」页（S67-6，v0.77）
+
+- 决策：新表 `scheduler_runs`（migration 0034：task/origin∈{cron,manual}/started_at/duration_ms/ok/summary/member_id）。落行收口在 `brain/scheduler.js` 内部 `recordRun`——调度器 tick 与 `runTask`（S67-5）共用：成功记摘要（逐项目 results 数组聚合计数 total/pushed/skipped/failed，其余结果 JSON 截断 400 字），失败记错误消息且**单任务失败不阻塞同拍其余任务**（既有 tick catch 语义不变，只是补落行）。查询 `listSchedulerRuns(db,{limit})`（members 联名，1~200 钳制）；路由 `GET /api/v1/admin/scheduler/run` 同族：`GET /api/v1/admin/scheduler/runs`（requireAdmin）。「定时任务」分区加「运行记录」Tab：最近记录新→旧（时间/任务/定时·手动+操作人/成败徽章/耗时/摘要）。
+- 理由：用户 2026-10-27 盘点反馈——定时任务「跑没跑、成没成」没有任何集中视图，晨报群推（recipient NULL）在个人「通知」页全员不可见。根因是运行事实只散落在 pushes/audit_logs 两侧证里，cron 路径成败只进 console。台账落行后手动触发（S67-5）与 cron 同表同口径，「运行」按钮即时的行内回显 + 记录页的历史回看互补；K58 的 scheduler.run 审计保留（安全面「谁点了什么」），台账是运维面「跑成什么样」，两者不冗余。
+- 边界：不回填历史（台账从上线起记）；不做保留期清理（7 任务×少量行/天，单机 SQLite 可忽略；后续有需要再按行数滚动清）；记录页不展示推送正文（那是推送内容面，晨报判重与重发语义另议）。
+
+## K60 备份远端对象清单（S34-5，v0.77）
+
+- 决策：`engine/s3.js` 的 `list` 在既有 `keys` 之外补 `objects`（Key/LastModified/Size 全量解析，keys 保留供滚动保留用）；`engine/backup.js` 新增 `listRemoteBackups(db,{fetchImpl})`——未配全 skipped+原因（与 runBackup 同构）、ListObjectsV2 失败回 `{ok:false,reason}`、成功按命名规则过滤 `gb-pmo-*.db.gz`、新→旧（零填充时刻戳字典序=时间序）、每对象回 key/lastModifiedMs/bytes 与合计。路由 `GET /api/v1/admin/backup/remote`（requireAdmin，backupFetch 注入同族）；运维诊断→数据库备份页加「远端备份对象」卡——**点开才拉取**（不随页面自动请求，配置页不因 R2 慢链接卡顿），显示文件名/时间戳/大小/合计/与 keepCount 对照。
+- 理由：用户 2026-10-27 要求「远端备份文件清单，文件名/时间戳/大小，方便查看」——此前远端容灾状态只能登云控制台核对，或像本次一样临时写脚本进容器拉。清单能力落在备份域（同一配置/签名/注入路径）复用 S34 全套，不新开配置面。
+- 边界：只读清单，不做恢复按钮（恢复=下载+gunzip+换库文件重启，docs/standards/deployment.md 既有口径）；不做分页（单次 max-keys=1000，keepCount≤365 语义下足够）。

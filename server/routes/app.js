@@ -29,6 +29,7 @@ export function buildApp(db, opts = {}) {
   app.decorate('llm', opts.llm ?? null) // 大脑注入点（测试传 fake；生产不注入，各模块按 settings 动态解析）
   app.decorate('botSync', opts.botSync ?? null) // 机器人热同步注入点（S20-12：测试传 fake；生产不注入，路由走真实 syncBot）
   app.decorate('backupFetch', opts.backupFetch ?? null) // 备份 S3 请求注入点（S34：测试传假 fetch；生产不注入走真实网络）
+  app.decorate('schedulerRunners', opts.schedulerRunners ?? null) // 定时任务手动触发注入点（S67-5：测试传 fake runner；生产不注入走 DEFAULT_RUNNERS）
   app.decorateRequest('member', null)
   app.decorateRequest('agentAuth', null)
 

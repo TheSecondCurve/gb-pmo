@@ -4,7 +4,8 @@
 // 正文骨架由代码拼装——【项目概况】/【逾期任务】/【近期开工】/【昨日以来动态】分节 + list 行
 // （richPost 走 post）；LLM（purpose=morning）只写概况段「综述」2-4 句：转述给定数据、不编造
 // （S28「LLM 只转述不拼口径」同则），未配置/失败降级确定性一句，分节结构不变。
-// dedicated-only（S60 同口径）；项目级日幂等（pushes morning+project+北京日判重），重启补跑安全；
+// dedicated-only（S60 同口径）；项目级日幂等（pushes morning+project+北京日判重，定时与 S67-5 手动触发同受保护）；
+// v0.77 起重启/停机跨过 cron 时点不补跑（调度器锚点=进程启动时刻，错过当日走手动触发）；
 // 纯只读汇总推送，不改任何业务数据、不进确认卡。
 
 import { today, bjDayStartMs, addDays } from '../db/time.js'
