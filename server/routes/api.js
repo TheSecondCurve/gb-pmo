@@ -525,6 +525,49 @@ export function registerApiRoutes(app) {
     return { history: listBackupHistory(db) }
   })
 
+  // —— S67-5（v0.77，K58）：定时任务手动触发——与调度器同一 runner 表执行一次并回显；
+  // 幂等语义与定时一致（不在手动路径绕过判重：晨报当日已推跳过、周报本周已推跳过、备份未配跳过） ——
+  app.post('/api/v1/admin/scheduler/run', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const task = String(req.body?.task ?? '').trim()
+    const { runTask } = await import('../brain/scheduler.js')
+    try {
+      const result = await runTask(db, task, { llm: app.llm ?? undefined, runners: app.schedulerRunners ?? undefined, memberId: req.member.id })
+      auth.audit(db, { memberId: req.member.id, action: 'scheduler.run', objectType: 'scheduler', detail: { task, ok: true } })
+      return { ok: true, task, result: result ?? null }
+    } catch (e) {
+      if (e.statusCode === 400) throw e // 未知任务键：参数错误直返 400，不落运行审计
+      auth.audit(db, { memberId: req.member.id, action: 'scheduler.run', objectType: 'scheduler', detail: { task, ok: false, error: e.message } })
+      if (e.statusCode >= 500) {
+        req.log.error(e) // 上游失败不走 5xx（v0.21 网关模式），200 + ok:false
+        return { ok: false, task, error: e.message }
+      }
+      throw e
+    }
+  })
+
+  // —— S67-6（v0.77，K59）：运行台账最近记录（cron 与手动统一落 scheduler_runs，新→旧） ——
+  app.get('/api/v1/admin/scheduler/runs', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { listSchedulerRuns } = await import('../brain/scheduler.js')
+    return { runs: listSchedulerRuns(db, { limit: Number(req.query.limit) || 50 }) }
+  })
+
+  // —— S34-5（v0.77，K60）：远端备份对象清单——ListObjectsV2 实时拉取，未配全 skipped ——
+  app.get('/api/v1/admin/backup/remote', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const { listRemoteBackups } = await import('../engine/backup.js')
+    try {
+      return await listRemoteBackups(db, { fetchImpl: app.backupFetch ?? undefined })
+    } catch (e) {
+      if (e.statusCode >= 500) {
+        req.log.error(e)
+        return { ok: false, reason: e.message }
+      }
+      throw e
+    }
+  })
+
   // S17-8（v0.18）：项目类型管理（内嵌任务清单；任务模板对象已裁撤，仅系统管理员）
   app.post('/api/v1/admin/project-types', async (req, reply) => {
     if (!requireAdmin(req, reply)) return

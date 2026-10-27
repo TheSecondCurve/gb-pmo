@@ -105,3 +105,27 @@ export function listBackupHistory(db) {
     return { at: r.created_at, memberName: r.member_name ?? '调度器', ...detail }
   })
 }
+
+/** 远端备份对象清单（S34-5，v0.77）：桶内按命名规则过滤、新→旧（时刻戳字典序=时间序）。
+ *  未配全 skipped+原因（与 runBackup 同构）；列表失败回 {ok:false,reason} 不抛。 */
+export async function listRemoteBackups(db, { fetchImpl } = {}) {
+  const conf = getSetting(db, 'backup')
+  const missing = backupConfigError(conf)
+  if (missing) {
+    return { ok: false, skipped: true, reason: `备份未配置（${missing}）：配置台「运维诊断→数据库备份」` }
+  }
+  const client = s3Client(conf, { fetchImpl })
+  const list = await client.list(conf.prefix)
+  if (!list.ok) return { ok: false, reason: `远端列表失败（${list.error}）` }
+  const objects = list.objects
+    .filter((o) => BACKUP_NAME_RE.test(o.key.slice(conf.prefix.length)))
+    .sort((a, b) => (a.key < b.key ? 1 : -1))
+    .map((o) => ({ key: o.key, lastModifiedMs: o.lastModified ? Date.parse(o.lastModified) : null, bytes: o.size }))
+  return {
+    ok: true,
+    keepCount: conf.keepCount,
+    count: objects.length,
+    totalBytes: objects.reduce((s, o) => s + o.bytes, 0),
+    objects,
+  }
+}
