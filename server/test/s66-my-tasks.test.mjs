@@ -5,7 +5,7 @@ import { createProject, cancelProject } from '../engine/projects.js'
 import { createTask, updateTask, deleteTask } from '../engine/tasks.js'
 import { addEvent } from '../engine/events.js'
 import { myTasksBoard } from '../engine/statusBoard.js'
-import { today, addDays } from '../db/time.js'
+import { today, addDays, bjWeekStartMs } from '../db/time.js'
 
 // 造数（各用例共用一份库）：dev 名下 A 项目 4 条（区间/逾期/今天到期/上周到期）+ B 项目 2 条（纯提醒/未排期），
 // 另有他人任务、已完成、软删、终态项目任务各 1 条（均不应出现在 dev 视图）。
@@ -68,10 +68,11 @@ describe('S66 我的任务工作台', () => {
     const { total, overdue, dueThisWeek, pending } = board.stats
     expect(total).toBe(6) // A:4 + B:2
     expect(overdue).toBe(2) // day(-4) 与 day(-8)
-    // day(0)（今天）必计入本周；day(-8) 不计入（早于今日）；未来日期有 day(0)/day(1)/day(5) 三条，
-    // 落在本周的数量随跑测日浮动：周一/周二三条全在（3）、周三至周六两条（2）、周日仅今天一条（1）——断言区间
-    expect(dueThisWeek).toBeGreaterThanOrEqual(1)
-    expect(dueThisWeek).toBeLessThanOrEqual(3)
+    // 本周到期 = 到期日落在 [今天, 本周日] 窗内：夹具里 dev 的候选是 day(0)/day(1)/day(5)，哪些落窗取决于跑测星期几
+    // （周日跑 day(1) 落下周；周一/周二跑 day(5) 还在本周），按同一北京自然周口径从夹具精确推算，不再靠区间兜底
+    const sunday = addDays(today(bjWeekStartMs(Date.now())), 6)
+    const expectedThisWeek = [day(0), day(1), day(5)].filter((d) => d <= sunday).length
+    expect(dueThisWeek).toBe(expectedThisWeek)
     expect(pending).toBe(1)
     // 逾期天数：day(-4) → 4 天；今天口径随数据返回（前端今日线对齐用）
     const od = board.projects.flatMap((p) => p.tasks).find((x) => x.title === '逾期未完的活')
