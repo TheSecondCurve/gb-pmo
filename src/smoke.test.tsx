@@ -11,6 +11,7 @@ import Projects from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
 import MyTasks from './pages/MyTasks'
 import { bjToday } from './fmt'
+import type { MyTasksBoard } from './types'
 import { StoreProvider } from './store'
 
 const loginFetch = vi.fn(async () =>
@@ -780,7 +781,7 @@ describe('S66 我的任务工作台', () => {
     return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`
   }
   const T = bjToday()
-  const board = {
+  const board: MyTasksBoard = {
     today: T,
     stats: { total: 4, overdue: 1, dueThisWeek: 1, pending: 2 },
     projects: [
