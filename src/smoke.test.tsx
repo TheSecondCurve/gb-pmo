@@ -11,6 +11,7 @@ import Projects from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
 import MyTasks from './pages/MyTasks'
 import { bjToday } from './fmt'
+import type { MyTasksBoard } from './types'
 import { StoreProvider } from './store'
 
 const loginFetch = vi.fn(async () =>
@@ -780,7 +781,7 @@ describe('S66 我的任务工作台', () => {
     return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`
   }
   const T = bjToday()
-  const board = {
+  const board: MyTasksBoard = {
     today: T,
     stats: { total: 4, overdue: 1, dueThisWeek: 1, pending: 2 },
     projects: [
@@ -853,6 +854,68 @@ describe('S66 我的任务工作台', () => {
     const unsched = groups[1]!.querySelector('[data-testid="unscheduled-group"]') as HTMLElement
     expect(unsched.textContent).toContain('还没排期')
     expect(unsched.textContent).toContain('未排期（1）')
+  })
+
+  it('S66-4: 清单行就地快改——标题/状态（done 移出未完清单）与未排期补交付日，均走 PATCH /api/v1/tasks/:id 并刷新重排', async () => {
+    // 有状态 mock：PATCH 就地改夹具（done 移出，同服务器口径），GET 返回改后看板
+    const calls: Array<{ url: string; method: string; body: Record<string, unknown> }> = []
+    const state: typeof board = JSON.parse(JSON.stringify(board))
+    const editFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/api/v1/tasks/')) {
+        const body = JSON.parse(String(init?.body || '{}'))
+        calls.push({ url, method: init?.method || 'PATCH', body })
+        const id = Number(url.split('/').pop())
+        for (const g of state.projects) {
+          const t = g.tasks.find((x) => x.id === id)
+          if (t) Object.assign(t, body)
+        }
+        state.projects = state.projects.map((g) => ({ ...g, tasks: g.tasks.filter((t: { status: string }) => t.status !== 'done') }))
+        return new Response(JSON.stringify({ ok: true }), { status: 200 })
+      }
+      return new Response(JSON.stringify(state), { status: 200 })
+    }) as unknown as typeof fetch
+    globalThis.fetch = editFetch
+    render(<StoreProvider><MyTasks /></StoreProvider>)
+
+    // 标题就地改：点「联调接口」→ 输入框 → 回车提交 → PATCH + 刷新出新标题
+    const groupA = await waitFor(() => {
+      const els = Array.from(document.querySelectorAll('[data-testid="myt-project"]')) as HTMLElement[]
+      expect(els.length).toBe(2)
+      return els[0]!
+    })
+    fireEvent.click(within(groupA).getByText('联调接口'))
+    const titleInput = within(groupA).getByDisplayValue('联调接口') as HTMLInputElement
+    fireEvent.change(titleInput, { target: { value: '联调接口-v2' } })
+    fireEvent.keyDown(titleInput, { key: 'Enter' })
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/tasks/101') && c.body.title === '联调接口-v2')).toBe(true))
+    await waitFor(() => expect(within(groupA).getByText('联调接口-v2')).toBeTruthy())
+
+    // 状态就地改 done：行内下拉（首行=逾期未完的活 102）→ PATCH status=done → 移出未完清单
+    const rowsA = () => Array.from(groupA.querySelectorAll('[data-testid="myt-task-row"]'))
+    expect(rowsA().length).toBe(2)
+    const statusSelect = rowsA()[0]!.querySelector('select') as HTMLSelectElement
+    expect(statusSelect.value).toBe('todo')
+    fireEvent.change(statusSelect, { target: { value: 'done' } })
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/tasks/102') && c.body.status === 'done')).toBe(true))
+    await waitFor(() => {
+      expect(rowsA().length).toBe(1)
+      expect(groupA.textContent).not.toContain('逾期未完的活')
+    })
+
+    // 未排期 chip 就地补交付日（202 还没排期）→ PATCH planEndDate → 进入清单排序、未排期组消失
+    const groupB = (Array.from(document.querySelectorAll('[data-testid="myt-project"]')) as HTMLElement[])[1]!
+    fireEvent.click(within(groupB).getByText('补交付日'))
+    const dateInput = groupB.querySelector('input[type="date"]') as HTMLInputElement
+    fireEvent.change(dateInput, { target: { value: shift(T, 7) } })
+    fireEvent.keyDown(dateInput, { key: 'Enter' })
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/tasks/202') && c.body.planEndDate === shift(T, 7))).toBe(true))
+    await waitFor(() => {
+      expect(groupB.querySelector('[data-testid="unscheduled-group"]')).toBeNull()
+      expect(groupB.querySelectorAll('[data-testid="myt-task-row"]').length).toBe(2)
+      expect(groupB.textContent).toContain('还没排期')
+      expect(groupB.textContent).toContain(`交付 ${shift(T, 7)}`)
+    })
   })
 
   it('S66-1: #/my 路由可达，侧边栏含「我的任务」入口', async () => {
