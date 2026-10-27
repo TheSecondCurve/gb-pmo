@@ -15,6 +15,7 @@ import { mapSpeaker } from '../extract.js'
 import { upsertChannel } from '../../engine/tasks.js'
 import { createProposal, PROPOSAL_KINDS } from '../../engine/proposals.js'
 import { normalizeTypeTasks } from '../../engine/projectTypes.js'
+import { planTypeTasks } from '../../engine/projects.js'
 import { bindProjectWiki, recordToWiki } from '../../engine/wiki.js'
 import { getSetting } from '../../engine/settings.js'
 import { camelizeRow } from '../../db/index.mjs'
@@ -368,12 +369,65 @@ async function writePropose(db, payload, ctx) {
   const spec = PROPOSAL_KINDS[kind]
   const allowed = await spec.canConfirm(db, ctx.member, check.payload)
   if (allowed !== true) throw allowed // 403 → runWriteTool 转 refused_permission
+  // S35-7（v0.74，K25 修订）：add_task tasks[] 批量——与 suggest_event items 同构（批量在一个 write 内表达，
+  // agent 循环「写即终止」不变）：逐条独立生效、一条汇总回执单列失败原因（best-effort，不整体回滚）
+  if (check.items) {
+    const ok = []
+    const failed = []
+    for (const item of check.items) {
+      if (item.error) {
+        failed.push(`「${item.title}」（${item.error}）`)
+        continue
+      }
+      try {
+        await spec.apply(db, item.payload, ctx.member.id)
+        ok.push(item.summary)
+      } catch (e) {
+        failed.push(`「${item.title}」（${e.message}）`)
+      }
+    }
+    if (!ok.length) return refused(`批量建任务全部失败：${failed.join('；')}`)
+    const failText = failed.length ? `。失败 ${failed.length} 项：${failed.join('；')}` : ''
+    return { type: 'receipt', text: `已生效 ${ok.length} 项：${ok.join('；')}${failText}` }
+  }
   await spec.apply(db, check.payload, ctx.member.id)
   return { type: 'receipt', text: `已生效：${check.summary}。` }
 }
 
 function getProj(db, id) {
   return Number(id) ? db.prepare('SELECT id, name, status, lead_member_id, plan_end_date FROM projects WHERE id = ?').get(Number(id)) : null
+}
+
+/** add_task 单条字段软校验（单条/批量共用；硬校验在引擎生效时兜底）。返回 { payload, summary, title } 或 { error }。 */
+function validateTaskFields(db, proj, item) {
+  const title = String(item.title || '').trim()
+  if (!title) return { error: 'title 必填（任务标题）' }
+  // S57：任务分类（taskKind——payload.kind 是提议类型判别符，不可复用）
+  if (item.taskKind != null && item.taskKind !== 'work' && item.taskKind !== 'reminder') return { error: 'taskKind 须为 work（工作，缺省）或 reminder（纯提醒）' }
+  if (item.taskKind === 'reminder' && !item.planEndDate) return { error: '纯提醒任务必须给 planEndDate（提醒日 YYYY-MM-DD，到期推责任人+项目群后自动完成）' }
+  if (item.planStartDate && !DATE_OK.test(String(item.planStartDate))) return { error: 'planStartDate 须为 YYYY-MM-DD' }
+  if (item.planEndDate && !DATE_OK.test(String(item.planEndDate))) return { error: 'planEndDate 须为 YYYY-MM-DD' }
+  // S58：任务备注（软校验，硬校验在引擎 400 兜底）
+  if (item.note != null && (typeof item.note !== 'string' || !item.note.trim() || item.note.length > 200)) {
+    return { error: 'note 须为 ≤200 字的非空字符串（可省略）' }
+  }
+  let owner = null
+  if (item.responsibleMemberId != null) {
+    owner = db.prepare(`SELECT id, name FROM members WHERE id = ? AND status = 'active'`).get(Number(item.responsibleMemberId))
+    if (!owner) return { error: '责任人不存在或已离职（先 query 查成员）' }
+  }
+  return {
+    payload: {
+      projectId: proj.id, title: title.slice(0, 200),
+      ...(item.taskKind ? { taskKind: String(item.taskKind) } : {}),
+      ...(item.note ? { note: String(item.note).trim() } : {}),
+      ...(owner ? { responsibleMemberId: owner.id } : {}),
+      ...(item.planStartDate ? { planStartDate: String(item.planStartDate) } : {}),
+      ...(item.planEndDate ? { planEndDate: String(item.planEndDate) } : {}),
+    },
+    summary: `项目「${proj.name}」新增${item.taskKind === 'reminder' ? '纯提醒' : '任务'}「${title.slice(0, 200)}」（责任人 ${owner ? owner.name : '未指派'}${item.planEndDate ? `，${item.taskKind === 'reminder' ? '提醒日' : '截止'} ${item.planEndDate}` : ''}${item.note ? '，带备注' : ''}）`,
+    title: title.slice(0, 50),
+  }
 }
 
 function softValidateProposal(db, kind, p) {
@@ -445,35 +499,30 @@ function softValidateProposal(db, kind, p) {
     }
   }
   // —— S35 项目维护面：建任务 / 建里程碑 / 项目信息变更（软校验，硬校验在引擎生效时兜底）——
+  // S35-7（v0.74）：add_task 支持 tasks[] 批量（≤20 条，title 可为纯字符串，字段同单条）；
+  // 逐条软校验（坏条目不阻塞其余，生效时在汇总回执单列原因），单条形态与原行为完全一致。
   if (kind === 'add_task') {
     const proj = getProj(db, p.projectId)
     if (!proj) return { error: 'projectId 必填且须为真实项目 id（先 query 查项目）' }
-    const title = String(p.title || '').trim()
-    if (!title) return { error: 'title 必填（任务标题）' }
-    // S57：任务分类（taskKind——payload.kind 是提议类型判别符，不可复用）
-    if (p.taskKind != null && p.taskKind !== 'work' && p.taskKind !== 'reminder') return { error: 'taskKind 须为 work（工作，缺省）或 reminder（纯提醒）' }
-    if (p.taskKind === 'reminder' && !p.planEndDate) return { error: '纯提醒任务必须给 planEndDate（提醒日 YYYY-MM-DD，到期推责任人+项目群后自动完成）' }
-    if (p.planStartDate && !DATE_OK.test(String(p.planStartDate))) return { error: 'planStartDate 须为 YYYY-MM-DD' }
-    if (p.planEndDate && !DATE_OK.test(String(p.planEndDate))) return { error: 'planEndDate 须为 YYYY-MM-DD' }
-    // S58：任务备注（软校验，硬校验在引擎 400 兜底）
-    if (p.note != null && (typeof p.note !== 'string' || !p.note.trim() || p.note.length > 200)) {
-      return { error: 'note 须为 ≤200 字的非空字符串（可省略）' }
+    const batch = Array.isArray(p.tasks)
+    const rawItems = batch ? p.tasks.map((t) => (typeof t === 'string' ? { title: t } : (t && typeof t === 'object' ? t : {}))) : [p]
+    if (batch && !rawItems.length) return { error: 'tasks 不能为空（单条建任务直接给 title）' }
+    if (batch && rawItems.length > 20) return { error: '一条指令批量建任务至多 20 条' }
+    const items = []
+    for (const [i, item] of rawItems.entries()) {
+      const one = validateTaskFields(db, proj, item)
+      if (one.error) {
+        if (!batch) return { error: one.error }
+        items.push({ title: String(item.title || '').trim().slice(0, 50) || `第 ${i + 1} 条`, error: one.error })
+      } else {
+        items.push(one)
+      }
     }
-    let owner = null
-    if (p.responsibleMemberId != null) {
-      owner = db.prepare(`SELECT id, name FROM members WHERE id = ? AND status = 'active'`).get(Number(p.responsibleMemberId))
-      if (!owner) return { error: '责任人不存在或已离职（先 query 查成员）' }
-    }
+    if (!batch) return { payload: items[0].payload, summary: items[0].summary }
     return {
-      payload: {
-        projectId: proj.id, title: title.slice(0, 200),
-        ...(p.taskKind ? { taskKind: String(p.taskKind) } : {}),
-        ...(p.note ? { note: String(p.note).trim() } : {}),
-        ...(owner ? { responsibleMemberId: owner.id } : {}),
-        ...(p.planStartDate ? { planStartDate: String(p.planStartDate) } : {}),
-        ...(p.planEndDate ? { planEndDate: String(p.planEndDate) } : {}),
-      },
-      summary: `项目「${proj.name}」新增${p.taskKind === 'reminder' ? '纯提醒' : '任务'}「${title.slice(0, 200)}」（责任人 ${owner ? owner.name : '未指派'}${p.planEndDate ? `，${p.taskKind === 'reminder' ? '提醒日' : '截止'} ${p.planEndDate}` : ''}${p.note ? '，带备注' : ''}）`,
+      payload: { projectId: proj.id, tasks: items.filter((x) => x.payload).map((x) => x.payload) },
+      items,
+      summary: `项目「${proj.name}」批量新增任务 ${items.length} 项`,
     }
   }
   if (kind === 'add_milestone') {
@@ -485,6 +534,22 @@ function softValidateProposal(db, kind, p) {
     return {
       payload: { projectId: proj.id, name: name.slice(0, 200), ...(p.planDate ? { planDate: String(p.planDate) } : {}) },
       summary: `项目「${proj.name}」新增里程碑「${name.slice(0, 200)}」${p.planDate ? `（${p.planDate}）` : ''}`,
+    }
+  }
+  // S35-8（v0.76，K57）：按项目自身类型清单补任务——清单由引擎从库里拷，LLM 只传 projectId（不经转述，无 20 条护栏）；
+  // 预算「待补 N / 跳过 M」写进回执摘要；守卫文案与引擎 planTypeTasks 同源（终态只读/无类型/无清单/全部已存在）。
+  if (kind === 'apply_type_tasks') {
+    const proj = getProj(db, p.projectId)
+    if (!proj) return { error: 'projectId 必填且须为真实项目 id（先 query 查项目）' }
+    let plan
+    try {
+      plan = planTypeTasks(db, proj.id)
+    } catch (e) {
+      return { error: e.message }
+    }
+    return {
+      payload: { projectId: proj.id },
+      summary: `项目「${proj.name}」按类型「${plan.type.name}」清单补建任务 ${plan.toAdd.length} 项${plan.skipped.length ? `（跳过已存在 ${plan.skipped.length} 项）` : ''}`,
     }
   }
   if (kind === 'update_project') {

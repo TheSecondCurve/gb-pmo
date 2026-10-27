@@ -3,6 +3,7 @@ import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { handleBotEvent, handleCardAction, buildSystemPrompt } from '../brain/bot/command.js'
 import { runWriteTool } from '../brain/bot/tools.js'
 import { createMilestone } from '../engine/tasks.js'
+import { createProjectType } from '../engine/projectTypes.js'
 import { today } from '../db/time.js'
 
 // PRD S35（v0.39；v0.46/K25 直改化）— 机器人项目维护面补全：建任务/建里程碑/项目信息变更/里程碑改期与状态
@@ -315,5 +316,255 @@ describe('S35 软校验拒绝分支（工具层：不真实 id / 非法值一律
     const t3 = await write(lead, 'propose', { kind: 'create_project', name: 'Y', leadMemberId: ctx.members.lead.id, typeCode: 'lianmai_365', tasks: [{ title: 'T', refs: [{ title: 'R', url: 'ftp://x' }] }] })
     expect(t3.type).toBe('refused')
     expect(t3.text).toMatch(/http/)
+  })
+})
+
+describe('S35-7 批量建任务（v0.74，K25 修订：批量在一个 write 内表达，写即终止不变）', () => {
+  it('S35-7: tasks[] 批量逐条独立生效、一条汇总回执；部分失败单列原因不整体回滚；全部失败/空数组/超 20 条拒绝', async () => {
+    const p = await mkProject('客户S35G系统', ctx.members.lead.id)
+
+    // 3 条批量：纯字符串标题 / 带责任人+截止 / 纯提醒——逐条生效、汇总回执（审计逐条落）
+    const out = await write(ctx.members.lead, 'propose', {
+      kind: 'add_task', projectId: p.id,
+      tasks: [
+        '批量任务甲',
+        { title: '批量任务乙', responsibleMemberId: ctx.members.dev.id, planEndDate: '2026-11-30' },
+        { title: '批量任务丙', taskKind: 'reminder', planEndDate: '2026-12-01' },
+      ],
+    })
+    expect(out.type).toBe('receipt')
+    expect(out.text).toContain('已生效 3 项')
+    expect(out.text).toContain('批量任务甲')
+    expect(out.text).toContain('未指派')
+    const rows = ctx.db.prepare(`SELECT title, kind, status, responsible_member_id, plan_end_date FROM tasks WHERE project_id = ? AND title LIKE '批量任务%'`).all(p.id)
+    expect(rows).toHaveLength(3)
+    const jia = rows.find((r) => r.title === '批量任务甲')
+    expect(jia.status).toBe('todo')
+    expect(jia.responsible_member_id).toBeNull()
+    const yi = rows.find((r) => r.title === '批量任务乙')
+    expect(yi.responsible_member_id).toBe(ctx.members.dev.id)
+    expect(yi.plan_end_date).toBe('2026-11-30')
+    const bing = rows.find((r) => r.title === '批量任务丙')
+    expect(bing.kind).toBe('reminder')
+    expect(bing.plan_end_date).toBe('2026-12-01')
+    const audits = ctx.db.prepare(`SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'task.create' AND object_id IN (SELECT CAST(id AS TEXT) FROM tasks WHERE project_id = ? AND title LIKE '批量任务%')`).get(p.id).n
+    expect(audits).toBe(3)
+
+    // 部分失败：坏条目单列原因（best-effort），好条目照常生效
+    const partial = await write(ctx.members.lead, 'propose', {
+      kind: 'add_task', projectId: p.id,
+      tasks: [{ title: '批量任务丁' }, { title: '坏责任人任务', responsibleMemberId: 999999 }],
+    })
+    expect(partial.type).toBe('receipt')
+    expect(partial.text).toContain('已生效 1 项')
+    expect(partial.text).toContain('失败 1 项')
+    expect(partial.text).toContain('不存在或已离职')
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND title = '批量任务丁'`).get(p.id).n).toBe(1)
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE title = '坏责任人任务'`).get().n).toBe(0)
+
+    // 全部失败 → refused；空数组 / 超 20 条 → refused
+    const allBad = await write(ctx.members.lead, 'propose', { kind: 'add_task', projectId: p.id, tasks: [{ title: '  ' }, { taskKind: 'urgent' }] })
+    expect(allBad.type).toBe('refused')
+    expect(allBad.text).toContain('批量建任务全部失败')
+    const empty = await write(ctx.members.lead, 'propose', { kind: 'add_task', projectId: p.id, tasks: [] })
+    expect(empty.type).toBe('refused')
+    const tooMany = await write(ctx.members.lead, 'propose', {
+      kind: 'add_task', projectId: p.id, tasks: Array.from({ length: 21 }, (_, i) => ({ title: `超限任务${i}` })),
+    })
+    expect(tooMany.type).toBe('refused')
+    expect(tooMany.text).toContain('20 条')
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE title LIKE '超限任务%'`).get().n).toBe(0)
+  })
+
+  it('S35-7: 批量权限与单条一致（一次校验、拒绝不落库）；协议提示词含批量用法；私聊全链路一条指令建多条', async () => {
+    const p = await mkProject('客户S35H系统', ctx.members.lead.id)
+
+    // 权限前置与单条同矩阵：非牵头人非管理员 → refused_permission，一条都不落
+    const denied = await write(ctx.members.dev, 'propose', { kind: 'add_task', projectId: p.id, tasks: [{ title: '越权批量任务' }] })
+    expect(denied.type).toBe('refused')
+    expect(denied.result).toBe('refused_permission')
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE title = '越权批量任务'`).get().n).toBe(0)
+
+    // 协议系统提示词含批量用法（一条消息列多个任务用 tasks 一次建完）
+    const sys = buildSystemPrompt(ctx.db, {
+      member: ctx.members.lead, channel: { channel_type: 'dedicated', project_id: p.id }, chatType: 'group', surface: 'im',
+    })
+    expect(sys).toContain('"tasks"')
+    expect(sys).toContain('一次建完')
+
+    // 全链路：一条口述列多个任务 → 单个批量 write → 全部落库、汇总回执（写即终止下一次办完）
+    const { llm } = scriptedLlm(
+      JSON.stringify({ action: 'write', kind: 'propose', payload: { kind: 'add_task', projectId: p.id, tasks: [{ title: '链路任务一' }, { title: '链路任务二' }, { title: '链路任务三' }] } })
+    )
+    const rec = recorder()
+    const out = await handleBotEvent(ctx.db, p2p('fs_zhang', '建三个任务：链路任务一、链路任务二、链路任务三'), { llm, send: rec.send, secret: SECRET })
+    expect(out.result).toBe('replied')
+    expect(rec.sent[0].text).toContain('已生效 3 项')
+    expect(rec.sent[0].card).toBeUndefined()
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND title LIKE '链路任务%'`).get(p.id).n).toBe(3)
+  })
+})
+
+describe('S35-8 已有项目按类型清单补任务（v0.76，K57：引擎拷清单，不经 LLM 转述）', () => {
+  /** 带默认备注与参考的类型（清单 3 项）——拷入时备注/参考须随标题一起落。 */
+  const TPL_TASKS = [
+    { title: '模板任务A', note: '备注A', refs: [{ title: '操作 SOP', url: 'https://example.com/sop-a' }] },
+    '模板任务B',
+    '模板任务C',
+  ]
+  let typeSeq = 0
+  const mkType = (tasks = TPL_TASKS) => {
+    const code = `s35_8_tpl_${++typeSeq}`
+    createProjectType(ctx.db, { code, name: `S35-8模板${typeSeq}`, tasks }, ctx.members.admin.id)
+    return code
+  }
+  /** 用指定类型立项且清空自定义清单（S1-6）：项目初始零任务，便于断言补建结果。 */
+  const mkEmptyProject = async (name, typeCode, leadId = ctx.members.lead.id) => {
+    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    const res = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', { name, typeCode, leadMemberId: leadId, tasks: [] })
+    expect(res.status).toBe(201)
+    return res.body
+  }
+  const taskRows = (pid) => ctx.db.prepare('SELECT * FROM tasks WHERE project_id = ? AND deleted_at IS NULL ORDER BY id').all(pid)
+  const applyAudits = (pid) => ctx.db.prepare("SELECT * FROM audit_logs WHERE action = 'project.applyTypeTasks' AND object_id = ?").all(String(pid))
+  const applyEvents = (pid) => ctx.db.prepare("SELECT * FROM project_events WHERE project_id = ? AND event_type = 'decision' AND summary LIKE '%清单补建任务%'").all(pid)
+
+  it('S35-8: 牵头人口述补任务——同名跳过、其余按模板路径拷入（备注/参考/source=template/未指派/今天开工）；一条 decision 事件 + 一条审计；重放全部已存在拒绝不落记录', async () => {
+    const typeCode = mkType()
+    const p = await mkEmptyProject('客户S35I系统', typeCode)
+    expect(taskRows(p.id)).toHaveLength(0)
+
+    // 项目已手工建了一条与模板同名的任务 → 补建时应跳过它
+    const pre = await write(ctx.members.lead, 'propose', { kind: 'add_task', projectId: p.id, title: '模板任务B' })
+    expect(pre.type).toBe('receipt')
+    const eventsBefore = ctx.db.prepare('SELECT COUNT(*) AS n FROM project_events WHERE project_id = ?').get(p.id).n
+
+    const out = await write(ctx.members.lead, 'propose', { kind: 'apply_type_tasks', projectId: p.id })
+    expect(out.type).toBe('receipt')
+    expect(out.text).toContain('已生效')
+    expect(out.text).toContain('补建任务 2 项')
+    expect(out.text).toContain('跳过已存在 1 项')
+
+    const rows = taskRows(p.id)
+    expect(rows).toHaveLength(3)
+    expect(rows.filter((r) => r.title === '模板任务B')).toHaveLength(1) // 同名未重复
+    expect(rows.find((r) => r.title === '模板任务B').source).toBe('manual') // 既有任务原样不动
+    const a = rows.find((r) => r.title === '模板任务A')
+    const c = rows.find((r) => r.title === '模板任务C')
+    for (const t of [a, c]) {
+      expect(t.source).toBe('template')
+      expect(t.status).toBe('todo')
+      expect(t.kind).toBe('work')
+      expect(t.responsible_member_id).toBeNull()
+      expect(t.plan_start_date).toBe(today())
+      expect(t.plan_end_date).toBeNull()
+    }
+    expect(a.note).toBe('备注A')
+    expect(c.note).toBeNull()
+    const refs = ctx.db.prepare('SELECT title, url, created_by FROM task_refs WHERE task_id = ? AND deleted_at IS NULL').all(a.id)
+    expect(refs).toEqual([{ title: '操作 SOP', url: 'https://example.com/sop-a', created_by: ctx.members.lead.id }])
+    expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM task_refs WHERE task_id = ?').get(c.id).n).toBe(0)
+
+    // 留痕：一条 decision 事件（含补建/跳过计数）+ 一条审计（detail 含 typeCode/added/skipped/taskIds）；不逐任务落「🆕 新增任务」进展
+    const evts = applyEvents(p.id)
+    expect(evts).toHaveLength(1)
+    expect(evts[0].nature).toBe('record')
+    expect(evts[0].summary).toContain('补建任务 2 项')
+    expect(evts[0].summary).toContain('跳过已存在 1 项')
+    expect(ctx.db.prepare('SELECT COUNT(*) AS n FROM project_events WHERE project_id = ?').get(p.id).n).toBe(eventsBefore + 1)
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM project_events WHERE project_id = ? AND summary LIKE '%新增任务「模板任务A」%'").get(p.id).n).toBe(0)
+    const audits = applyAudits(p.id)
+    expect(audits).toHaveLength(1)
+    const detail = JSON.parse(audits[0].detail)
+    expect(detail.typeCode).toBe(typeCode)
+    expect(detail.added).toBe(2)
+    expect(detail.skipped).toBe(1)
+    expect(detail.taskIds).toEqual([a.id, c.id])
+    expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action = 'task.create' AND object_id IN (?, ?)").get(String(a.id), String(c.id)).n).toBe(0)
+
+    // 重放：清单全部已存在 → 拒绝「无需补建」，任务/事件/审计一行不多
+    const again = await write(ctx.members.lead, 'propose', { kind: 'apply_type_tasks', projectId: p.id })
+    expect(again.type).toBe('refused')
+    expect(again.text).toContain('无需补建')
+    expect(taskRows(p.id)).toHaveLength(3)
+    expect(applyEvents(p.id)).toHaveLength(1)
+    expect(applyAudits(p.id)).toHaveLength(1)
+  })
+
+  it('S35-8: 守卫与权限——项目不真实/类型无清单/终态只读拒绝；非牵头人非管理员拒绝不落库；管理员可发起', async () => {
+    const typeCode = mkType()
+    const p = await mkEmptyProject('客户S35J系统', typeCode)
+
+    const ghost = await write(ctx.members.lead, 'propose', { kind: 'apply_type_tasks', projectId: 99999 })
+    expect(ghost.type).toBe('refused')
+    expect(ghost.text).toContain('真实项目')
+
+    const denied = await write(ctx.members.dev, 'propose', { kind: 'apply_type_tasks', projectId: p.id })
+    expect(denied.type).toBe('refused')
+    expect(denied.result).toBe('refused_permission')
+    expect(taskRows(p.id)).toHaveLength(0)
+    expect(applyAudits(p.id)).toHaveLength(0)
+
+    // 类型无内嵌清单 → 拒绝说明无可补建
+    const emptyType = mkType([])
+    const pe = await mkEmptyProject('客户S35K系统', emptyType)
+    const noList = await write(ctx.members.lead, 'propose', { kind: 'apply_type_tasks', projectId: pe.id })
+    expect(noList.type).toBe('refused')
+    expect(noList.text).toContain('没有内嵌任务清单')
+
+    // 终态项目：零任务直接结项 → 任务面只读
+    const leadCookie = await loginCookie(ctx.app, 'zhangsan', 'pass-123456')
+    const closed = await authed(ctx.app, leadCookie, 'POST', `/api/v1/projects/${p.id}/close`, { summary: 'S35-8 结项用例' })
+    expect(closed.status).toBe(200)
+    const late = await write(ctx.members.admin, 'propose', { kind: 'apply_type_tasks', projectId: p.id })
+    expect(late.type).toBe('refused')
+    expect(late.text).toContain('只读')
+
+    // 管理员对在跑项目可发起（与 add_task 同矩阵）
+    const p2 = await mkEmptyProject('客户S35L系统', typeCode)
+    const byAdmin = await write(ctx.members.admin, 'propose', { kind: 'apply_type_tasks', projectId: p2.id })
+    expect(byAdmin.type).toBe('receipt')
+    expect(byAdmin.text).toContain('补建任务 3 项')
+    expect(byAdmin.text).not.toContain('跳过')
+    expect(taskRows(p2.id)).toHaveLength(3)
+  })
+
+  it('S35-8: 引擎 applyTypeTasks 直调同语义（返回计数、404/400 守卫）；协议提示词含动作；私聊全链路口述→补建→回执', async () => {
+    const { applyTypeTasks } = await import('../engine/projects.js')
+    const typeCode = mkType()
+    const p = await mkEmptyProject('客户S35M系统', typeCode)
+
+    const r = applyTypeTasks(ctx.db, p.id, ctx.members.lead.id)
+    expect(r.added).toBe(3)
+    expect(r.skipped).toBe(0)
+    expect(r.typeCode).toBe(typeCode)
+    expect(r.taskIds).toHaveLength(3)
+    expect(taskRows(p.id).map((t) => t.title)).toEqual(['模板任务A', '模板任务B', '模板任务C']) // 保持清单顺序
+    const caught = (fn) => { try { fn(); return null } catch (e) { return e } }
+    const replay = caught(() => applyTypeTasks(ctx.db, p.id, ctx.members.lead.id))
+    expect(replay?.statusCode).toBe(400)
+    expect(replay?.message).toContain('无需补建')
+    expect(caught(() => applyTypeTasks(ctx.db, 99999, ctx.members.lead.id))?.statusCode).toBe(404)
+    expect(taskRows(p.id)).toHaveLength(3)
+
+    // 协议系统提示词含新动作用法
+    const sys = buildSystemPrompt(ctx.db, {
+      member: ctx.members.lead, channel: { channel_type: 'dedicated', project_id: p.id }, chatType: 'group', surface: 'im',
+    })
+    expect(sys).toContain('apply_type_tasks')
+
+    // 全链路：私聊口述「按模板初始化任务」→ LLM 只发 projectId → 引擎拷清单 → 回执已生效（无卡）
+    const p3 = await mkEmptyProject('客户S35N系统', typeCode)
+    const { llm } = scriptedLlm(
+      JSON.stringify({ action: 'write', kind: 'propose', payload: { kind: 'apply_type_tasks', projectId: p3.id } })
+    )
+    const rec = recorder()
+    const out = await handleBotEvent(ctx.db, p2p('fs_zhang', `${p3.name} 按项目模板初始化一下任务`), { llm, send: rec.send, secret: SECRET })
+    expect(out.result).toBe('replied')
+    expect(rec.sent[0].text).toContain('已生效')
+    expect(rec.sent[0].text).toContain('补建任务 3 项')
+    expect(rec.sent[0].card).toBeUndefined()
+    expect(taskRows(p3.id)).toHaveLength(3)
+    expect(taskRows(p3.id).every((t) => t.source === 'template')).toBe(true)
   })
 })

@@ -113,6 +113,10 @@ interface BackupCfg {
   prefix: string; pathStyle: boolean; keepCount: number
 }
 interface BackupHistoryRow { at: number; memberName: string; ok?: boolean; key?: string; bytes?: number; durationMs?: number; deleted?: number; error?: string; reason?: string }
+interface RemoteOut {
+  ok: boolean; skipped?: boolean; reason?: string; keepCount?: number; count?: number; totalBytes?: number
+  objects?: { key: string; lastModifiedMs: number | null; bytes: number }[]
+}
 
 function BackupCard() {
   const { toast } = useStore()
@@ -174,7 +178,7 @@ function BackupCard() {
       <Card title="数据库异地备份（S34）：SQLite 在线快照 → gzip → S3 兼容对象存储（阿里云 OSS / Cloudflare R2 / AWS S3 / MinIO）">
         <p className="mb-3 text-[12px] leading-5 text-[var(--color-ink-soft)]">
           单机 SQLite 是全部数据的唯一载体，本地备份与容器同生共死；本页把定时快照推进对象存储实现异地容灾（本地 scripts/backup.sh 保留，两层叠加）。
-          定时备份由「项目管理→阈值与推送」的 <b>数据库备份</b> cron 驱动（当前 <span className="num">{sched.backupCron}</span>，{sched.backupEnabled ? '已启用' : '已停用'}，保存即热生效）；
+          定时备份由配置台「定时任务」页的 <b>数据库备份</b> cron 驱动（S67）（当前 <span className="num">{sched.backupCron}</span>，{sched.backupEnabled ? '已启用' : '已停用'}，保存即热生效）；
           存储未配全时定时/手动均跳过。备份对象名 <span className="num">gb-pmo-YYYYMMDD-HHMMSS.db.gz</span>（北京时刻），云端滚动保留最新 {cfg.keepCount} 份。
         </p>
         <div className="mb-2 flex flex-wrap items-center gap-2 text-[12px]">
@@ -245,7 +249,53 @@ function BackupCard() {
           </div>
         )}
       </Card>
+      <RemoteBackupsCard />
     </div>
+  )
+}
+
+// S34-5（v0.77，K60）：远端备份对象清单——桶内命名规则对象实时列表；点开才拉（配置页不因慢链接卡顿）。
+const humanBytes = (n: number) => (n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(2)} MB` : `${(n / 1024).toFixed(1)} KB`)
+
+function RemoteBackupsCard() {
+  const [remote, setRemote] = useState<RemoteOut | null>(null)
+  const [busy, setBusy] = useState(false)
+  const load = async () => {
+    setBusy(true)
+    try { setRemote(await api.backupRemote()) } catch (e) {
+      setRemote({ ok: false, reason: (e as Error).message })
+    } finally { setBusy(false) }
+  }
+  return (
+    <Card title="远端备份对象（S34-5）：桶内 gb-pmo-*.db.gz 实时清单（新→旧；与滚动保留上限对照）">
+      <div className="mb-3">
+        <Btn disabled={busy} onClick={() => void load()}>{busy ? '拉取中…' : '查看远端备份清单'}</Btn>
+      </div>
+      {remote && !remote.ok && (
+        <p className="text-[12px] text-[var(--color-bad, #b91c1c)]">❌ {remote.reason || '拉取失败'}</p>
+      )}
+      {remote?.ok && (
+        <div className="space-y-1">
+          {remote.objects?.length ? (
+            <>
+              {remote.objects.map((o) => (
+                <div key={o.key} className="flex flex-wrap items-center gap-x-3 text-[12px]">
+                  <span className="num">{o.key.split('/').pop() ?? o.key}</span>
+                  <span className="num text-[var(--color-ink-soft)]">{o.lastModifiedMs ? fmtDateTime(o.lastModifiedMs) : '—'}</span>
+                  <span className="num">{humanBytes(o.bytes)}</span>
+                </div>
+              ))}
+              <p className="pt-1 text-[12px] text-[var(--color-ink-soft)]">
+                共 {remote.count} 个对象 · 合计 {humanBytes(remote.totalBytes ?? 0)} · 滚动保留上限 {remote.keepCount} 份
+                {remote.count != null && remote.keepCount != null && remote.count > remote.keepCount ? '（已超上限，下一次备份时清理最旧）' : ''}
+              </p>
+            </>
+          ) : (
+            <p className="text-[12px] text-[var(--color-ink-soft)]">桶内暂无符合命名规则的备份对象。</p>
+          )}
+        </div>
+      )}
+    </Card>
   )
 }
 

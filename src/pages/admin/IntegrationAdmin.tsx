@@ -237,7 +237,7 @@ function FeishuCard() {
       <Card title="项目日历（S22）：组织级日历，团队订阅即见全部项目起止（结项项目保留）">
         <p className="mb-3 text-[12px] leading-5 text-[var(--color-ink-soft)]">
           需先开通日历权限 <code>calendar:calendar</code> / <code>calendar:event</code>（附录 A.1 第 8 步）。
-          初始化 = 应用身份创建组织内可订阅的日历；之后按「阈值与推送」的 calendarSyncCron 对账同步（改期/结项下轮自动跟进），此处可手动立即同步。
+          初始化 = 应用身份创建组织内可订阅的日历；之后按「定时任务」页的 calendarSyncCron 对账同步（S67）（改期/结项下轮自动跟进），此处可手动立即同步。
         </p>
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[12px] text-[var(--color-ink-soft)]">

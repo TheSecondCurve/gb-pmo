@@ -11,6 +11,7 @@ import Projects from './pages/Projects'
 import ProjectDetail from './pages/ProjectDetail'
 import MyTasks from './pages/MyTasks'
 import { bjToday } from './fmt'
+import type { MyTasksBoard } from './types'
 import { StoreProvider } from './store'
 
 const loginFetch = vi.fn(async () =>
@@ -119,6 +120,51 @@ describe('移动端响应式冒烟', () => {
     expect(screen.getByRole('button', { name: /测试连接（当前表单值，可先测后存）/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: '立即备份' })).toBeTruthy()
     expect(screen.getByText(/30 3 \* \* \*/)).toBeTruthy() // 定时状态行回显 cron
+  })
+
+  // S67（v0.75，K53）：配置台「定时任务」集中页——全部 7 项任务 cron+开关一页纵览（含 S68 新增晨报），
+  // 纯提醒发送门槛 fireAfterHour 同页收口；「项目管理→阈值与推送」不再承载调度卡
+  it('Admin：定时任务页集中呈现全部调度任务（S67-1，含每日项目群晨报）与提醒门槛', async () => {
+    location.hash = '#/admin/scheduler/tasks'
+    const sFetch = vi.fn(async () => new Response(JSON.stringify({
+      member: { id: 1, name: '甲', role: 'admin' },
+      scheduler: {
+        extractionCron: '0 * * * *', extractionEnabled: true,
+        alertCron: '*/15 * * * *', alertEnabled: true,
+        reportCron: '0 18 * * *', reportEnabled: true,
+        morningCron: '30 9 * * *', morningEnabled: true,
+        calendarSyncCron: '*/30 * * * *', calendarSyncEnabled: true,
+        backupCron: '30 3 * * *', backupEnabled: true,
+        digestCron: '0 9 * * 1', digestEnabled: true,
+      },
+      reminder: { fireAfterHour: 9 },
+    }), { status: 200 }))
+    globalThis.fetch = sFetch as unknown as typeof fetch
+    render(<StoreProvider><Admin section="scheduler" tab="tasks" /></StoreProvider>)
+    const bar = document.querySelector('[data-nav="admin-sections"]')
+    expect(within(bar as HTMLElement).getByRole('link', { name: '定时任务' })).toBeTruthy()
+    await screen.findByText('信息更新对齐')
+    for (const label of ['预警提醒', '日报提醒', '每日项目群晨报', '项目日历同步', '数据库备份', '每周梳理与周报']) {
+      expect(screen.getByText(label)).toBeTruthy()
+    }
+    expect((await screen.findByLabelText(/每日项目群晨报/) as HTMLInputElement).value).toBe('30 9 * * *')
+    expect((screen.getByLabelText(/信息更新对齐/) as HTMLInputElement).value).toBe('0 * * * *')
+    expect((screen.getByLabelText(/纯提醒发送门槛（北京时，0~23）/) as HTMLInputElement).value).toBe('9')
+    expect(screen.getByRole('button', { name: '保存' })).toBeTruthy()
+  })
+
+  it('Admin：项目管理→阈值与推送不再含调度卡（S67，调度已迁独立页）', async () => {
+    location.hash = '#/admin/project/params'
+    const sFetch = vi.fn(async () => new Response(JSON.stringify({
+      member: { id: 1, name: '甲', role: 'admin' },
+      thresholds: { silentDays: 7, keypersonMaxProjects: 3, suggestTimeoutHours: 48, routingConfidence: 0.6 },
+      chat: { quotaPerDay: 50 },
+    }), { status: 200 }))
+    globalThis.fetch = sFetch as unknown as typeof fetch
+    render(<StoreProvider><Admin section="project" tab="params" /></StoreProvider>)
+    await screen.findByText(/保存阈值/)
+    expect(screen.queryByText(/大脑调度/)).toBeNull()
+    expect(screen.queryByLabelText(/每日项目群晨报/)).toBeNull()
   })
 
   // S40-4（v0.43）：LLM 卡片可编辑超时——默认 120s（K22：GLM 大 JSON 实测约 117s），删掉即红
@@ -726,7 +772,7 @@ describe('S47 LLM 用量记账（v0.52）', () => {
   })
 })
 
-// —— S66（v0.73）我的任务工作台：统计带 + 项目分组任务甘特 + 未排期沉底 ——
+// —— S66（v0.73 建 / v0.75 K55 展示改版）我的任务工作台：统计带 + 项目分组 todolist 清单 + 未排期沉底 ——
 describe('S66 我的任务工作台', () => {
   // 日期相对北京今日构造（K16：不 UTC 反解），保证任何时区/任何跑测日形态稳定
   const shift = (iso: string, n: number) => {
@@ -735,7 +781,7 @@ describe('S66 我的任务工作台', () => {
     return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`
   }
   const T = bjToday()
-  const board = {
+  const board: MyTasksBoard = {
     today: T,
     stats: { total: 4, overdue: 1, dueThisWeek: 1, pending: 2 },
     projects: [
@@ -771,7 +817,7 @@ describe('S66 我的任务工作台', () => {
     expect(document.querySelector('[data-testid="myt-stat-pending"]')!.textContent).toContain('2')
   })
 
-  it('S66-1 + S66-3: 按项目分组 + 任务甘特（四形态/今日线/月刻度）+ 逾期红与 ⏰ 标注 + 未排期沉底', async () => {
+  it('S66-1 + S66-3: 按项目分组 todolist 清单（按时间升序）+ 逾期整行红提示 + ⏰ 标注 + 未排期沉底，且不再渲染甘特', async () => {
     globalThis.fetch = myFetch
     render(<StoreProvider><MyTasks /></StoreProvider>)
     // 项目分组（两组，组名即详情页链接锚文本）
@@ -782,24 +828,94 @@ describe('S66 我的任务工作台', () => {
     })
     expect(groups[0]!.textContent).toContain('客户A系统')
     expect(groups[1]!.textContent).toContain('客户B小程序')
-    // 甘特：A 组区间条 + 截止旗（逾期红优先）；B 组截止旗 + 今日线 + 月刻度（S30 口径复用）
+    // K55 去甘特化：全页不再有甘特条 / 今日线 / 月刻度
+    expect(document.querySelector('[data-testid="gantt-bar"]')).toBeNull()
+    expect(document.querySelector('[data-testid="gantt-today"]')).toBeNull()
+    expect(document.querySelector('[data-testid="gantt-tick"]')).toBeNull()
+    // 清单行按计划时间升序：A 组「逾期未完的活」（交付 T-4）排在「联调接口」（T+5 到期）之前
     const g = groups[0]!
-    expect(g.querySelectorAll('[data-testid="gantt-bar"]').length).toBeGreaterThanOrEqual(2)
-    expect(g.querySelector('[data-testid="gantt-today"]')).toBeTruthy()
-    expect(g.querySelectorAll('[data-testid="gantt-tick"]').length).toBeGreaterThanOrEqual(1)
-    // 逾期徽章 + 逾期条红色（S41 逾期红优先于状态色）
-    expect(g.textContent).toContain('逾期 4 天')
-    const overdueBar = Array.from(g.querySelectorAll('[data-testid="gantt-bar"]'))
-      .find((el) => (el as HTMLElement).style.backgroundColor === 'var(--color-bad)')
-    expect(overdueBar).toBeTruthy()
-    // 日期文案四式之一（S30-4 区间式，S30 甘特同口径载于条 tooltip）
-    const firstBar = g.querySelector('[data-testid="gantt-bar"]') as HTMLElement
-    expect(firstBar.getAttribute('title')).toContain(`${shift(T, -40)} ~ ${shift(T, 5)}`)
-    // 纯提醒 ⏰ 标注 + 未排期沉底不进轴
+    const rows = Array.from(g.querySelectorAll('[data-testid="myt-task-row"]')) as HTMLElement[]
+    expect(rows.length).toBe(2)
+    const [a, b] = rows.map((r) => r.textContent!)
+    expect(a).toContain('逾期未完的活')
+    expect(b).toContain('联调接口')
+    expect(a!).toContain('逾期 4 天')
+    // 逾期整行红提示：行底红晕 + 红日期（S30-4 deadline 式「交付 YYYY-MM-DD」）
+    const overdueRow = rows[0]!
+    expect(overdueRow.className).toContain('bg-[var(--color-bad-soft)]')
+    const overdueDate = overdueRow.querySelector('[data-testid="myt-task-date"]') as HTMLElement
+    expect(overdueDate.textContent).toContain(`交付 ${shift(T, -4)}`)
+    expect(overdueDate.className).toContain('text-[var(--color-bad)]')
+    // 日期文案四式之一（S30-4 区间式）直接展示在行内，不藏在 tooltip
+    const rangeDate = rows[1]!.querySelector('[data-testid="myt-task-date"]') as HTMLElement
+    expect(rangeDate.textContent).toContain(`${shift(T, -40)} ~ ${shift(T, 5)}`)
+    // 纯提醒 ⏰ 标注 + 未排期沉底不进清单主体
     expect(groups[1]!.querySelectorAll('[data-testid="myt-reminder"]').length).toBe(1)
     const unsched = groups[1]!.querySelector('[data-testid="unscheduled-group"]') as HTMLElement
     expect(unsched.textContent).toContain('还没排期')
     expect(unsched.textContent).toContain('未排期（1）')
+  })
+
+  it('S66-4: 清单行就地快改——标题/状态（done 移出未完清单）与未排期补交付日，均走 PATCH /api/v1/tasks/:id 并刷新重排', async () => {
+    // 有状态 mock：PATCH 就地改夹具（done 移出，同服务器口径），GET 返回改后看板
+    const calls: Array<{ url: string; method: string; body: Record<string, unknown> }> = []
+    const state: typeof board = JSON.parse(JSON.stringify(board))
+    const editFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/api/v1/tasks/')) {
+        const body = JSON.parse(String(init?.body || '{}'))
+        calls.push({ url, method: init?.method || 'PATCH', body })
+        const id = Number(url.split('/').pop())
+        for (const g of state.projects) {
+          const t = g.tasks.find((x) => x.id === id)
+          if (t) Object.assign(t, body)
+        }
+        state.projects = state.projects.map((g) => ({ ...g, tasks: g.tasks.filter((t: { status: string }) => t.status !== 'done') }))
+        return new Response(JSON.stringify({ ok: true }), { status: 200 })
+      }
+      return new Response(JSON.stringify(state), { status: 200 })
+    }) as unknown as typeof fetch
+    globalThis.fetch = editFetch
+    render(<StoreProvider><MyTasks /></StoreProvider>)
+
+    // 标题就地改：点「联调接口」→ 输入框 → 回车提交 → PATCH + 刷新出新标题
+    const groupA = await waitFor(() => {
+      const els = Array.from(document.querySelectorAll('[data-testid="myt-project"]')) as HTMLElement[]
+      expect(els.length).toBe(2)
+      return els[0]!
+    })
+    fireEvent.click(within(groupA).getByText('联调接口'))
+    const titleInput = within(groupA).getByDisplayValue('联调接口') as HTMLInputElement
+    fireEvent.change(titleInput, { target: { value: '联调接口-v2' } })
+    fireEvent.keyDown(titleInput, { key: 'Enter' })
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/tasks/101') && c.body.title === '联调接口-v2')).toBe(true))
+    await waitFor(() => expect(within(groupA).getByText('联调接口-v2')).toBeTruthy())
+
+    // 状态就地改 done：行内下拉（首行=逾期未完的活 102）→ PATCH status=done → 移出未完清单
+    const rowsA = () => Array.from(groupA.querySelectorAll('[data-testid="myt-task-row"]'))
+    expect(rowsA().length).toBe(2)
+    const statusSelect = rowsA()[0]!.querySelector('select') as HTMLSelectElement
+    expect(statusSelect.value).toBe('todo')
+    fireEvent.change(statusSelect, { target: { value: 'done' } })
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/tasks/102') && c.body.status === 'done')).toBe(true))
+    await waitFor(() => {
+      expect(rowsA().length).toBe(1)
+      expect(groupA.textContent).not.toContain('逾期未完的活')
+    })
+
+    // 未排期 chip 就地补交付日（202 还没排期）→ PATCH planEndDate → 进入清单排序、未排期组消失
+    const groupB = (Array.from(document.querySelectorAll('[data-testid="myt-project"]')) as HTMLElement[])[1]!
+    fireEvent.click(within(groupB).getByText('补交付日'))
+    const dateInput = groupB.querySelector('input[type="date"]') as HTMLInputElement
+    fireEvent.change(dateInput, { target: { value: shift(T, 7) } })
+    fireEvent.keyDown(dateInput, { key: 'Enter' })
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith('/tasks/202') && c.body.planEndDate === shift(T, 7))).toBe(true))
+    await waitFor(() => {
+      expect(groupB.querySelector('[data-testid="unscheduled-group"]')).toBeNull()
+      expect(groupB.querySelectorAll('[data-testid="myt-task-row"]').length).toBe(2)
+      expect(groupB.textContent).toContain('还没排期')
+      expect(groupB.textContent).toContain(`交付 ${shift(T, 7)}`)
+    })
   })
 
   it('S66-1: #/my 路由可达，侧边栏含「我的任务」入口', async () => {

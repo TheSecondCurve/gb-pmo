@@ -8,7 +8,7 @@ import { fmtDateTime } from '../fmt'
 import type { PushRow } from '../types'
 
 const PUSH_TYPE_LABEL: Record<string, string> = {
-  daily_report: '日报', digest: '梳理/建议', alert: '预警', test: '测试',
+  daily_report: '日报', digest: '梳理/建议', alert: '预警', reminder: '提醒', morning: '晨报', test: '测试',
 }
 const PUSH_STATUS: Record<string, { label: string; tone: 'ok' | 'bad' | 'muted' }> = {
   sent: { label: '已送达', tone: 'ok' },
