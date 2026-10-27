@@ -858,7 +858,7 @@ describe('S66 我的任务工作台', () => {
   it('S66-4: 清单行就地快改——标题/状态（done 移出未完清单）与未排期补交付日，均走 PATCH /api/v1/tasks/:id 并刷新重排', async () => {
     // 有状态 mock：PATCH 就地改夹具（done 移出，同服务器口径），GET 返回改后看板
     const calls: Array<{ url: string; method: string; body: Record<string, unknown> }> = []
-    const state = JSON.parse(JSON.stringify(board))
+    const state: typeof board = JSON.parse(JSON.stringify(board))
     const editFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.includes('/api/v1/tasks/')) {
