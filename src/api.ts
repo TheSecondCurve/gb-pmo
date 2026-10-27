@@ -184,6 +184,12 @@ export const api = {
   testBackup: (body: object) => req<{ ok: boolean; reason?: string; durationMs?: number }>('POST', '/api/v1/admin/backup/test', body),
   runBackup: () => req<{ ok: boolean; skipped?: boolean; reason?: string; key?: string; bytes?: number; durationMs?: number; deleted?: number }>('POST', '/api/v1/admin/backup/run', {}),
   backupHistory: () => req<{ history: { at: number; memberName: string; ok?: boolean; key?: string; bytes?: number; durationMs?: number; deleted?: number; error?: string; reason?: string }[] }>('GET', '/api/v1/admin/backup/history'),
+  // S67-5（v0.77）定时任务手动触发：与调度器同一执行体立即跑一次（仅管理员）
+  schedulerRun: (task: string) => req<{ ok: boolean; task: string; result?: unknown; error?: string }>('POST', '/api/v1/admin/scheduler/run', { task }),
+  // S67-6（v0.77）运行台账：cron 与手动触发统一记录，最近 N 条新→旧（仅管理员）
+  schedulerRuns: (limit = 50) => req<{ runs: { id: number; task: string; origin: string; startedAt: number; durationMs: number; ok: number; summary?: string | null; memberName?: string | null }[] }>('GET', `/api/v1/admin/scheduler/runs?limit=${limit}`),
+  // S34-5（v0.77）远端备份对象清单：桶内命名规则对象实时列表（仅管理员；点开才拉）
+  backupRemote: () => req<{ ok: boolean; skipped?: boolean; reason?: string; keepCount?: number; count?: number; totalBytes?: number; objects?: { key: string; lastModifiedMs: number | null; bytes: number }[] }>('GET', '/api/v1/admin/backup/remote'),
   tokens: () => req<{ tokens: { id: number; name: string; tokenPrefix: string; scope: string; createdAt: number; expiresAt: number; revokedAt?: number | null }[] }>('GET', '/api/v1/auth/tokens'),
   issueToken: (scope: string, name: string) => req<{ token: string; id: number; scope: string; expiresAt: number }>('POST', '/api/v1/auth/tokens', { scope, name }),
   revokeToken: (id: number) => req('DELETE', `/api/v1/auth/tokens/${id}`),

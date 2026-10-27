@@ -135,7 +135,16 @@ export function s3Client(cfg, { fetchImpl = globalThis.fetch.bind(globalThis), n
       if (!out.ok) return out
       const text = await out.res.text()
       const keys = [...text.matchAll(/<Key>([\s\S]*?)<\/Key>/g)].map((m) => decodeXmlEntities(m[1]))
-      return { ok: true, status: out.status, keys }
+      // S34-5（v0.77）：全量对象解析（Key/LastModified/Size）供远端清单；keys 保留供滚动保留
+      const objects = [...text.matchAll(/<Contents>([\s\S]*?)<\/Contents>/g)].map((m) => {
+        const c = m[1]
+        return {
+          key: decodeXmlEntities(c.match(/<Key>([\s\S]*?)<\/Key>/)?.[1] ?? ''),
+          lastModified: c.match(/<LastModified>([\s\S]*?)<\/LastModified>/)?.[1] ?? null,
+          size: Number(c.match(/<Size>([\s\S]*?)<\/Size>/)?.[1] ?? 0),
+        }
+      })
+      return { ok: true, status: out.status, keys, objects }
     },
   }
 }

@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import { camelizeRow } from '../db/index.mjs'
 
-// 浏览器对 cookie 有效期的上限是 400 天（Chrome 104+ 按 RFC 6265bis 钳制更长的值），取上限保证「至少 1 年不重登」含闰年无歧义（K53）；
+// 浏览器对 cookie 有效期的上限是 400 天（Chrome 104+ 按 RFC 6265bis 钳制更长的值），取上限保证「至少 1 年不重登」含闰年无歧义（K61）；
 // 登录 Set-Cookie 的 maxAge 必须由同一常量换算，两层任一先到期都会把人踢回登录页
 export const SESSION_TTL_MS = 400 * 24 * 3600 * 1000
 const TOKEN_TTL_DAYS = 90

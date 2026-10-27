@@ -68,9 +68,10 @@ describe('S66 我的任务工作台', () => {
     const { total, overdue, dueThisWeek, pending } = board.stats
     expect(total).toBe(6) // A:4 + B:2
     expect(overdue).toBe(2) // day(-4) 与 day(-8)
-    // day(0)（今天）必计入本周；day(-8) 不计入（早于今日）；day(1) 明日是否在本周与跑测日相关（周日跑则落在下周），只断言区间
+    // day(0)（今天）必计入本周；day(-8) 不计入（早于今日）；未来日期有 day(0)/day(1)/day(5) 三条，
+    // 落在本周的数量随跑测日浮动：周一/周二三条全在（3）、周三至周六两条（2）、周日仅今天一条（1）——断言区间
     expect(dueThisWeek).toBeGreaterThanOrEqual(1)
-    expect(dueThisWeek).toBeLessThanOrEqual(2)
+    expect(dueThisWeek).toBeLessThanOrEqual(3)
     expect(pending).toBe(1)
     // 逾期天数：day(-4) → 4 天；今天口径随数据返回（前端今日线对齐用）
     const od = board.projects.flatMap((p) => p.tasks).find((x) => x.title === '逾期未完的活')

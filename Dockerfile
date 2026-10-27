@@ -24,6 +24,7 @@ RUN useradd -m appuser && mkdir -p /app/data && chown -R appuser:appuser /app
 USER appuser
 VOLUME /app/data
 EXPOSE 8086
-HEALTHCHECK --interval=30s --timeout=3s CMD curl -fsS http://127.0.0.1:8086/api/v1/health || exit 1
+# 健康检查端口跟随 PORT（应用默认 8086；部署侧 .env 可覆盖为 8080 等——硬编码曾致 gb-test 长期 unhealthy 误报）
+HEALTHCHECK --interval=30s --timeout=3s CMD curl -fsS http://127.0.0.1:${PORT:-8086}/api/v1/health || exit 1
 ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "server/index.mjs"]

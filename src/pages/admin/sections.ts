@@ -9,6 +9,15 @@ export const ADMIN_SECTIONS: { key: string; label: string; tabs: { key: string; 
       { key: 'params', label: '阈值与推送' },
     ],
   },
+  // S67（v0.75，K53）：全部调度任务集中一页（cron + 启用开关），从「项目管理→阈值与推送」独立
+  // v0.77（K59）：加「运行记录」Tab（scheduler_runs 台账，cron 与手动统一）
+  {
+    key: 'scheduler', label: '定时任务',
+    tabs: [
+      { key: 'tasks', label: '任务与开关' },
+      { key: 'runs', label: '运行记录' },
+    ],
+  },
   {
     key: 'users', label: '用户管理',
     tabs: [

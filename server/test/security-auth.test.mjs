@@ -79,7 +79,7 @@ describe('认证边界', () => {
     expect(res.statusCode).toBe(401)
   })
 
-  it('会话有效期 ≥1 年（K53）：登录 Set-Cookie 带 Max-Age、服务端 session 过期同口径、回拨 364 天仍免登录', async () => {
+  it('会话有效期 ≥1 年（K61）：登录 Set-Cookie 带 Max-Age、服务端 session 过期同口径、回拨 364 天仍免登录', async () => {
     const ONE_YEAR_MS = 365 * 24 * 3600 * 1000
     const res = await ctx.app.inject({ method: 'POST', url: '/api/v1/auth/login', payload: { username: 'admin', password: 'admin-pass-123' } })
     expect(res.statusCode).toBe(200)
