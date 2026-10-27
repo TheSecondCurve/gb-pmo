@@ -371,3 +371,10 @@
 - 决策：`engine/s3.js` 的 `list` 在既有 `keys` 之外补 `objects`（Key/LastModified/Size 全量解析，keys 保留供滚动保留用）；`engine/backup.js` 新增 `listRemoteBackups(db,{fetchImpl})`——未配全 skipped+原因（与 runBackup 同构）、ListObjectsV2 失败回 `{ok:false,reason}`、成功按命名规则过滤 `gb-pmo-*.db.gz`、新→旧（零填充时刻戳字典序=时间序）、每对象回 key/lastModifiedMs/bytes 与合计。路由 `GET /api/v1/admin/backup/remote`（requireAdmin，backupFetch 注入同族）；运维诊断→数据库备份页加「远端备份对象」卡——**点开才拉取**（不随页面自动请求，配置页不因 R2 慢链接卡顿），显示文件名/时间戳/大小/合计/与 keepCount 对照。
 - 理由：用户 2026-10-27 要求「远端备份文件清单，文件名/时间戳/大小，方便查看」——此前远端容灾状态只能登云控制台核对，或像本次一样临时写脚本进容器拉。清单能力落在备份域（同一配置/签名/注入路径）复用 S34 全套，不新开配置面。
 - 边界：只读清单，不做恢复按钮（恢复=下载+gunzip+换库文件重启，docs/standards/deployment.md 既有口径）；不做分页（单次 max-keys=1000，keepCount≤365 语义下足够）。
+
+## K53 登录会话长效保持：cookie Max-Age 与服务端 session 同一常量 400 天（≥1 年不重登，v0.74）
+
+- 决策：`SESSION_TTL_MS` 从 7 天改为 **400 天**并从 `engine/auth.js` 导出；登录 `Set-Cookie` 显式带 `maxAge`（秒，由同一常量换算）。此前 cookie 不带 Max-Age/Expires 即浏览器会话 cookie（Safari/Firefox 关浏览器即丢，Chrome 仅在「继续浏览上次打开的页面」下保留），服务端又 7 天硬过期——两层任一到期都把人踢回登录页，所以必须同口径且同源，不允许两处各写一个数。400 天取浏览器对 cookie 有效期的上限（Chrome 104+ 按 RFC 6265bis 草案把更长的 Max-Age 钳到 400 天）：既满足「至少 1 年」含闰年无歧义，也不写一个浏览器会偷偷截短的数。固定自登录起算、**无滑动续期**。
+- 理由：用户 2026-10-26 要求浏览器至少 1 年不用重新登录。内网小团队 + D1 全员透明，会话被盗的横向危害有限，而每周重登是实打实的日常摩擦；补偿控制已在：httpOnly + HMAC 签名（防脚本读取与篡改）、服务端 `sessions` 行可即时撤销（登出 DELETE、离职联动 DELETE 并吊销令牌），Agent PAT 面独立 90 天不受影响。
+- 不做：滑动续期（需求是「一年内不重登」而非「永不重登」，每请求写库不值当）；「记住我」两档（内网单一场景不需要）；`secure` 标记（内网可能 HTTP 直连，交给反代/部署层决定）；过期 session 行定期清理（一人一次登录一行，体量可忽略，`idx_sessions_expires` 已在）。
+- 待办/风险：`updateMember` 改密码只换 hash、**不清退该成员既有会话**——会话拉到 400 天后此缺口放大（密码泄露后重置密码无法逐出已登录的会话），建议后续补「改密即清退该成员全部 session」（管理员重置自己密码时会同时登出自己，可接受）。
