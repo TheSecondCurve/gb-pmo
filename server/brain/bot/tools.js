@@ -15,6 +15,7 @@ import { mapSpeaker } from '../extract.js'
 import { upsertChannel } from '../../engine/tasks.js'
 import { createProposal, PROPOSAL_KINDS } from '../../engine/proposals.js'
 import { normalizeTypeTasks } from '../../engine/projectTypes.js'
+import { planTypeTasks } from '../../engine/projects.js'
 import { bindProjectWiki, recordToWiki } from '../../engine/wiki.js'
 import { getSetting } from '../../engine/settings.js'
 import { camelizeRow } from '../../db/index.mjs'
@@ -533,6 +534,22 @@ function softValidateProposal(db, kind, p) {
     return {
       payload: { projectId: proj.id, name: name.slice(0, 200), ...(p.planDate ? { planDate: String(p.planDate) } : {}) },
       summary: `项目「${proj.name}」新增里程碑「${name.slice(0, 200)}」${p.planDate ? `（${p.planDate}）` : ''}`,
+    }
+  }
+  // S35-8（v0.76，K57）：按项目自身类型清单补任务——清单由引擎从库里拷，LLM 只传 projectId（不经转述，无 20 条护栏）；
+  // 预算「待补 N / 跳过 M」写进回执摘要；守卫文案与引擎 planTypeTasks 同源（终态只读/无类型/无清单/全部已存在）。
+  if (kind === 'apply_type_tasks') {
+    const proj = getProj(db, p.projectId)
+    if (!proj) return { error: 'projectId 必填且须为真实项目 id（先 query 查项目）' }
+    let plan
+    try {
+      plan = planTypeTasks(db, proj.id)
+    } catch (e) {
+      return { error: e.message }
+    }
+    return {
+      payload: { projectId: proj.id },
+      summary: `项目「${proj.name}」按类型「${plan.type.name}」清单补建任务 ${plan.toAdd.length} 项${plan.skipped.length ? `（跳过已存在 ${plan.skipped.length} 项）` : ''}`,
     }
   }
   if (kind === 'update_project') {

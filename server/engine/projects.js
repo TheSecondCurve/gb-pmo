@@ -105,6 +105,71 @@ export function createProject(db, input, by) {
   return getProjectDetail(db, id)
 }
 
+/**
+ * S35-8（v0.76，K57）补任务预算（引擎生效与机器人软校验共用）：项目/类型守卫 + 类型清单 vs 项目既有未删任务
+ * 标题精确比对 → { project, type, items, toAdd, skipped }。清单全部已存在也在此拒绝（400），让两侧拒绝文案同源。
+ * 类型停用不阻断（类型只影响未来立项，v0.18/K11）。
+ */
+export function planTypeTasks(db, projectId) {
+  const project = db.prepare('SELECT id, name, status, project_type_id FROM projects WHERE id = ?').get(Number(projectId))
+  if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
+  if (TERMINAL_STATUSES.includes(project.status)) throw Object.assign(new Error('项目已结项/取消，任务面只读'), { statusCode: 409 })
+  const type = project.project_type_id
+    ? db.prepare('SELECT id, code, name FROM project_types WHERE id = ?').get(project.project_type_id)
+    : null
+  if (!type) throw Object.assign(new Error('项目未绑定项目类型，无可补建的清单'), { statusCode: 400 })
+  const items = typeTaskItems(db, type.id)
+  if (!items.length) throw Object.assign(new Error(`项目类型「${type.name}」没有内嵌任务清单，无可补建`), { statusCode: 400 })
+  const existing = new Set(
+    db.prepare('SELECT title FROM tasks WHERE project_id = ? AND deleted_at IS NULL').all(project.id).map((r) => String(r.title).trim())
+  )
+  const toAdd = items.filter((it) => !existing.has(it.title.trim()))
+  if (!toAdd.length) {
+    throw Object.assign(new Error(`类型「${type.name}」清单 ${items.length} 项均已存在于项目，无需补建`), { statusCode: 400 })
+  }
+  const skipped = items.filter((it) => existing.has(it.title.trim())).map((it) => it.title)
+  return { project, type, items, toAdd, skipped }
+}
+
+/**
+ * S35-8（v0.76，K57）已有项目按自身类型清单补任务：与立项模板路径同口径拷入（source=template、todo、责任人未指派
+ * （S38/K20）、计划开始=今天、计划结束空、默认备注与参考随标题同事务拷贝），同名未删任务跳过（可重放不建重复）。
+ * 留痕=一条 decision 记录型事件 + 一条 project.applyTypeTasks 审计（不逐任务落进展，与 createProject 同模式）。
+ * 排期与分配不在此做（走 S39/S64 初始分配）。platform 标注发起通道（web|bot|agent）。
+ */
+export function applyTypeTasks(db, projectId, by, { platform = 'web' } = {}) {
+  const plan = planTypeTasks(db, projectId)
+  const now = Date.now()
+  const start = today()
+  const tx = db.transaction(() => {
+    const taskStmt = db.prepare(
+      `INSERT INTO tasks (project_id, title, note, responsible_member_id, status, plan_start_date, plan_end_date, source, created_at, updated_at)
+       VALUES (?, ?, ?, NULL, 'todo', ?, NULL, 'template', ?, ?)`
+    )
+    const refStmt = db.prepare('INSERT INTO task_refs (task_id, title, url, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    const taskIds = plan.toAdd.map((item) => {
+      const taskId = Number(taskStmt.run(plan.project.id, item.title, item.note ?? null, start, now, now).lastInsertRowid)
+      item.refs.forEach((ref) => refStmt.run(taskId, ref.title, ref.url, ref.note, by ?? null, now))
+      return taskId
+    })
+    addEvent(db, {
+      projectId: plan.project.id, eventType: 'decision', nature: 'record', sourcePlatform: platform, generatedBy: platform,
+      summary: `按类型「${plan.type.name}」清单补建任务 ${taskIds.length} 项${plan.skipped.length ? `（跳过已存在 ${plan.skipped.length} 项）` : ''}`,
+      speakerMemberId: by ?? null,
+    })
+    audit(db, {
+      memberId: by, action: 'project.applyTypeTasks', objectType: 'project', objectId: plan.project.id,
+      detail: { typeCode: plan.type.code, added: taskIds.length, skipped: plan.skipped.length, taskIds },
+    })
+    return taskIds
+  })
+  const taskIds = tx()
+  return {
+    projectId: plan.project.id, typeCode: plan.type.code, typeName: plan.type.name,
+    added: taskIds.length, skipped: plan.skipped.length, skippedTitles: plan.skipped, taskIds,
+  }
+}
+
 export function getProject(db, id) {
   return camelizeRow(db.prepare('SELECT * FROM projects WHERE id = ?').get(id))
 }
