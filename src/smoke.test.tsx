@@ -1023,3 +1023,55 @@ describe('S66 我的任务工作台', () => {
     expect(screen.getByRole('link', { name: '我的任务' })).toBeTruthy()
   })
 })
+
+describe('S72 常态项目关闭「生成项目汇总」（v0.84）', () => {
+  const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200 })
+  const wikiBinding = { id: 1, projectId: 1, spaceId: 'sp1', nodeToken: 'n1', objToken: 'o1', title: '知识页', createdAt: 1760000000000, updatedAt: 1760000000000 }
+  const mkDetail = (kind: 'routine' | 'delivery') => ({
+    id: 1, name: kind === 'routine' ? '常态项目甲' : '交付项目甲', kind,
+    templateCode: 'lianmai_365', projectTypeId: 1, typeName: '365连麦',
+    status: 'active', priority: 'medium', leadMemberId: 1, leadName: '张三', clientName: null,
+    planStartDate: null, planEndDate: kind === 'delivery' ? '2026-11-09' : null, daysToDelivery: null,
+    tasksTotal: 0, tasksDone: 0, tasks: [], milestones: [],
+  })
+  const board = {
+    projectId: 1, span: 'week', start: '2026-10-27', end: '2026-11-02',
+    days: ['2026-10-27', '2026-10-28'], prevAnchor: '2026-10-20', nextAnchor: '2026-11-03',
+    tasks: [], summary: { tasks: 0, applicableCells: 0, done: 0, skip: 0, pending: 0, perDay: [] },
+  }
+  let detailKind: 'routine' | 'delivery' = 'routine'
+  const s72Fetch = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url.startsWith('/api/v1/auth/me')) return json({ member: { id: 1, name: '甲', role: 'admin' } })
+    if (url.includes('/daily-board')) return json(board)
+    if (url.includes('/wiki-archive')) return json({ run: null })
+    if (url.includes('/wiki')) return json({ wiki: wikiBinding })
+    if (url.startsWith('/api/v1/projects/1/events')) return json({ events: [] })
+    if (url.startsWith('/api/v1/projects/1')) return json(mkDetail(detailKind))
+    if (url.startsWith('/api/v1/members')) return json({ members: [{ id: 1, name: '张三', status: 'active' }] })
+    if (url.startsWith('/api/v1/channels')) return json({ channels: [] })
+    if (url.startsWith('/api/v1/project-types')) return json({ types: [] })
+    return json({})
+  })
+  beforeEach(() => {
+    cleanup()
+    s72Fetch.mockClear()
+    globalThis.fetch = s72Fetch as unknown as typeof fetch
+  })
+
+  it('S72-3: 常态项目详情页不渲染「生成项目汇总」按钮；交付项目原样', async () => {
+    detailKind = 'routine'
+    location.hash = '#/projects/1'
+    render(<StoreProvider><ProjectDetail id={1} /></StoreProvider>)
+    await screen.findByText('常态项目甲')
+    expect(screen.queryByRole('button', { name: '生成项目汇总' })).toBeNull()
+    // 绑定/换绑不受影响（知识库卡照常，只关归档入口）
+    expect(screen.getByRole('button', { name: '换绑' })).toBeTruthy()
+
+    cleanup()
+    detailKind = 'delivery'
+    render(<StoreProvider><ProjectDetail id={1} /></StoreProvider>)
+    await screen.findByText('交付项目甲')
+    expect(screen.getByRole('button', { name: '生成项目汇总' })).toBeTruthy()
+  })
+})
