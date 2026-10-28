@@ -279,7 +279,7 @@ web「项目列表」升级为项目组合页：四视图（看板按状态/表�
 |---|---|---|
 | S31-1 | 当迁移完成后，应存在四个启用（active）的项目类型：365连麦（lianmai_365）/ 1v1商业咨询（consulting_1v1）/ 商业下午茶（afternoon_tea）/ 内训课（internal_training），各自描述含知识库 SOP 链接 | `server/test/s31-delivery-type-templates.test.mjs` |
 | S31-2 | 当查看任一预置类型的任务清单时，应得到有序蒸馏清单（365连麦 14 条、1v1商业咨询 12 条、商业下午茶 16 条、内训课 14 条），首条为启动项、末条为归档/状态更新项 | 同上 |
-| S31-3 | 当迁移完成后，占位类型（software_delivery/consulting/custom）应为停用态，以其编码立项应 400（「项目类型已停用」）；经其立项的历史项目不受影响 | 同上 |
+| S31-3 | 当迁移完成后，占位类型（software_delivery/consulting）应为停用态，以其编码立项应 400（「项目类型已停用」）；经其立项的历史项目不受影响（v0.82 修订：custom 例外——0037 重新启用为「自由创建」，作快速立项默认类型 S70/K66） | 同上 |
 | S31-4 | 当用预置类型立项且未自定义任务清单时，应按类型清单实例化任务（source=template、status=todo、责任人=牵头人，S1-2 同构） | 同上 |
 | S31-5 | 当迁移重复执行（migrations_meta 重放）时，不应产生重复的类型或任务行 | 同上、`server/test/db-migrations.test.mjs`（既有重放用例覆盖） |
 
@@ -734,6 +734,21 @@ web 侧边栏 `#/my` 页：跨在跑项目聚合本人未完任务（/my 斜杠�
 | S69-6 | 当统计任务口径时，常态任务退出：逾期/未指派/关键人负载/健康度/组合页进度/brief/晨报（`kind='work'` 既有过滤）；`/my` 与 S66 我的工作台不计常态任务；任务盘点对常态项目按「常态清单」呈现、全局未分配盘点不计常态任务 | 同上 |
 | S69-7 | 当维护常态任务行时，建/改/删沿用任务面与既有通道（机器人 add_task 对常态项目自动 routine、无排期/提醒语义）；状态/计划起止 patch 400（行停用走删除）；适用星期可改（≥1 天） | 同上 |
 | S69-8 | 当切换执行视图窗口时，span 支持 周（缺省，自然周周一锚点）/ 双周（**全局纪元锚：2024-01-01（周一）起每 14 天，跨年不断链**）/ 月（自然月，28/29/30/31 天如实）三档；窗口计算唯一在引擎（响应 start/end/days/prevAnchor/nextAnchor，前端零日期推算）；缺省 span 取 参数 → 项目默认（projects.board_span，交付项目设值 400）→ 周；非法 span 400；双周对齐/月边界/跨月导航正确 | 同上 |
+
+## S70（P0）— 全员（机器人）— 新群快速立项与知识页默认父页回落（v0.82）
+
+两个断点修复：①`wiki.defaultParentUrl`（S62）只被「记一下」确认卡消费，明确「新建项目飞书页」走 `bind_wiki` 仍索要父页链接（线上全部知识页人工贴链接建立）；②新群从拉群到可用项目三轮交互。A. `bind_wiki` 只给 `newTitle` 时自动回落默认父页建页绑定（明确指令直生效，K25；K47 确认卡仅覆盖隐含建页）；B. 新群 `/init [类型码]`（零 LLM，别名 `/立项`）或 write `quick_create_project`：项目名=群名（网关 getChat 带 `chatTitle`）、牵头人=发起人、类型=参数→`projects.quickCreateTypeCode`（缺省 `custom` 自由创建，migration 0037 重新启用）→拒绝列候选；一条链 建项目→绑群→默认父页建知识页（best-effort 不阻塞立项）。决策见 design.md K66。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S70-1 | 当 `bind_wiki` 只给 `newTitle` 不给父页且已配默认父页时，应在默认父页面下新建同名 docx 子页并绑定（用父节点 spaceId），回执注明挂载位置；未配默认父页维持引导式拒绝（明示两种绑定方式） | `server/test/s70-quick-create.test.mjs` |
+| S70-2 | 当新群 @机器人 `/init [类型码]` 时，应以群名为项目名、发起人为牵头人建项目（任务按类型清单实例化、立项事件留痕），本群绑定为专题渠道（cursor=当前时刻不回灌），默认父页下建知识页并绑定，一条回执含项目 id、任务数、知识页链接；零 LLM 不占限额、先于未登记群开关分发 | `server/test/s70-quick-create.test.mjs` |
+| S70-3 | 当类型无法解析（未给类型码且管理员清空了全局默认，或类型码不存在/已停用）时，应拒绝并列出全部可用类型编码与名称，不猜测（缺省全局默认=custom 自由创建，0037 启用） | `server/test/s70-quick-create.test.mjs` |
+| S70-4 | 当守卫不满足时各自拒绝并给下一步指引、不产生部分写入：私聊/web、群已是专题渠道（告知已绑项目名）、发起人未绑定飞书账号（绑定引导）、群名不可得（明确报错） | `server/test/s70-quick-create.test.mjs` |
+| S70-5 | 当知识页建立失败（未配默认父页/飞书凭证缺失/远端错误）时，立项与绑群照常完成，回执单列「知识页未建：原因」 | `server/test/s70-quick-create.test.mjs` |
+| S70-6 | 当未登记群自然语言「建个项目/快速立项」时，LLM 应发 write `quick_create_project`（name 缺省群名、typeCode 缺省全局默认）走同一条链并直接生效回执；已登记群维持 `create_project` | `server/test/s70-quick-create.test.mjs` |
+| S70-7 | 当管理员在配置台「外部依赖」页保存 `projects.quickCreateTypeCode` 时应可保存回读（与默认父页面卡相邻）；getSetting 深合并默认值（缺省 custom） | `server/test/s70-quick-create.test.mjs` |
+| S70-8 | 当飞书网关处理群消息时，应把外部判定已拉取的 getChat 群名随事件传入（`chatTitle`），供快速立项与群登记回填渠道名 | `server/test/s70-quick-create.test.mjs` |
 
 ## 必测清单（engineering-standards §4）
 

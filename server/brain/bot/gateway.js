@@ -95,20 +95,21 @@ async function connectReal(db, cfg, secret) {
     return { result: { started: false, reason: 'sdk-missing' } }
   }
 
-  const externalCache = new Map()
-  // 外部群判定失败时按外部群拒收（fail-closed：安全不变量优先，S20-7）
-  async function isExternal(chatId, chatType) {
-    if (chatType !== 'group') return false
-    if (externalCache.has(chatId)) return externalCache.get(chatId)
-    let external
+  // 群信息缓存：外部群判定（S20-7，失败按外部群拒收——fail-closed 安全不变量）
+  // + 群名下发（S70/v0.82，K66）：chatTitle 随事件进信封，快速立项/群登记回填渠道名。
+  const chatInfoCache = new Map()
+  async function chatInfo(chatId, chatType) {
+    if (chatType !== 'group') return { external: false, name: null }
+    if (chatInfoCache.has(chatId)) return chatInfoCache.get(chatId)
+    let info
     try {
       const chat = await feishu.getChat(cfg, chatId)
-      external = Boolean(chat.external)
+      info = { external: Boolean(chat.external), name: chat.name || null }
     } catch {
-      external = true
+      info = { external: true, name: null }
     }
-    externalCache.set(chatId, external)
-    return external
+    chatInfoCache.set(chatId, info)
+    return info
   }
 
   // 机器人自身身份（S20-16）：连接时取一次，用于群消息 @ 判定；失败不阻塞连接（降级判定）
@@ -135,6 +136,7 @@ async function connectReal(db, cfg, secret) {
         // 群@消息文本带 @_user_N 前缀，剥掉再交给指令层；群消息必须 @ 本机器人（S20-16）
         const text = rawText.replace(/^@\S+\s*/, '').trim()
         if (!text) return
+        const info = await chatInfo(msg.chat_id, chatType)
         await handleBotEvent(db, {
           messageId: msg.message_id,
           chatId: msg.chat_id,
@@ -142,7 +144,8 @@ async function connectReal(db, cfg, secret) {
           senderOpenId,
           text,
           ts: Date.now(),
-          external: await isExternal(msg.chat_id, chatType),
+          external: info.external,
+          chatTitle: info.name,
           mentioned: resolveMention({ chatType, mentions: msg.mentions, rawText, botOpenId }),
         }, { send, patch, secret })
       } catch (e) {
