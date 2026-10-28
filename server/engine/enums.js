@@ -9,6 +9,8 @@ export const ENUMS = {
   projectTypeStatus: { active: '启用', disabled: '停用' },
   // S69（v0.80，K64）：项目类别——交付项目走排期/交付/结项校验；常态项目走周视图每日打卡、结项豁免「全部任务完成」；立项选定后不可变更
   projectKind: { delivery: '交付项目', routine: '常态项目' },
+  // S69-8（v0.81，K65）：常态项目执行视图窗口三档——周（北京自然周）/ 双周（全局纪元锚 2024-01-01 起每 14 天）/ 月（自然月）
+  boardSpan: { week: '周', biweek: '双周', month: '月' },
   priority: { high: '高', medium: '中', low: '低' },
   // v0.6：任务状态固定三档（无 blocked/cancelled；任务相互独立，无前置依赖）
   taskStatus: { todo: '未开始', doing: '进行中', done: '完成' },

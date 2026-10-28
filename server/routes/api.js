@@ -201,10 +201,11 @@ export function registerApiRoutes(app) {
     ({ events: events.listEvents(db, { projectId: Number(req.params.id), status: req.query.status }) })
   )
 
-  // S69（v0.80，K64）：常态项目周视图——GET 取周格子矩阵（week=任意日定位所在周，缺省当前北京自然周）；
+  // S69（v0.80，K64；v0.81 K65）：常态项目执行视图——GET 取窗口格子矩阵（span=week|biweek|month 三档，
+  // 缺省取项目默认再缺省周；anchor=任意日定位所在期，缺省今天），响应含 prevAnchor/nextAnchor（导航零日期推算）；
   // POST 打卡（taskId/day/status(pending=重置)/note；可补过去、拒未来；记录型事件留痕）
   app.get('/api/v1/projects/:id/daily-board', async (req) =>
-    dailyBoard.weeklyBoard(db, Number(req.params.id), { weekAnchor: req.query?.week }))
+    dailyBoard.getDailyBoard(db, Number(req.params.id), { anchor: req.query?.anchor, span: req.query?.span }))
 
   app.post('/api/v1/projects/:id/daily-board', async (req, reply) =>
     reply.status(201).send(

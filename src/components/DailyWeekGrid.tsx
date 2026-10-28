@@ -3,33 +3,35 @@ import { api } from '../api'
 import { useStore } from '../store'
 import { bjToday } from '../fmt'
 import { Badge, Btn, Card, Empty, InlineSelect, InlineText, Spinner } from './ui'
-import { DAY_STATUS_LABEL, DAY_STATUS_TONE, WEEKDAY_SHORT, type DailyBoardData, type DailyCell } from '../types'
+import {
+  BOARD_SPAN_LABEL, DAY_STATUS_LABEL, DAY_STATUS_TONE, WEEKDAY_SHORT,
+  type BoardSpan, type DailyBoardData, type DailyCell,
+} from '../types'
 
-// S69（v0.80，K64）：常态项目「每周执行」周视图——行=常态任务、列=周一~周日的打卡二维表（代替甘特区块）。
-// 默认当前北京自然周（服务端周一锚点），可前后切换/回本周；今天列高亮；不适用格置灰不可打；
-// 格子就地切换 完成/跳过/未做（未做=无记录），完成/跳过可附备注；每次变更经引擎落讨论面记录型事件。
-
-/** 纯日期串算术（与后端 db/time.js 同公式，UTC 午夜基准无时区语义，S19 不涉及反解展示）。 */
-function addDays(day: string, n: number): string {
-  return new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10)
-}
+// S69（v0.80，K64）：常态项目「执行视图」——行=常态任务、列=窗口内逐日的打卡二维表（代替甘特区块）。
+// v0.81（K65，S69-8）：窗口三档 span（周/双周/月）Tabs 切换即持久化为项目默认（WYSIWYG）；
+// 窗口数学唯一在引擎——导航只消费响应的 prevAnchor/nextAnchor，本组件不做任何日期推算（今天判定除外）。
+// 默认当前期、可前后切换/回本期；今天列高亮、不适用格置灰；月/双周宽表格横向滚动、周一分隔线。
 
 function weekdayOf(day: string): number {
   const n = new Date(Date.parse(`${day}T00:00:00Z`)).getUTCDay()
   return n === 0 ? 7 : n
 }
 
-export default function DailyWeekGrid({ projectId, readonly, onChanged }: {
-  projectId: number; readonly: boolean; onChanged?: () => void | Promise<void>
+const SPANS: BoardSpan[] = ['week', 'biweek', 'month']
+
+export default function DailyWeekGrid({ projectId, defaultSpan = 'week', readonly, onChanged }: {
+  projectId: number; defaultSpan?: BoardSpan; readonly: boolean; onChanged?: () => void | Promise<void>
 }) {
   const { toast } = useStore()
   const [board, setBoard] = useState<DailyBoardData | null>(null)
-  const [weekAnchor, setWeekAnchor] = useState('') // '' = 当前周（服务端缺省）
+  const [span, setSpan] = useState<BoardSpan>(defaultSpan)
+  const [anchor, setAnchor] = useState('') // '' = 当前期（缺省）
   const today = bjToday()
 
   const load = useCallback(async () => {
-    setBoard(await api.dailyBoard(projectId, weekAnchor || undefined))
-  }, [projectId, weekAnchor])
+    setBoard(await api.dailyBoard(projectId, { anchor: anchor || undefined, span }))
+  }, [projectId, anchor, span])
   useEffect(() => { void load() }, [load])
 
   const apply = async (taskId: number, cell: DailyCell, patch: { status?: string; note?: string }) => {
@@ -46,18 +48,38 @@ export default function DailyWeekGrid({ projectId, readonly, onChanged }: {
     }
   }
 
+  // 切窗口：立即换视图，并持久化为项目默认（WYSIWYG；失败仅提示不回滚——视图本地仍可用）
+  const switchSpan = (next: BoardSpan) => {
+    if (next === span) return
+    setSpan(next)
+    setAnchor('')
+    void api.patchProject(projectId, { boardSpan: next }).catch((e) => toast((e as Error).message, 'bad'))
+  }
+
   if (!board) return <Spinner />
-  const isCurrentWeek = board.days.includes(today)
+  const isCurrentPeriod = board.days.includes(today)
+  const wide = board.days.length > 7 // 双周/月：窄格宽表（横向滚动）
   const dayShort = (d: string) => d.slice(5).replace('-', '/')
 
   return (
     <Card
-      title={`01 · 每周执行 · ${board.weekStart} ~ ${board.weekEnd}${isCurrentWeek ? '（本周）' : ''}`}
+      title={`01 · 执行视图 · ${board.start} ~ ${board.end}${isCurrentPeriod ? '（本期）' : ''}`}
       actions={(
-        <div data-testid="daily-week-nav" className="flex items-center gap-1.5">
-          <Btn small onClick={() => setWeekAnchor(addDays(board.weekStart, -7))}>← 上周</Btn>
-          {!isCurrentWeek && <Btn small onClick={() => setWeekAnchor('')}>回本周</Btn>}
-          <Btn small onClick={() => setWeekAnchor(addDays(board.weekStart, 7))}>下周 →</Btn>
+        <div data-testid="daily-week-nav" className="flex flex-wrap items-center gap-1.5">
+          {/* 窗口 Tabs：切换即持久化为项目默认（S69-8/K65） */}
+          <span className="flex overflow-hidden rounded-full border border-[var(--color-line-strong)]" role="tablist" aria-label="执行视图窗口">
+            {SPANS.map((s) => (
+              <button
+                key={s} type="button" role="tab" aria-selected={span === s}
+                className={`px-2.5 py-1 text-[12px] transition-colors ${
+                  span === s ? 'bg-[var(--color-ink)] font-medium text-[var(--color-card)]' : 'text-[var(--color-ink-soft)] hover:bg-[var(--color-brand-soft)]'
+                }`}
+                onClick={() => switchSpan(s)}>{BOARD_SPAN_LABEL[s]}</button>
+            ))}
+          </span>
+          <Btn small onClick={() => setAnchor(board.prevAnchor)}>← 上一期</Btn>
+          {!isCurrentPeriod && <Btn small onClick={() => setAnchor('')}>回本期</Btn>}
+          <Btn small onClick={() => setAnchor(board.nextAnchor)}>下一期 →</Btn>
         </div>
       )}
     >
@@ -69,23 +91,29 @@ export default function DailyWeekGrid({ projectId, readonly, onChanged }: {
       </div>
       {board.tasks.length === 0 ? <Empty hint="暂无常态任务——在下方任务面添加（每行一条，选适用星期）" /> : (
         <div className="overflow-x-auto">
-          <table data-testid="daily-week-grid" className="w-full min-w-[52rem] text-[13px]">
-            <thead className="text-left text-[10px] font-medium tracking-[0.07em] text-[var(--color-ink-soft)]">
+          <table
+            data-testid="daily-week-grid" className={`w-full text-[13px] ${wide ? 'text-[12px]' : 'min-w-[52rem]'}`}
+            style={wide ? { minWidth: `${Math.ceil(board.days.length * 5.5)}rem` } : undefined}
+          >
+            <thead className="text-left text-[10px] font-medium tracking-[0.04em] text-[var(--color-ink-soft)]">
               <tr className="border-b border-[var(--color-line)] [&>th]:px-2 [&>th]:py-2.5">
-                <th className="min-w-[13rem]">常态任务</th>
+                <th className={`min-w-[13rem] ${wide ? 'sticky left-0 z-10 bg-[var(--color-card)]' : ''}`}>常态任务</th>
                 {board.days.map((d) => (
-                  <th key={d} data-testid="day-col" data-day={d} className={`text-center ${d === today ? 'bg-[var(--color-brand-soft)]/50 text-[var(--color-brand)]' : ''}`}>
+                  <th
+                    key={d} data-testid="day-col" data-day={d}
+                    className={`text-center ${d === today ? 'bg-[var(--color-brand-soft)]/50 text-[var(--color-brand)]' : ''} ${wide && weekdayOf(d) === 1 ? 'border-l border-[var(--color-line-strong)]' : ''}`}
+                  >
                     <div>周{WEEKDAY_SHORT[weekdayOf(d)]}</div>
-                    <div className="num font-normal">{dayShort(d)}</div>
+                    <div className="num font-normal">{wide ? d.slice(8) : dayShort(d)}</div>
                   </th>
                 ))}
-                <th className="text-center">本周</th>
+                <th className="text-center">本期</th>
               </tr>
             </thead>
             <tbody>
               {board.tasks.map((t) => (
                 <tr key={t.taskId} data-testid="daily-task-row" className="border-b border-[var(--color-line)] last:border-0 [&>td]:px-2 [&>td]:py-2.5">
-                  <td>
+                  <td className={wide ? 'sticky left-0 z-10 bg-[var(--color-card)]' : ''}>
                     <div className="flex flex-wrap items-baseline gap-1.5">
                       <span className="num mr-0.5 text-[12px] text-[var(--color-ink-soft)]">#{t.taskId}</span>
                       <span className="font-medium">{t.title}</span>
@@ -94,7 +122,10 @@ export default function DailyWeekGrid({ projectId, readonly, onChanged }: {
                     </div>
                   </td>
                   {t.cells.map((c) => (
-                    <td key={c.day} className={`text-center align-top ${c.day === today ? 'bg-[var(--color-brand-soft)]/25' : ''}`}>
+                    <td
+                      key={c.day}
+                      className={`text-center align-top ${c.day === today ? 'bg-[var(--color-brand-soft)]/25' : ''} ${wide && weekdayOf(c.day) === 1 ? 'border-l border-[var(--color-line-strong)]' : ''}`}
+                    >
                       {!c.applicable ? (
                         <span className="text-[var(--color-ink-faint)]" title="该任务本日不适用（适用星期未勾选）">—</span>
                       ) : readonly ? (
@@ -109,7 +140,7 @@ export default function DailyWeekGrid({ projectId, readonly, onChanged }: {
                             onSubmit={(v) => void apply(t.taskId, c, { status: v })} />
                           {c.status !== 'pending' && (
                             <InlineText
-                              value={c.note} placeholder="备注" className="block max-w-[6rem] text-[11px] text-[var(--color-ink-soft)]"
+                              value={c.note} placeholder="备注" className={`block text-[11px] text-[var(--color-ink-soft)] ${wide ? 'max-w-[4rem]' : 'max-w-[6rem]'}`}
                               onSubmit={(v) => void apply(t.taskId, c, { note: v })} />
                           )}
                           {c.source === 'bot' && <span className="text-[10px] text-[var(--color-ink-faint)]" title={`机器人打卡（${c.operatorName || ''}）`}>🤖</span>}
@@ -117,13 +148,13 @@ export default function DailyWeekGrid({ projectId, readonly, onChanged }: {
                       )}
                     </td>
                   ))}
-                  <td className="num text-center text-[12px] text-[var(--color-ink-soft)]" title="本周完成 / 适用格">{t.weekDone}/{t.weekApplicable}</td>
+                  <td className="num text-center text-[12px] text-[var(--color-ink-soft)]" title="本期完成 / 适用格">{t.periodDone}/{t.periodApplicable}</td>
                 </tr>
               ))}
             </tbody>
             <tfoot>
               <tr className="border-t border-[var(--color-line)] text-[11px] text-[var(--color-ink-soft)] [&>td]:px-2 [&>td]:py-2">
-                <td>当日完成</td>
+                <td className={wide ? 'sticky left-0 z-10 bg-[var(--color-card)]' : ''}>当日完成</td>
                 {board.summary.perDay.map((d) => (
                   <td key={d.day} className={`num text-center ${d.day === today ? 'text-[var(--color-brand)]' : ''}`}>{d.done}{d.skip ? `（跳${d.skip}）` : ''}</td>
                 ))}
@@ -134,7 +165,7 @@ export default function DailyWeekGrid({ projectId, readonly, onChanged }: {
         </div>
       )}
       <div className="mt-2 text-[11px] text-[var(--color-ink-soft)]">
-        格子就地打卡（可补过去日期、不可打未来）；群里 @机器人 说「XX 打卡 / 今天 XX 跳过」同样生效（S69-4）。备注 ≤200 字随完成/跳过记录保留。
+        格子就地打卡（可补过去日期、不可打未来）；群里 @机器人 说「XX 打卡 / 今天 XX 跳过」同样生效（S69-4）。备注 ≤200 字随完成/跳过记录保留。窗口切换（周/双周/月）即保存为本项目默认。
       </div>
     </Card>
   )
