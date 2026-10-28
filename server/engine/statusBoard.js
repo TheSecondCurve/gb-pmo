@@ -8,13 +8,15 @@ import { pendingSuggestionsFor } from './events.js'
 import { queryMetric } from './metrics.js'
 import { label } from './enums.js'
 
-/** /my：本人未完任务（逾期标注）+ 明日到期 + 待确认建议计数（跨在跑项目聚合）。 */
+/** /my：本人未完任务（逾期标注）+ 明日到期 + 待确认建议计数（跨在跑项目聚合）。
+ *  S69：排除常态任务——永不完成，计入即永久噪音（周视图自管每日执行）。 */
 export function myWork(db, memberId) {
   const tasks = camelizeRows(
     db.prepare(
       `SELECT t.id, t.title, t.status, t.plan_end_date, p.name AS project_name FROM tasks t
        JOIN projects p ON p.id = t.project_id
        WHERE t.responsible_member_id = ? AND t.status != 'done' AND t.deleted_at IS NULL AND p.status = 'active'
+         AND t.kind != 'routine'
        ORDER BY t.plan_end_date IS NULL, t.plan_end_date`
     ).all(memberId)
   )
@@ -45,6 +47,7 @@ export function myTasksBoard(db, memberId, { now = Date.now() } = {}) {
               p.id AS project_id, p.name AS project_name
        FROM tasks t JOIN projects p ON p.id = t.project_id
        WHERE t.responsible_member_id = ? AND t.status != 'done' AND t.deleted_at IS NULL AND p.status = 'active'
+         AND t.kind != 'routine' -- S69：常态任务退出我的任务工作台（周视图自管）
        ORDER BY p.id, t.plan_start_date IS NULL, t.plan_start_date, t.plan_end_date, t.id`
     ).all(memberId)
   )
@@ -137,7 +140,8 @@ export function riskBoard(db, { now = Date.now() } = {}) {
     .map((p) => ({ id: p.id, name: p.name, silentDays: Math.floor((now - p.anchor) / DAY_MS) }))
   const unassigned = db.prepare(
     `SELECT COUNT(*) AS n FROM tasks t JOIN projects p ON p.id = t.project_id
-     WHERE p.status = 'active' AND t.status != 'done' AND t.deleted_at IS NULL AND t.responsible_member_id IS NULL`
+     WHERE p.status = 'active' AND t.status != 'done' AND t.deleted_at IS NULL AND t.responsible_member_id IS NULL
+       AND t.kind != 'routine' -- S69：常态任务退出未指派风险口径（分配语义属交付工作）`
   ).get().n
   const overloaded = queryMetric(db, 'keyperson_load', { groupBy: 'member' }).rows.filter((r) => r.overloaded)
 

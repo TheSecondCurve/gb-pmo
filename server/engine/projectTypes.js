@@ -53,6 +53,23 @@ export function normalizeTaskNote(value) {
   return text || null
 }
 
+/**
+ * 适用星期载荷归一（S69，K64）：常态任务的周一~周日勾选。
+ * 接受数字数组（或 '1,3' CSV 串）；undefined → undefined（未给，建任务时由调用方落每天缺省）；
+ * 去重升序返回 number[]；空集/越界（非 1~7 整数）400。仅 kind=routine 任务可携带。
+ */
+export function normalizeWeekdays(value) {
+  if (value === undefined || value === null) return undefined
+  const raw = typeof value === 'string' ? value.split(',') : value
+  if (!Array.isArray(raw)) throw Object.assign(new Error('weekdays 须为 1~7 的整数数组（1=周一…7=周日）'), { statusCode: 400 })
+  const days = [...new Set(raw.map(Number))]
+  if (!days.length) throw Object.assign(new Error('适用星期至少勾选 1 天'), { statusCode: 400 })
+  if (days.some((d) => !Number.isInteger(d) || d < 1 || d > 7)) {
+    throw Object.assign(new Error('weekdays 须为 1~7 的整数（1=周一…7=周日）'), { statusCode: 400 })
+  }
+  return days.sort((a, b) => a - b)
+}
+
 /** 单条参考载荷归一：{title, url, note?} → {title, url, note}；标题必填、url 须 http(s)，否则 400。 */
 export function normalizeTypeRef(ref) {
   const r = typeof ref === 'object' && ref !== null ? ref : {}
@@ -65,7 +82,8 @@ export function normalizeTypeRef(ref) {
 }
 
 /** 任务清单载荷归一（S1-6/S17-8/S33/S58）：字符串、{title}、{title, note?, refs?} 均可 → [{title, note, refs}]；
- * 空白标题 400；备注 ≤ MAX_TASK_NOTE（S58）；refs 逐条同实例侧校验，每任务 ≤ MAX_TASK_REFS。 */
+ * 空白标题 400；备注 ≤ MAX_TASK_NOTE（S58）；refs 逐条同实例侧校验，每任务 ≤ MAX_TASK_REFS；
+ * S69：可携带 weekdays（适用星期归一，仅常态项目立项使用，交付项目忽略不落）。 */
 export function normalizeTypeTasks(tasks) {
   if (tasks === undefined || tasks === null) return undefined
   if (!Array.isArray(tasks)) throw Object.assign(new Error('tasks 必须是数组'), { statusCode: 400 })
@@ -82,7 +100,8 @@ export function normalizeTypeTasks(tasks) {
       }
       refs = item.refs.map(normalizeTypeRef)
     }
-    return { title, note, refs }
+    const weekdays = normalizeWeekdays(item.weekdays) // S69：undefined=未给（缺省每天在立项落库时补）
+    return { title, note, refs, ...(weekdays ? { weekdays } : {}) }
   })
 }
 

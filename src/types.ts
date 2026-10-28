@@ -20,6 +20,7 @@ export interface InitAssignmentRow {
 }
 export interface ProjectRow {
   id: number; name: string; templateCode: string; projectTypeId?: number | null; typeName?: string | null
+  kind?: 'delivery' | 'routine' // S69：项目类别（交付/常态，立项选定后不可变更）
   status: string; priority: 'high' | 'medium' | 'low'
   leadMemberId: number; leadName: string; clientName?: string | null
   planStartDate?: string | null; planEndDate?: string | null
@@ -33,7 +34,8 @@ export interface TaskRow {
   status: string; planStartDate?: string | null; planEndDate?: string | null
   note?: string | null // S58：任务备注（≤200 字；模板默认值立项拷贝，实例独立改；提醒/预警推送自动携带）
   isOverdue: boolean
-  kind?: string // S57：任务分类 work=工作 / reminder=纯提醒（到期推送后自动完成）
+  kind?: string // S57：任务分类 work=工作 / reminder=纯提醒（到期推送后自动完成）/ routine=常态打卡（S69，无状态/排期语义）
+  weekdays?: number[] | null // S69：适用星期（1=周一…7=周日；仅 routine 有值，全 7 天=每天）
   remindedAt?: number | null // S57：提醒已送达时刻（幂等锚点；改期/重开重置）
   refCount?: number // S23：未删除参考资料条数（项目详情任务行）
 }
@@ -114,3 +116,30 @@ export interface MyTasksBoard {
   stats: { total: number; overdue: number; dueThisWeek: number; pending: number }
   projects: Array<{ projectId: number; projectName: string; tasks: MyTaskRow[] }>
 }
+
+// S69（v0.80，K64）：常态项目周视图（GET /api/v1/projects/:id/daily-board）
+export interface DailyCell {
+  day: string // YYYY-MM-DD（北京日）
+  applicable: boolean // 该任务在本日是否适用（适用星期勾选）
+  status: 'pending' | 'done' | 'skip' // pending=未做（无记录行）
+  note: string | null
+  operatorMemberId: number | null; operatorName: string | null
+  source: string | null // web | bot
+  updatedAt: number | null
+}
+export interface DailyBoardTask {
+  taskId: number; title: string; note: string | null
+  weekdays: number[]; weekdaysLabel: string
+  responsibleMemberId: number | null; responsibleName: string | null
+  cells: DailyCell[]; weekApplicable: number; weekDone: number
+}
+export interface DailyBoardData {
+  projectId: number; weekStart: string; weekEnd: string; days: string[]
+  tasks: DailyBoardTask[]
+  summary: { tasks: number; applicableCells: number; done: number; skip: number; pending: number; perDay: Array<{ day: string; done: number; skip: number }> }
+}
+
+export const PROJECT_KIND_LABEL: Record<string, string> = { delivery: '交付项目', routine: '常态项目' }
+export const DAY_STATUS_LABEL: Record<string, string> = { pending: '未做', done: '完成', skip: '跳过' }
+export const DAY_STATUS_TONE: Record<string, Tone> = { pending: 'muted', done: 'ok', skip: 'warn' }
+export const WEEKDAY_SHORT: string[] = ['', '一', '二', '三', '四', '五', '六', '日']

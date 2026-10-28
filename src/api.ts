@@ -112,6 +112,12 @@ export const api = {
   // S66（v0.73）：我的任务工作台（纯读，按会话成员定域）
   myTasks: () => req<import('./types').MyTasksBoard>('GET', '/api/v1/my-tasks'),
 
+  // S69（v0.80，K64）：常态项目周视图（week=任意日定位所在周，缺省当前北京自然周）与每日打卡
+  dailyBoard: (id: number, week?: string) =>
+    req<import('./types').DailyBoardData>('GET', `/api/v1/projects/${id}/daily-board${week ? `?week=${week}` : ''}`),
+  setDayStatus: (projectId: number, body: { taskId: number; day: string; status: string; note?: string }) =>
+    req<import('./types').DailyCell & { eventId: number | null }>('POST', `/api/v1/projects/${projectId}/daily-board`, body),
+
   // S47（v0.52）：LLM 用量聚合（仅管理员）
   llmUsage: (days = 7) =>
     req<{ days: number; byPurpose: { purpose: string; calls: number; promptTokens: number; completionTokens: number; avgDurationMs: number | null; errors: number }[]; byDay: { day: string; calls: number; tokens: number; errors: number }[] }>(

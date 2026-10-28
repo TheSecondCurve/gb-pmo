@@ -125,6 +125,7 @@ client.sh action generate_person_digest '{}'
 | updated_at | INTEGER |  |
 | project_type_id | INTEGER |  |
 | init_extra | TEXT |  |
+| kind | TEXT |  |
 
 ### tasks
 
@@ -144,6 +145,7 @@ client.sh action generate_person_digest '{}'
 | kind | TEXT |  |
 | reminded_at | INTEGER |  |
 | note | TEXT |  |
+| weekdays | TEXT |  |
 
 ### milestones
 
@@ -466,15 +468,30 @@ client.sh action generate_person_digest '{}'
 | summary | TEXT |  |
 | member_id | INTEGER |  |
 
+### task_day_records
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| task_id | INTEGER |  |
+| day | TEXT | 北京日历日 YYYY-MM-DD（S19） |
+| status | TEXT | 未做=无记录行（K64：不预生成实例） |
+| note | TEXT | 当日执行备注（≤200 字，记录型字段） |
+| operator_member_id | INTEGER |  |
+| source | TEXT | web | bot（打卡来源通道） |
+| updated_at | INTEGER |  |
+
 ## 枚举（值 ↔ 中文 label，双向对齐）
 
 - **memberRole**: admin=系统管理员、member=成员
 - **memberStatus**: active=在职、offboarded=离职
 - **projectStatus**: active=进行中、closed=已结项、cancelled=已取消
 - **projectTypeStatus**: active=启用、disabled=停用
+- **projectKind**: delivery=交付项目、routine=常态项目
 - **priority**: high=高、medium=中、low=低
 - **taskStatus**: todo=未开始、doing=进行中、done=完成
-- **taskKind**: work=工作、reminder=纯提醒
+- **taskKind**: work=工作、reminder=纯提醒、routine=常态打卡
+- **dayStatus**: pending=未做、done=完成、skip=跳过
 - **taskSource**: template=模板、manual=手动、extraction=抽取、suggestion=建议采纳
 - **milestoneStatus**: planned=计划中、met=已达成、missed=已延误、cancelled=已取消
 - **channelPlatform**: feishu=飞书、wecom=企业微信

@@ -480,13 +480,14 @@ function TimelineView({ rows }: { rows: ProjectRow[] }) {
 function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose: () => void; onDone: () => Promise<void> }) {
   const { toast } = useStore()
   const [types, setTypes] = useState<ProjectType[]>([])
-  const [form, setForm] = useState({ name: '', typeCode: '', leadMemberId: '', priority: 'medium', clientName: '', planStartDate: '', planEndDate: '', initExtra: '' })
+  const [form, setForm] = useState({ kind: 'delivery', name: '', typeCode: '', leadMemberId: '', priority: 'medium', clientName: '', planStartDate: '', planEndDate: '', initExtra: '' })
   const [tasksText, setTasksText] = useState('')
   const [tasksDirty, setTasksDirty] = useState(false) // 未改动=按类型清单实例化（source=template）；改动过=自定义（source=manual）
   const [backfill, setBackfill] = useState(false) // S1-7：按交付日期倒排任务计划起止
   const [schedule, setSchedule] = useState<{ planStartDate: string; planEndDate: string }[] | null>(null)
   const [drafting, setDrafting] = useState(false)
   const [err, setErr] = useState('')
+  const routine = form.kind === 'routine' // S69：常态项目——周视图每日打卡，无交付日期/倒排
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }))
 
   useEffect(() => {
@@ -506,6 +507,18 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
   const switchType = (code: string) => {
     set('typeCode', code)
     if (!tasksDirty) setTasksText((types.find((t) => t.code === code)?.tasks ?? []).map((x) => x.title).join('\n'))
+  }
+  // S69：切项目类别——常态自动选「常态项目」类型并清空清单预填（交付模板的排期类任务不适用）；切回交付恢复首个类型
+  const switchKind = (kind: string) => {
+    setForm((f) => ({ ...f, kind, planStartDate: '', planEndDate: '' }))
+    setBackfill(false)
+    if (kind === 'routine') {
+      const routineType = types.find((t) => t.code === 'routine_ops')
+      if (routineType) { set('typeCode', routineType.code); if (!tasksDirty) setTasksText('') }
+    } else {
+      const first = types.find((t) => t.code !== 'routine_ops')
+      if (first) { set('typeCode', first.code); if (!tasksDirty) setTasksText(first.tasks.map((x) => x.title).join('\n')) }
+    }
   }
   const titles = tasksText.split('\n').map((l) => l.trim()).filter(Boolean)
 
@@ -528,7 +541,7 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
         ...form, leadMemberId: Number(form.leadMemberId),
         ...(form.initExtra.trim() ? { initExtra: form.initExtra.trim() } : {}), // S64：项目级初始分配补充要求（可空）
         ...(tasksDirty ? { tasks: titles } : {}), // 未改动→缺省按类型清单（S1-2）；改动过→显式覆盖（S1-6，空清单=空项目）
-        ...(backfill && form.planEndDate ? { autoSchedule: true } : {}),
+        ...(backfill && !routine && form.planEndDate ? { autoSchedule: true } : {}),
       })
       await onDone()
     } catch (e) { setErr((e as Error).message) }
@@ -538,6 +551,14 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
     <Modal title="立项（S1）" onClose={onClose} wide>
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <Field label="项目名 *"><input className={inputCls} value={form.name} onChange={(e) => set('name', e.target.value)} /></Field>
+        <Field label="项目类别 *（S69：立项后不可变更——交付项目走排期/交付；常态项目日常重复执行，按周视图打卡、结项豁免任务完成检查）">
+          <select className={inputCls} value={form.kind} onChange={(e) => switchKind(e.target.value)}>
+            <option value="delivery">交付项目</option>
+            <option value="routine">常态项目（每日打卡 · 周视图）</option>
+          </select>
+        </Field>
+      </div>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <Field label="项目类型（预填任务清单，可在下方自由增删改；类型在配置台维护）">
           <select className={inputCls} value={form.typeCode} onChange={(e) => switchType(e.target.value)}>
             {types.map((t) => (
@@ -545,6 +566,13 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
             ))}
           </select>
         </Field>
+        {routine && (
+          <Field label="常态任务说明（S69：每行一条常态任务，默认每天；立项后在详情页按行勾选适用星期、周视图打卡）">
+            <div className="rounded-[3px] border border-[var(--color-line)] bg-[var(--color-panel)]/50 px-3 py-2 text-[12px] leading-5 text-[var(--color-ink-soft)]">
+              例：每日阅读清单、每日数据巡检——适用星期与每日完成/跳过状态在项目详情页周视图中管理；群内 @机器人「XX 打卡」同样生效。
+            </div>
+          </Field>
+        )}
       </div>
       {chosen?.description && <div className="-mt-2 mb-3 text-[11px] text-[var(--color-ink-soft)]">{chosen.description}</div>}
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
@@ -562,11 +590,15 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
       </div>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Field label="客户（可选）"><input className={inputCls} value={form.clientName} onChange={(e) => set('clientName', e.target.value)} /></Field>
-        <Field label="计划开始"><input type="date" className={inputCls} value={form.planStartDate} onChange={(e) => set('planStartDate', e.target.value)} /></Field>
-        <Field label="交付日期（选填：填了派生剩余/超期天数并进项目日历）"><input type="date" className={inputCls} value={form.planEndDate} onChange={(e) => set('planEndDate', e.target.value)} /></Field>
+        {!routine && (
+          <>
+            <Field label="计划开始"><input type="date" className={inputCls} value={form.planStartDate} onChange={(e) => set('planStartDate', e.target.value)} /></Field>
+            <Field label="交付日期（选填：填了派生剩余/超期天数并进项目日历）"><input type="date" className={inputCls} value={form.planEndDate} onChange={(e) => set('planEndDate', e.target.value)} /></Field>
+          </>
+        )}
       </div>
-      <Field label={`任务清单（每行一条；选类型自动预填${tasksDirty ? '，已自定义——不携带类型预设的参考资料' : '，含类型逐步骤参考资料（立项后任务行可见「参考 N」）'}；留空=空项目）`}>
-        <textarea className={inputCls} rows={8} value={tasksText} onChange={(e) => { setTasksText(e.target.value); setTasksDirty(true) }} placeholder={'需求确认与范围冻结\n技术方案与排期\n开发联调\n结项复盘'} />
+      <Field label={`任务清单（每行一条；选类型自动预填${tasksDirty ? '，已自定义——不携带类型预设的参考资料' : '，含类型逐步骤参考资料（立项后任务行可见「参考 N」）'}；留空=空项目）${routine ? '——常态项目每行一条常态任务（默认每天）' : ''}`}>
+        <textarea className={inputCls} rows={8} value={tasksText} onChange={(e) => { setTasksText(e.target.value); setTasksDirty(true) }} placeholder={routine ? '看行业资讯\n背单词\n每周复盘' : '需求确认与范围冻结\n技术方案与排期\n开发联调\n结项复盘'} />
       </Field>
       <Field label="初始分配补充要求（可选，S64：本项目的特例，如「这期张三牵头、开发任务多给李四」；AI 初始分配时与类型初始化提示词叠加）">
         <textarea className={inputCls} rows={2} value={form.initExtra} onChange={(e) => set('initExtra', e.target.value)} placeholder="这期张三牵头，大部分开发任务给李四，11 月中前收口" />
@@ -580,11 +612,13 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
             toast(`AI 起草 ${out.tasks.length} 条任务，可继续编辑（草稿未落库）`)
           } catch (e) { setErr((e as Error).message) } finally { setDrafting(false) }
         }}>{drafting ? 'AI 起草中…' : '✨ AI 起草任务清单'}</Btn>
-        <label className="flex items-center gap-1 text-[12px]">
-          <input type="checkbox" checked={backfill} disabled={!form.planEndDate} onChange={(e) => setBackfill(e.target.checked)} />
-          按交付日期倒排任务计划起止（均分，S1-7）
-        </label>
-        {!form.planEndDate && <span className="text-[11px] text-[var(--color-ink-soft)]">填交付日期后可倒排</span>}
+        {!routine && (
+          <label className="flex items-center gap-1 text-[12px]">
+            <input type="checkbox" checked={backfill} disabled={!form.planEndDate} onChange={(e) => setBackfill(e.target.checked)} />
+            按交付日期倒排任务计划起止（均分，S1-7）
+          </label>
+        )}
+        {!routine && !form.planEndDate && <span className="text-[11px] text-[var(--color-ink-soft)]">填交付日期后可倒排</span>}
       </div>
       {backfill && schedule && schedule.length === titles.length && titles.length > 0 && (
         <div className="mb-3 rounded-md border border-[var(--color-line)] p-2 text-[12px] leading-5">
@@ -599,7 +633,9 @@ function CreateModal({ members, onClose, onDone }: { members: Member[]; onClose:
         <Btn onClick={onClose}>取消</Btn>
         <Btn kind="primary" disabled={!form.name || !form.leadMemberId || !form.typeCode} onClick={submit}>立项</Btn>
       </div>
-      <div className="mt-2 text-[11px] text-[var(--color-ink-soft)]">立项后请在详情页绑定核心渠道（飞书/企微专题群），未绑定会计入管理员待办。任务默认未指派（S38），可在详情页逐条改派或用「✨ AI 初始分配」按类型初始化提示词批量分配（S39）。</div>
+      <div className="mt-2 text-[11px] text-[var(--color-ink-soft)]">{routine
+        ? '常态项目立项后进入周视图（默认当前周、可切换），任务行可配适用星期（每周几），每日格子就地打卡；群内 @机器人「XX 打卡」同样生效。结项走手动结项（无任务完成要求）。'
+        : '立项后请在详情页绑定核心渠道（飞书/企微专题群），未绑定会计入管理员待办。任务默认未指派（S38），可在详情页逐条改派或用「✨ AI 初始分配」按类型初始化提示词批量分配（S39）。'}</div>
     </Modal>
   )
 }

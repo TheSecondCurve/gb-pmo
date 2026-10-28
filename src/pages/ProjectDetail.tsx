@@ -6,6 +6,7 @@ import { useStore } from '../store'
 import { Badge, Btn, Card, Empty, Field, InlineSelect, InlineText, Modal, Spinner, inputCls } from '../components/ui'
 import { PageMasthead, SectionHeading } from '../components/editorial'
 import ProgressSchedule from '../components/ProgressSchedule'
+import DailyWeekGrid, { WeekdayPicker } from '../components/DailyWeekGrid'
 import { TASK_ROW_CLS, taskVisual } from '../progress'
 import {
   EVENT_PINNED_COLS, EVENT_STATUS_LABEL, EVENT_TYPE_LABEL, MILESTONE_STATUS_LABEL, MILESTONE_STATUS_TONE,
@@ -69,6 +70,8 @@ export default function ProjectDetail({ id }: { id: number }) {
 
   if (!p) return <Spinner />
   const readonly = p.status === 'closed' || p.status === 'cancelled'
+  // S69（K64）：常态项目——周视图代替甘特区块、任务面无状态/排期列（星期配置 + 每日打卡）
+  const routine = p.kind === 'routine'
   // S17-12：渠道写权限与后端同构——管理员或该项目牵头人（通用群在配置台维护）
   const canManageChannels = !readonly && (member?.role === 'admin' || member?.id === p.leadMemberId)
   // S63：归档触发权限与渠道管理同口径、但不含 !readonly——结项项目正是归档主场景
@@ -132,17 +135,25 @@ export default function ProjectDetail({ id }: { id: number }) {
         )}
         aside={(
           <div className="min-w-[180px] md:border-l md:border-[var(--color-line-strong)] md:pl-5">
-            <div className="text-[9px] font-semibold tracking-[0.16em] text-[var(--color-ink-faint)]">DELIVERY DATE</div>
-            <span className="num mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--color-ink-soft)]">
-              {readonly ? (p.planEndDate || '—') : (
-                <InlineText type="date" value={p.planEndDate} onSubmit={async (v) => {
-                  try { await api.patchProject(id, { planEndDate: v }); toast('交付日期已更新'); await refresh() } catch (e) { toast((e as Error).message, 'bad') }
-                }} />
-              )}
-              {p.daysToDelivery != null && (p.daysToDelivery >= 0
-                ? <Badge tone={p.daysToDelivery <= 3 ? 'warn' : 'muted'}>{p.daysToDelivery === 0 ? '今日交付' : `剩 ${p.daysToDelivery} 天`}</Badge>
-                : <Badge tone="bad">超期 {-p.daysToDelivery} 天</Badge>)}
-            </span>
+            <div className="text-[9px] font-semibold tracking-[0.16em] text-[var(--color-ink-faint)]">
+              {routine ? 'ROUTINE OPS' : 'DELIVERY DATE'}
+            </div>
+            {routine ? (
+              <span className="mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--color-ink-soft)]">
+                <Badge tone="info">常态项目</Badge>常态化运营 · 无交付日期 · 按周打卡
+              </span>
+            ) : (
+              <span className="num mt-2 flex flex-wrap items-center gap-1.5 text-[12px] text-[var(--color-ink-soft)]">
+                {readonly ? (p.planEndDate || '—') : (
+                  <InlineText type="date" value={p.planEndDate} onSubmit={async (v) => {
+                    try { await api.patchProject(id, { planEndDate: v }); toast('交付日期已更新'); await refresh() } catch (e) { toast((e as Error).message, 'bad') }
+                  }} />
+                )}
+                {p.daysToDelivery != null && (p.daysToDelivery >= 0
+                  ? <Badge tone={p.daysToDelivery <= 3 ? 'warn' : 'muted'}>{p.daysToDelivery === 0 ? '今日交付' : `剩 ${p.daysToDelivery} 天`}</Badge>
+                  : <Badge tone="bad">超期 {-p.daysToDelivery} 天</Badge>)}
+              </span>
+            )}
           </div>
         )}
         actions={(
@@ -171,24 +182,29 @@ export default function ProjectDetail({ id }: { id: number }) {
       )}
 
       {/* S42（v0.44）：进度（堆叠条/完成率）与排期（任务级甘特+里程碑刻度）一屏总览；v0.49 起交付日期入轴（S42-5）。
-          S57（v0.62）：进度与甘特只认工作类——纯提醒送达不算工作完成度（与 brief/metrics 口径一致，K40）。 */}
-      <ProgressSchedule tasks={p.tasks.filter((t) => t.kind !== 'reminder')} milestones={p.milestones} projectEndDate={p.planEndDate} />
+          S57（v0.62）：进度与甘特只认工作类——纯提醒送达不算工作完成度（与 brief/metrics 口径一致，K40）。
+          S69（v0.80，K64）：常态项目以周视图二维表代替——甘特对无期限项目无意义。 */}
+      {routine
+        ? <DailyWeekGrid projectId={id} readonly={readonly} onChanged={() => void refresh()} />
+        : <ProgressSchedule tasks={p.tasks.filter((t) => t.kind !== 'reminder')} milestones={p.milestones} projectEndDate={p.planEndDate} />}
 
       <Card title={`02 · 任务面（${p.tasks.length}）${readonly ? ' · 只读' : ''}`} actions={!readonly ? (
         <div className="flex gap-2">
-          {/* S39：AI 初始分配——按类型初始化提示词批量产「责任人+排期」草案，人审后一键应用 */}
-          {p.tasks.some((t) => t.status !== 'done') && (
+          {/* S39：AI 初始分配——按类型初始化提示词批量产「责任人+排期」草案，人审后一键应用（交付项目专用，常态任务无排期语义） */}
+          {!routine && p.tasks.some((t) => t.status !== 'done') && (
             <Btn small onClick={() => setInitAssigning(true)} title="按类型初始化提示词批量分配责任人与计划起止（草案可改，应用后生效）"><Sparkles aria-hidden="true" size={13} />AI 初始分配</Btn>
           )}
           <Btn small onClick={() => void 0} title="底部添加行">在下方添加</Btn>
         </div>
       ) : undefined}>
-        {p.tasks.length === 0 ? <Empty hint="暂无任务（自由创建项目可手工添加）" /> : (
+        {p.tasks.length === 0 ? <Empty hint={routine ? '暂无常态任务（每行一条，选适用星期，按周打卡）' : '暂无任务（自由创建项目可手工添加）'} /> : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[44rem] text-[13px]">
               <thead className="text-left text-[10px] font-medium tracking-[0.07em] text-[var(--color-ink-soft)]">
                 <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap [&>th]:px-3 [&>th]:py-3">
-                  <th className="py-1.5">任务</th><th>责任人（唯一）</th><th>状态</th><th>计划开始</th><th>计划结束</th><th>备注</th><th>标记</th><th></th>
+                  {routine
+                    ? <>任务<th>责任人（唯一）</th><th>适用星期</th><th>备注</th><th>标记</th><th></th></>
+                    : <>任务<th>责任人（唯一）</th><th>状态</th><th>计划开始</th><th>计划结束</th><th>备注</th><th>标记</th><th></th></>}
                 </tr>
               </thead>
               <tbody>
@@ -214,28 +230,53 @@ export default function ProjectDetail({ id }: { id: number }) {
                         </select>
                       )}
                     </td>
-                    <td>
-                      {readonly ? (
-                        <Badge tone={statusTone} data-testid="task-status-badge" data-tone={statusTone}>{TASK_STATUS_LABEL[t.status] || t.status}</Badge>
-                      ) : (
-                        <InlineSelect value={t.status} options={TASK_STATUS_LABEL} tones={TASK_STATUS_TONE} onSubmit={async (v) => { await api.patchTask(t.id, { status: v }); await refresh() }} />
-                      )}
-                    </td>
-                    <td className="num">{readonly ? (t.planStartDate || '—') : <InlineText type="date" value={t.planStartDate} onSubmit={async (v) => { await api.patchTask(t.id, { planStartDate: v }); await refresh() }} />}</td>
-                    <td className={`num ${t.isOverdue ? 'text-[var(--color-bad)]' : ''}`}>{readonly ? (t.planEndDate || '—') : <InlineText type="date" value={t.planEndDate} onSubmit={async (v) => { await api.patchTask(t.id, { planEndDate: v }); await refresh() }} />}</td>
-                    <td className="max-w-[10rem]">
-                      {/* S58：任务备注（≤200 字）——模板默认值立项拷贝，实例独立改；提醒/预警推送自动携带 */}
-                      {readonly ? <span className="block truncate" title={t.note || ''}>{t.note || '—'}</span> : (
-                        <InlineText value={t.note} placeholder="点此补备注" className="block max-w-[10rem] truncate"
-                          onSubmit={async (v) => { await api.patchTask(t.id, { note: v }); await refresh() }} />
-                      )}
-                    </td>
-                    <td>
-                      {t.isOverdue && <Badge tone="bad">逾期</Badge>}
-                      {t.kind === 'reminder' && <Badge tone="info" data-testid="reminder-badge">⏰ 提醒</Badge>}
-                      {t.kind === 'reminder' && t.remindedAt && <Badge tone="ok">已送达</Badge>}
-                      {!!t.refCount && <Badge tone="info">参考 {t.refCount}</Badge>}
-                    </td>
+                    {routine ? (
+                      <>
+                        {/* S69：适用星期（勾选改，≥1 天；行=模板，每日执行走周视图打卡） */}
+                        <td>
+                          {readonly ? (t.weekdays?.length === 7 || !t.weekdays ? '每天' : `每周${t.weekdays.map((d) => '一二三四五六日'[d - 1]).join('、')}`) : (
+                            <WeekdayPicker
+                              value={t.weekdays?.length ? t.weekdays : [1, 2, 3, 4, 5, 6, 7]}
+                              onChange={async (v) => { try { await api.patchTask(t.id, { weekdays: v }); toast('适用星期已更新'); await refresh() } catch (e) { toast((e as Error).message, 'bad') } }} />
+                          )}
+                        </td>
+                        <td className="max-w-[10rem]">
+                          {readonly ? <span className="block truncate" title={t.note || ''}>{t.note || '—'}</span> : (
+                            <InlineText value={t.note} placeholder="点此补备注" className="block max-w-[10rem] truncate"
+                              onSubmit={async (v) => { await api.patchTask(t.id, { note: v }); await refresh() }} />
+                          )}
+                        </td>
+                        <td>
+                          <Badge tone="info" data-testid="routine-badge">🔁 常态</Badge>
+                          {!!t.refCount && <Badge tone="info">参考 {t.refCount}</Badge>}
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td>
+                          {readonly ? (
+                            <Badge tone={statusTone} data-testid="task-status-badge" data-tone={statusTone}>{TASK_STATUS_LABEL[t.status] || t.status}</Badge>
+                          ) : (
+                            <InlineSelect value={t.status} options={TASK_STATUS_LABEL} tones={TASK_STATUS_TONE} onSubmit={async (v) => { await api.patchTask(t.id, { status: v }); await refresh() }} />
+                          )}
+                        </td>
+                        <td className="num">{readonly ? (t.planStartDate || '—') : <InlineText type="date" value={t.planStartDate} onSubmit={async (v) => { await api.patchTask(t.id, { planStartDate: v }); await refresh() }} />}</td>
+                        <td className={`num ${t.isOverdue ? 'text-[var(--color-bad)]' : ''}`}>{readonly ? (t.planEndDate || '—') : <InlineText type="date" value={t.planEndDate} onSubmit={async (v) => { await api.patchTask(t.id, { planEndDate: v }); await refresh() }} />}</td>
+                        <td className="max-w-[10rem]">
+                          {/* S58：任务备注（≤200 字）——模板默认值立项拷贝，实例独立改；提醒/预警推送自动携带 */}
+                          {readonly ? <span className="block truncate" title={t.note || ''}>{t.note || '—'}</span> : (
+                            <InlineText value={t.note} placeholder="点此补备注" className="block max-w-[10rem] truncate"
+                              onSubmit={async (v) => { await api.patchTask(t.id, { note: v }); await refresh() }} />
+                          )}
+                        </td>
+                        <td>
+                          {t.isOverdue && <Badge tone="bad">逾期</Badge>}
+                          {t.kind === 'reminder' && <Badge tone="info" data-testid="reminder-badge">⏰ 提醒</Badge>}
+                          {t.kind === 'reminder' && t.remindedAt && <Badge tone="ok">已送达</Badge>}
+                          {!!t.refCount && <Badge tone="info">参考 {t.refCount}</Badge>}
+                        </td>
+                      </>
+                    )}
                     <td className="whitespace-nowrap">
                       <Btn small kind="ghost" onClick={() => setRefsTask({ id: t.id, title: t.title })}>参考</Btn>
                       <Btn small kind="ghost" onClick={() => setRecordsTaskId(t.id)}>记录</Btn>
@@ -256,7 +297,7 @@ export default function ProjectDetail({ id }: { id: number }) {
             </table>
           </div>
         )}
-        {!readonly && <AddTask projectId={id} members={activeMembers} onDone={refresh} />}
+        {!readonly && <AddTask projectId={id} members={activeMembers} routine={routine} onDone={refresh} />}
       </Card>
 
       <section>
@@ -551,33 +592,42 @@ function TaskRefsModal({ taskId, taskTitle, readonly, onClose }: { taskId: numbe
   )
 }
 
-function AddTask({ projectId, members, onDone }: { projectId: number; members: Member[]; onDone: () => Promise<void> }) {
+function AddTask({ projectId, members, routine, onDone }: { projectId: number; members: Member[]; routine?: boolean; onDone: () => Promise<void> }) {
   const [title, setTitle] = useState('')
   const [note, setNote] = useState('') // S58：任务备注（可选，≤200 字；提醒/预警推送自动携带）
   const [owner, setOwner] = useState('') // S38：新建默认未指派（责任人与项目牵头人解耦，K20）
   const [kind, setKind] = useState('work') // S57：work=工作 / reminder=纯提醒（到期推送后自动完成）
   const [date, setDate] = useState('') // S57：纯提醒的提醒日（=planEndDate，必填）
+  const [weekdays, setWeekdays] = useState<number[]>([1, 2, 3, 4, 5, 6, 7]) // S69：常态任务适用星期（缺省每天）
   const submit = async () => {
     if (!title.trim()) return
     if (kind === 'reminder' && !date) return
     await api.createTask({
-      projectId, title, kind,
-      ...(kind === 'reminder' ? { planEndDate: date } : {}),
+      projectId, title, kind: routine ? 'routine' : kind,
+      ...(routine ? { weekdays } : {}),
+      ...(kind === 'reminder' && !routine ? { planEndDate: date } : {}),
       ...(note.trim() ? { note: note.trim() } : {}),
       ...(owner ? { responsibleMemberId: Number(owner) } : {}),
     })
     setTitle(''); setNote(''); setOwner(''); setDate(''); await onDone()
   }
-  const reminder = kind === 'reminder'
+  const reminder = !routine && kind === 'reminder'
   return (
     <div className="mt-3 flex flex-wrap gap-2">
-      <select className="cell-input w-full sm:w-28" aria-label="新任务分类" value={kind}
-        onChange={(e) => setKind(e.target.value)}>
-        <option value="work">工作</option>
-        <option value="reminder">⏰ 纯提醒</option>
-      </select>
+      {!routine && (
+        <select className="cell-input w-full sm:w-28" aria-label="新任务分类" value={kind}
+          onChange={(e) => setKind(e.target.value)}>
+          <option value="work">工作</option>
+          <option value="reminder">⏰ 纯提醒</option>
+        </select>
+      )}
+      {routine && (
+        <span className="flex items-center gap-1.5" aria-label="适用星期">
+          <WeekdayPicker value={weekdays} onChange={setWeekdays} />
+        </span>
+      )}
       <input className="cell-input min-w-[12rem] flex-1"
-        placeholder={reminder ? '新增提醒标题（提醒日推责任人+项目群后自动完成）' : '新增任务标题（默认未指派，Enter 保存）'}
+        placeholder={routine ? '新增常态任务标题（选适用星期，按周打卡，Enter 保存）' : reminder ? '新增提醒标题（提醒日推责任人+项目群后自动完成）' : '新增任务标题（默认未指派，Enter 保存）'}
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') void submit() }} />
@@ -764,7 +814,8 @@ function AddEvent({ projectId, onDone }: { projectId: number; onDone: () => Prom
 }
 
 function CloseModal({ p, onClose, onDone }: { p: ProjectDetail; onClose: () => void; onDone: () => Promise<void> }) {
-  const [unfinished, setUnfinished] = useState(() => p.tasks.filter((t) => t.status !== 'done'))
+  const routine = p.kind === 'routine' // S69：常态项目结项豁免「全部任务完成」（手动结项即可）
+  const [unfinished, setUnfinished] = useState(() => (routine ? [] : p.tasks.filter((t) => t.status !== 'done')))
   const [summary, setSummary] = useState('')
   const [err, setErr] = useState('')
   const [drafting, setDrafting] = useState(false)
@@ -790,8 +841,14 @@ function CloseModal({ p, onClose, onDone }: { p: ProjectDetail; onClose: () => v
     } catch (e) { setErr((e as Error).message) }
   }
   return (
-    <Modal title="结项（S8）：所有任务标记完成后方可结项；结项总结必填（S29）" onClose={onClose} wide>
-      {unfinished.length === 0 ? <div className="mb-3 text-[13px] text-[var(--color-ink-soft)]">无未完任务，可直接结项。</div> : (
+    <Modal title={routine
+      ? '结项（S8）：常态项目手动结项，豁免「全部任务完成」（S69）；结项总结必填（S29）'
+      : '结项（S8）：所有任务标记完成后方可结项；结项总结必填（S29）'} onClose={onClose} wide>
+      {routine ? (
+        <div className="mb-3 text-[13px] text-[var(--color-ink-soft)]" data-testid="routine-close-note">
+          常态项目无「全部任务完成」要求——任务行是每日打卡模板，直接结项即可；结项后周视图与任务面转只读，历史打卡记录保留可查。
+        </div>
+      ) : unfinished.length === 0 ? <div className="mb-3 text-[13px] text-[var(--color-ink-soft)]">无未完任务，可直接结项。</div> : (
         <div className="mb-3">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-[13px]">未完任务 {unfinished.length} 项（v0.6：唯一终态=完成，无「取消」处置）</span>
