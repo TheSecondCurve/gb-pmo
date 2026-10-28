@@ -7,14 +7,18 @@
 // dedicated-only（S60 同口径）；项目级日幂等（pushes morning+project+北京日判重，定时与 S67-5 手动触发同受保护）；
 // v0.77 起重启/停机跨过 cron 时点不补跑（调度器锚点=进程启动时刻，错过当日走手动触发）；
 // 纯只读汇总推送，不改任何业务数据、不进确认卡。
+// S71（v0.83，K67）：常态项目分叉专用盘面——今日/明日待办（适用星期与打卡状态，与周视图同源）
+// + 昨日以来动态置尾；不经 LLM；交付项目口径原样。
 
-import { today, bjDayStartMs, addDays } from '../db/time.js'
+import { today, bjDayStartMs, addDays, weekdayOf, DAY_MS } from '../db/time.js'
 import { morningReport } from '../engine/morning.js'
+import { parseWeekdays, ALL_WEEK } from '../engine/dailyBoard.js'
+import { label } from '../engine/enums.js'
 import { getLlm } from './llm.js'
 import { notifyProjectChannel } from './push.js'
 
 const UPCOMING_START_DAYS = 7
-const MORNING_PUSH_LIMITS = { upcomingStarts: 5 }
+const MORNING_PUSH_LIMITS = { upcomingStarts: 5, events: 5 }
 
 /** 近期开工：未来 7 天计划开工、尚未开始的未完工作任务（K40：纯提醒不进追踪口径，不混入）。 */
 function upcomingStarts(db, projectId, todayStr) {
@@ -88,13 +92,83 @@ function composeBody(block, upcoming, overview) {
   return lines.join('\n')
 }
 
+// —— S71（v0.83，K67）：常态项目专用盘面（与周视图 dailyBoard 同源：适用星期判定 + 当日打卡记录） ——
+
+const WEEKDAY_CN = '日一二三四五六'
+const ROUTINE_STATUS_LABEL = { pending: '未做', skip: '⤴ 跳过', done: '✓ 已完成' }
+const ROUTINE_SORT = { pending: 0, skip: 1, done: 2 }
+
+/** 某日的常态待办清单：适用星期判定当日适用；withStatus 时读当日打卡记录（明日纯预览不查——未来打卡本就被 S69 拒）。 */
+function routineTodos(db, projectId, day, { withStatus = false } = {}) {
+  const wd = weekdayOf(day)
+  const rows = db.prepare(
+    `SELECT t.id, t.title, t.weekdays, m.name AS responsible FROM tasks t
+     LEFT JOIN members m ON m.id = t.responsible_member_id
+     WHERE t.project_id = ? AND t.kind = 'routine' AND t.deleted_at IS NULL ORDER BY t.id`
+  ).all(projectId)
+  const statusStmt = withStatus
+    ? db.prepare('SELECT status FROM task_day_records WHERE task_id = ? AND day = ?')
+    : null
+  const items = rows
+    .filter((t) => (parseWeekdays(t.weekdays) ?? ALL_WEEK).includes(wd))
+    .map((t) => ({
+      title: t.title,
+      responsible: t.responsible,
+      status: statusStmt ? (statusStmt.get(t.id, day)?.status || 'pending') : 'pending',
+    }))
+    .sort((a, b) => ROUTINE_SORT[a.status] - ROUTINE_SORT[b.status]) // 未做排前（同态保持任务序，sort 稳定）
+  const counts = { pending: 0, skip: 0, done: 0 }
+  if (withStatus) for (const it of items) counts[it.status] += 1
+  return { day, weekdayCn: `周${WEEKDAY_CN[wd % 7]}`, items, counts }
+}
+
+/** 昨日以来动态（与 morning.js blockFor 同口径：昨日零点起、effective、四类、≤5 条）。 */
+function routineEvents(db, projectId, sinceMs) {
+  return db.prepare(
+    `SELECT e.event_type, e.business_time, e.summary, COALESCE(e.speaker_label, '—') AS speaker FROM project_events e
+     WHERE e.project_id = ? AND e.status = 'effective' AND e.event_type IN ('progress','risk','blocker','decision') AND e.business_time >= ?
+     ORDER BY e.business_time DESC LIMIT ?`
+  ).all(projectId, sinceMs, MORNING_PUSH_LIMITS.events)
+    .map((r) => ({ typeLabel: label('eventType', r.event_type), date: today(r.business_time), summary: r.summary, speaker: r.speaker }))
+}
+
+/** 常态版正文：说明行 +【今日待办】（带状态，未做排前）+【明日待办】（纯预览）+【昨日以来动态】（置尾）。 */
+function composeRoutineBody(db, p, { todayStr, sinceMs }) {
+  const todayTodos = routineTodos(db, p.id, todayStr, { withStatus: true })
+  const tomorrowStr = addDays(todayStr, 1)
+  const tomorrowTodos = routineTodos(db, p.id, tomorrowStr)
+  const events = routineEvents(db, p.id, sinceMs)
+  const ownerOf = (t) => `默认归属人：${t.responsible || '未指派'}`
+
+  const lines = []
+  lines.push('按各任务适用星期生成；默认归属人负责日常执行，其他成员可协助打卡（@我 说「XX 打卡」）。')
+  lines.push('')
+  lines.push(`**【今日待办】（${todayStr} ${todayTodos.weekdayCn} · 共 ${todayTodos.items.length} 项 · 未做 ${todayTodos.counts.pending} / 跳过 ${todayTodos.counts.skip} / 已完成 ${todayTodos.counts.done}）**`)
+  lines.push(
+    todayTodos.items.length
+      ? todayTodos.items.map((t) => `- ${t.title}（${ownerOf(t)}）${ROUTINE_STATUS_LABEL[t.status]}`).join('\n')
+      : '- 今日无适用任务（按各任务适用星期）'
+  )
+  lines.push('')
+  lines.push(`**【明日待办】（${tomorrowStr} ${tomorrowTodos.weekdayCn} · 共 ${tomorrowTodos.items.length} 项）**`)
+  lines.push(
+    tomorrowTodos.items.length
+      ? tomorrowTodos.items.map((t) => `- ${t.title}（${ownerOf(t)}）`).join('\n')
+      : '- 明日无适用任务（按各任务适用星期）'
+  )
+  lines.push('')
+  lines.push('**【昨日以来动态】**')
+  lines.push(events.length ? events.map((e) => `- ${e.date} ${e.speaker}：${e.summary}（${e.typeLabel}）`).join('\n') : '- 昨日以来无动态')
+  return lines.join('\n')
+}
+
 /** 调度入口：遍历在跑项目逐个推送（单项目失败不阻塞其余，结果逐项回显）。 */
 export async function dailyProjectMorningPush(db, { llm: llmOverride, send, now = Date.now } = {}) {
   const nowMs = now()
   const todayStr = today(nowMs)
   const dayStart = bjDayStartMs(nowMs)
   const projects = db.prepare(
-    `SELECT id, name FROM projects WHERE status = 'active'
+    `SELECT id, name, kind FROM projects WHERE status = 'active'
      ORDER BY CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END, id`
   ).all()
   const results = []
@@ -116,12 +190,13 @@ export async function dailyProjectMorningPush(db, { llm: llmOverride, send, now 
       continue
     }
     try {
-      const block = morningReport(db, { projectId: p.id, now: nowMs }).projects[0]
-      const upcoming = upcomingStarts(db, p.id, todayStr)
-      const overview = await writeOverview(db, p.id, block, upcoming, { llmOverride })
+      // S71：常态项目走专用盘面（今日/明日待办，不经 LLM）；交付项目维持 S68 四节骨架 + LLM 综述
+      const body = p.kind === 'routine'
+        ? composeRoutineBody(db, p, { todayStr, sinceMs: dayStart - DAY_MS })
+        : await composeDeliveryBody(db, p, { todayStr, nowMs, llmOverride })
       await notifyProjectChannel(
         db, p.id,
-        { pushType: 'morning', title: `项目晨报 ${todayStr} · ${p.name}`, body: composeBody(block, upcoming, overview) },
+        { pushType: 'morning', title: `项目晨报 ${todayStr} · ${p.name}`, body },
         { send }
       )
       results.push({ projectId: p.id, pushed: true })
@@ -130,4 +205,12 @@ export async function dailyProjectMorningPush(db, { llm: llmOverride, send, now 
     }
   }
   return { at: todayStr, results }
+}
+
+/** 交付项目正文（S68 原样）：S28 确定性块 + 近期开工 + LLM 综述。 */
+async function composeDeliveryBody(db, p, { todayStr, nowMs, llmOverride }) {
+  const block = morningReport(db, { projectId: p.id, now: nowMs }).projects[0]
+  const upcoming = upcomingStarts(db, p.id, todayStr)
+  const overview = await writeOverview(db, p.id, block, upcoming, { llmOverride })
+  return composeBody(block, upcoming, overview)
 }
