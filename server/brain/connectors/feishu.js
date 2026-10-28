@@ -439,12 +439,22 @@ export async function listDocRootBlocks(cfg, documentId) {
   return items
 }
 
-/** 在文档根 index 处插入一组 block（index 省略=追加末尾）。返回创建成功的 blocks（含 block_id，首块即幂等锚点）。 */
+/** 飞书 docx 批量建块单次 children 硬上限：超限整包被拒——99992402 field validation failed
+ *  （v0.80.1 工程防线：gb-test 线上 run#1 实证，~80 块一次 POST；分批 ≤50 逐次提交）。 */
+export const DOCX_CHILDREN_BATCH = 50
+
+/** 在文档根 index 处插入一组 block（index 省略=追加末尾）；超单次上限自动分批（每批 ≤50、index 随批递增）。
+ *  返回按序拼接的创建结果（含 block_id，首块即幂等锚点——分批后仍为首批首块）。 */
 export async function insertDocBlocks(cfg, documentId, blocks, index) {
-  const body = { children: blocks }
-  if (index !== undefined) body.index = index
-  const data = await feishuApi(cfg, `/docx/v1/documents/${documentId}/blocks/${documentId}/children`, { method: 'POST', body })
-  return data.children || []
+  const created = []
+  for (let offset = 0; offset < blocks.length; offset += DOCX_CHILDREN_BATCH) {
+    const batch = blocks.slice(offset, offset + DOCX_CHILDREN_BATCH)
+    const body = { children: batch }
+    if (index !== undefined) body.index = index + offset
+    const data = await feishuApi(cfg, `/docx/v1/documents/${documentId}/blocks/${documentId}/children`, { method: 'POST', body })
+    created.push(...(data.children || []))
+  }
+  return created
 }
 
 /** 删除文档根 [startIndex, endIndex) 区间子块（S63 重跑先删旧生成区再原位写新版）。 */

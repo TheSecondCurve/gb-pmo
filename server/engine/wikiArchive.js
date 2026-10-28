@@ -49,7 +49,9 @@ const heading2 = (content) => ({ block_type: 4, heading2: { elements: [{ text_ru
 const heading3 = (content) => ({ block_type: 5, heading3: { elements: [{ text_run: { content } }] } })
 const bullet = (content) => ({ block_type: 12, bullet: { elements: [{ text_run: { content } }] } })
 const imageBlock = (token) => ({ block_type: 27, image: { token } })
-const fileBlock = (token, name) => ({ block_type: 18, file: { token, name } })
+// v0.80.1 工程防线：file 块创建载荷按官方 schema 仅含 token——多带 name 有 99992402 严格校验风险；
+// 文件名由紧邻的图注文本块承担（collectFileBlocks 已写「日期 说话人 · 文件名」）。
+const fileBlock = (token) => ({ block_type: 18, file: { token } })
 
 /** 读 block 纯文本（章节标题匹配/标记行扫描共用）。 */
 function blockText(b) {
@@ -270,7 +272,7 @@ async function collectFileBlocks(db, cfg, documentId, files) {
       if (!token) throw new Error('素材上传未返回 file_token')
       const speaker = mapSpeaker(db, 'feishu', m.speakerId)?.name ?? '未识别'
       blocks.push(textBlock(`${today(m.ts)} ${speaker} · ${name}`))
-      blocks.push(fileBlock(token, name))
+      blocks.push(fileBlock(token))
       done++
     } catch (e) {
       skipped.push({ name, reason: String(e?.message || e).slice(0, 80) })
