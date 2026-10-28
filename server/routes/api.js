@@ -103,9 +103,28 @@ export function registerApiRoutes(app) {
   // 项目类型清单：登录可读（立项表单选项；D1 全员透明），维护在 /admin 段
   app.get('/api/v1/project-types', async () => ({ types: projectTypes.listProjectTypes(db) }))
 
+  // S30-7（v0.79，K62）：服务端查询——status（缺省仅进行中）/q 模糊/priority/sort/unscheduled·overdue/page·pageSize；
+  // 响应 { projects, total, facets }；不带分页参数=全量返回（Dashboard 等既有消费方）
   app.get('/api/v1/projects', async (req) => {
-    const statuses = req.query.status ? String(req.query.status).split(',') : undefined
-    return { projects: projects.listProjects(db, { statuses }) }
+    const { q, priority, sort, page, pageSize, unscheduled, overdue } = req.query
+    const statusList = req.query.status ? String(req.query.status).split(',').map((s) => s.trim()).filter(Boolean) : undefined
+    const bad = (msg) => Object.assign(new Error(msg), { statusCode: 400 })
+    if (priority !== undefined && priority !== '' && !['high', 'medium', 'low'].includes(String(priority))) throw bad('priority 仅支持 high/medium/low')
+    if (sort !== undefined && sort !== '' && !projects.PROJECT_SORT_KEYS.includes(String(sort))) {
+      throw bad(`sort 仅支持 ${projects.PROJECT_SORT_KEYS.join('/')}`)
+    }
+    const pageNum = page !== undefined && page !== '' ? Number(page) : undefined
+    if (pageNum !== undefined && (!Number.isInteger(pageNum) || pageNum < 1)) throw bad('page 须为 ≥1 的整数')
+    const sizeNum = pageSize !== undefined && pageSize !== '' ? Number(pageSize) : (pageNum !== undefined ? 20 : undefined)
+    if (sizeNum !== undefined && (!Number.isInteger(sizeNum) || sizeNum < 1 || sizeNum > 100)) throw bad('pageSize 须为 1~100 的整数')
+    const qt = q === undefined ? undefined : String(q).trim()
+    if (qt && qt.length > 100) throw bad('q 过长（≤100 字符）')
+    return projects.queryProjects(db, {
+      statuses: statusList, q: qt || undefined, priority: priority || undefined, sort: sort || undefined,
+      unscheduledOnly: unscheduled === '1' || unscheduled === 'true',
+      overdueOnly: overdue === '1' || overdue === 'true',
+      page: pageNum, pageSize: sizeNum,
+    })
   })
 
   app.post('/api/v1/projects', async (req, reply) => {

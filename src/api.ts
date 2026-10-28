@@ -44,6 +44,23 @@ export const api = {
   // S30：可传状态集合（组合页取全部三态）；不传=服务端缺省仅进行中（Dashboard 依赖该缺省，勿改默认行为）
   projects: (statuses?: string[]) => req<{ projects: import('./types').ProjectRow[] }>(
     'GET', `/api/v1/projects${statuses?.length ? `?status=${statuses.join(',')}` : ''}`),
+  // S30-7（v0.79，K62）：组合页服务端查询——q 模糊/priority/sort/unscheduled·overdue/分页；total+facets 同响应
+  projectsQuery: (p: {
+    statuses?: string[]; q?: string; priority?: string; sort?: string
+    unscheduled?: boolean; overdue?: boolean; page?: number; pageSize?: number
+  } = {}) => {
+    const s = new URLSearchParams()
+    if (p.statuses?.length) s.set('status', p.statuses.join(','))
+    if (p.q) s.set('q', p.q)
+    if (p.priority && p.priority !== 'all') s.set('priority', p.priority)
+    if (p.sort) s.set('sort', p.sort)
+    if (p.unscheduled) s.set('unscheduled', '1')
+    if (p.overdue) s.set('overdue', '1')
+    if (p.page) s.set('page', String(p.page))
+    if (p.pageSize) s.set('pageSize', String(p.pageSize))
+    return req<{ projects: import('./types').ProjectRow[]; total: number; facets: { byStatus: Record<string, number>; unscheduled: number; overdueTasks: number } }>(
+      'GET', `/api/v1/projects?${s}`)
+  },
   project: (id: number) => req<import('./types').ProjectDetail>('GET', `/api/v1/projects/${id}`),
   createProject: (p: Record<string, unknown>) => req<import('./types').ProjectDetail>('POST', '/api/v1/projects', p),
   patchProject: (id: number, p: Record<string, unknown>) => req<import('./types').ProjectDetail>('PATCH', `/api/v1/projects/${id}`, p),
