@@ -74,3 +74,65 @@ describe('S5 全局 dashboard（指标同源）', () => {
     expect(cat.json().metrics[0]).toHaveProperty('definition')
   })
 })
+
+describe('S5-5 终态项目退出指标口径（v0.79，K63）', () => {
+  let ctx2
+  afterAll(() => ctx2?.db.close())
+
+  it('S5-5: 取消项目冻结任务不计逾期/未指派/负载；结项·取消不进在跑；无交付日期在跑项目照常计入', async () => {
+    ctx2 = await setupApp()
+    const cookie = await loginCookie(ctx2.app, 'admin', 'admin-pass-123')
+    const yesterday = addDays(today(), -1)
+    const base = { templateCode: 'lianmai_365', leadMemberId: ctx2.members.lead.id }
+
+    // 在跑：无任何日期（「开口」项目，必须照常计入看板）
+    const noDate = await authed(ctx2.app, cookie, 'POST', '/api/v1/projects', { ...base, name: '无日期在跑', tasks: [] })
+    expect(noDate.status).toBe(201)
+    // 在跑：一条有主逾期任务
+    const overdue = await authed(ctx2.app, cookie, 'POST', '/api/v1/projects', { ...base, name: '有逾期在跑', tasks: ['逾期任务'] })
+    await authed(ctx2.app, cookie, 'PATCH', `/api/v1/tasks/${overdue.body.tasks[0].id}`,
+      { planEndDate: yesterday, responsibleMemberId: ctx2.members.lead.id })
+    // 取消：两条冻结任务（甲=有主逾期；乙=未指派逾期）——冻结后退出指标口径（S29-3）
+    const cancelled = await authed(ctx2.app, cookie, 'POST', '/api/v1/projects',
+      { ...base, name: '取消冻结', tasks: ['冻结任务甲', '冻结任务乙'] })
+    await authed(ctx2.app, cookie, 'PATCH', `/api/v1/tasks/${cancelled.body.tasks[0].id}`,
+      { planEndDate: yesterday, responsibleMemberId: ctx2.members.lead.id })
+    await authed(ctx2.app, cookie, 'PATCH', `/api/v1/tasks/${cancelled.body.tasks[1].id}`, { planEndDate: yesterday })
+    const cx = await authed(ctx2.app, cookie, 'POST', `/api/v1/projects/${cancelled.body.id}/cancel`, { reason: '战略调整' })
+    expect(cx.status).toBe(200)
+    // 结项：空项目
+    const closed = await authed(ctx2.app, cookie, 'POST', '/api/v1/projects', { ...base, name: '已结项项目', tasks: [] })
+    await authed(ctx2.app, cookie, 'POST', `/api/v1/projects/${closed.body.id}/close`, { summary: '交付完成' })
+
+    // 看板列表：仅进行中；无交付日期的在跑项目照常在列（daysToDelivery=null 也不丢）
+    const list = await authed(ctx2.app, cookie, 'GET', '/api/v1/projects')
+    const names = list.body.projects.map((p) => p.name)
+    expect(names).toContain('无日期在跑')
+    expect(names).toContain('有逾期在跑')
+    expect(names).not.toContain('取消冻结')
+    expect(names).not.toContain('已结项项目')
+    const noDateRow = list.body.projects.find((p) => p.name === '无日期在跑')
+    expect(noDateRow.daysToDelivery).toBeNull() // 无交付日期 ≠ 不展示（S21 口径：不派生天数但保留在列）
+
+    // 在跑项目数：仅进行中（2），无日期项目计入
+    const running = queryMetric(ctx2.db, 'running_projects', { groupBy: 'status' })
+    expect(running.rows.reduce((s, r) => s + Number(r.count), 0)).toBe(2)
+
+    // 逾期任务指标：只统计进行中项目——取消项目的冻结逾期任务退出
+    const od = queryMetric(ctx2.db, 'overdue_tasks', { groupBy: 'project' })
+    const odRows = od.rows.map((r) => r.project)
+    expect(odRows).toContain('有逾期在跑')
+    expect(odRows).not.toContain('取消冻结')
+    expect(od.rows.reduce((s, r) => s + Number(r.overdue || 0), 0)).toBe(1)
+
+    // 未指派指标：取消项目的冻结未指派任务退出
+    const un = queryMetric(ctx2.db, 'unassigned_tasks', { groupBy: 'project' })
+    expect(un.rows.map((r) => r.project)).not.toContain('取消冻结')
+
+    // 关键人负载：open_tasks 只数进行中项目的未完任务（冻结任务不计）
+    const load = queryMetric(ctx2.db, 'keyperson_load', { groupBy: 'member' })
+    const zhang = load.rows.find((r) => r.member === '张三')
+    expect(zhang.openTasks).toBe(1)
+    expect(zhang.parallelProjects).toBe(2) // 牵头两个在跑（取消项目本就不计）
+  })
+})

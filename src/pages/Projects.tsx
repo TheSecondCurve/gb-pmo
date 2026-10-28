@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react'
 import { Search } from 'lucide-react'
 import { api } from '../api'
 import { useStore } from '../store'
@@ -8,7 +8,9 @@ import { Badge, Btn, Card, Empty, Field, InlineSelect, Modal, Spinner, inputCls 
 import { PageMasthead } from '../components/editorial'
 import { PRIORITY_LABEL, PROJECT_STATUS_LABEL, type Member, type ProjectRow, type ProjectType } from '../types'
 
-// S30（v0.29）项目组合页：一次取回三态项目，四视图纯前端切换。
+// S30（v0.29）项目组合页：四视图纯前端切换。
+// S30-6/S30-7（v0.79，K62）服务端查询化：默认只取进行中（终态点芯片才纳入）；
+// 筛选（q 模糊/优先级/未排期/逾期）、排序与分页全部服务端完成，前端只消费当前页 + facets 芯片计数。
 // 松散排期语言贯穿全页：日期全可空合法——文案四式（fmtDateRange）、排序 null 沉底成组不穿插、
 // 甘特四形态（gantt.ts 纯函数），不虚构日期、单层甘特（条色=状态）、无拖拽（编辑走表单/就地编辑）。
 
@@ -17,72 +19,72 @@ const VIEWS: { key: PortfolioView; label: string }[] = [
   { key: 'board', label: '看板' }, { key: 'table', label: '表格' }, { key: 'people', label: '人员' }, { key: 'timeline', label: '时间线' },
 ]
 const STATUS_KEYS = ['active', 'closed', 'cancelled'] as const
+const PAGE_SIZES = [20, 50, 100]
 const PRIORITY_ORDER: Record<string, number> = { high: 0, medium: 1, low: 2 }
 const PRIORITY_BAR: Record<string, string> = {
   high: 'border-t-[var(--color-bad)]', medium: 'border-t-[var(--color-warn)]', low: 'border-t-[var(--color-line-strong)]',
 }
 type SortKey = 'priority' | 'delivery' | 'activity' | 'updated'
 const SORT_LABEL: Record<SortKey, string> = { priority: '优先级', delivery: '交付临近', activity: '最近活跃', updated: '最近更新' }
+type Facets = { byStatus: Record<string, number>; unscheduled: number; overdueTasks: number }
+const EMPTY_FACETS: Facets = { byStatus: { active: 0, closed: 0, cancelled: 0 }, unscheduled: 0, overdueTasks: 0 }
 
 export default function Projects({ view }: { view: PortfolioView }) {
   const { toast } = useStore()
   const [projects, setProjects] = useState<ProjectRow[] | null>(null)
+  const [total, setTotal] = useState(0)
+  const [facets, setFacets] = useState<Facets>(EMPTY_FACETS)
   const [members, setMembers] = useState<Member[]>([])
   const [creating, setCreating] = useState(false)
   const [unassigned, setUnassigned] = useState<number>(0)
-  const [statuses, setStatuses] = useState<Set<string>>(new Set(STATUS_KEYS))
+  const [statuses, setStatuses] = useState<Set<string>>(new Set(['active'])) // S30-6：默认仅进行中，已结项/已取消点芯片纳入
   const [priority, setPriority] = useState('all')
   const [q, setQ] = useState('')
+  const [query, setQuery] = useState('') // 搜索去抖后的取数值
   const [onlyUnscheduled, setOnlyUnscheduled] = useState(false)
   const [onlyOverdue, setOnlyOverdue] = useState(false)
   const [sort, setSort] = useState<SortKey>(() => {
     const saved = localStorage.getItem('pmo.projects.sort') as SortKey | null
     return saved && saved in SORT_LABEL ? saved : 'priority'
   })
+  const [page, setPage] = useState(1)
+  const [pageSize, setPageSize] = useState(20)
 
-  const refresh = async () => {
-    const [p, m, u] = await Promise.all([api.projects([...STATUS_KEYS]), api.members(), api.unassigned()])
-    setProjects(p.projects); setMembers(m.members); setUnassigned(u.tasks.length)
-  }
-  useEffect(() => { void refresh() }, [])
+  useEffect(() => {
+    const t = setTimeout(() => { setQuery(q.trim()); setPage(1) }, 300) // 搜索去抖 300ms，变更后回第一页
+    return () => clearTimeout(t)
+  }, [q])
 
-  const filtered = useMemo(() => (projects || []).filter((p) =>
-    statuses.has(p.status)
-    && (priority === 'all' || p.priority === priority)
-    && (!onlyUnscheduled || dateRangeForm(p.planStartDate, p.planEndDate) === 'none')
-    && (!onlyOverdue || p.overdueTasks > 0)
-    && (!q.trim() || p.name.includes(q.trim()) || (p.clientName || '').includes(q.trim())),
-  ), [projects, statuses, priority, q, onlyUnscheduled, onlyOverdue])
+  const load = useCallback(async () => {
+    const out = await api.projectsQuery({
+      statuses: [...statuses], q: query || undefined, priority, sort,
+      unscheduled: onlyUnscheduled, overdue: onlyOverdue, page, pageSize,
+    })
+    const lastPage = Math.max(1, Math.ceil(out.total / pageSize))
+    if (!out.projects.length && out.total > 0 && page > lastPage) { setPage(lastPage); return } // 筛选收窄后页码越界自动回退
+    setProjects(out.projects); setTotal(out.total ?? out.projects.length)
+    setFacets(out.facets ?? EMPTY_FACETS) // 兜底：旧形态响应不炸页（正常链路服务端必回 facets）
+    setUnassigned((await api.unassigned()).tasks.length)
+  }, [statuses, query, priority, sort, onlyUnscheduled, onlyOverdue, page, pageSize])
 
-  const stats = useMemo(() => ({
-    byStatus: Object.fromEntries(STATUS_KEYS.map((s) => [s, (projects || []).filter((p) => p.status === s).length])),
-    unscheduled: (projects || []).filter((p) => dateRangeForm(p.planStartDate, p.planEndDate) === 'none').length,
-    overdueTasks: (projects || []).reduce((s, p) => s + p.overdueTasks, 0),
-  }), [projects])
+  useEffect(() => { void load() }, [load])
+  useEffect(() => { void (async () => setMembers((await api.members()).members))() }, [])
 
-  const scheduled = useMemo(() => filtered.filter((p) => dateRangeForm(p.planStartDate, p.planEndDate) !== 'none'), [filtered])
-  const unscheduled = useMemo(() => filtered.filter((p) => dateRangeForm(p.planStartDate, p.planEndDate) === 'none'), [filtered])
-  const sortedScheduled = useMemo(() => [...scheduled].sort((a, b) => {
-    if (sort === 'delivery') {
-      const av = a.daysToDelivery ?? Infinity, bv = b.daysToDelivery ?? Infinity // null 沉底（S30-2 不穿插）
-      if (av !== bv) return av - bv
-      return PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]
-    }
-    if (sort === 'activity') return (b.lastEventAt ?? 0) - (a.lastEventAt ?? 0)
-    if (sort === 'updated') return b.updatedAt - a.updatedAt
-    const pr = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority]
-    return pr !== 0 ? pr : b.updatedAt - a.updatedAt
-  }), [scheduled, sort])
+  // 当前页内的展示分组：有排期/未排期（S30-2 null 沉底成组不穿插——分组展示语言，行序来自服务端排序）
+  const scheduled = useMemo(() => (projects || []).filter((p) => dateRangeForm(p.planStartDate, p.planEndDate) !== 'none'), [projects])
+  const unscheduled = useMemo(() => (projects || []).filter((p) => dateRangeForm(p.planStartDate, p.planEndDate) === 'none'), [projects])
 
   if (!projects) return <Spinner />
 
+  const totalArchive = facets.byStatus.active + facets.byStatus.closed + facets.byStatus.cancelled
+  const lastPage = Math.max(1, Math.ceil(total / pageSize))
   const toggleStatus = (s: string) => setStatuses((prev) => {
     const next = new Set(prev)
     if (next.has(s)) { if (next.size > 1) next.delete(s) } else next.add(s) // 至少保留一个状态
     return next
   })
   const onPriority = async (p: ProjectRow, v: string) => {
-    await api.patchProject(p.id, { priority: v }); toast('优先级已调整并留痕'); await refresh()
+    await api.patchProject(p.id, { priority: v }); toast('优先级已调整并留痕'); await load()
   }
 
   return (
@@ -95,7 +97,7 @@ export default function Projects({ view }: { view: PortfolioView }) {
         aside={(
           <div className="md:border-l md:border-[var(--color-line-strong)] md:pl-5">
             <div className="text-[10px] font-semibold tracking-[0.16em] text-[var(--color-ink-faint)]">PROJECT INDEX</div>
-            <div className="num mt-2 text-[12px] text-[var(--color-ink-soft)]">{projects.length} 个档案 · {filtered.length} 个在视</div>
+            <div className="num mt-2 text-[12px] text-[var(--color-ink-soft)]">{totalArchive} 个档案 · {total} 个在视</div>
           </div>
         )}
         actions={(
@@ -108,24 +110,24 @@ export default function Projects({ view }: { view: PortfolioView }) {
 
       <section data-testid="portfolio-toolbar" className="editorial-enter-late">
         <div className="flex flex-col gap-4 border-y border-[var(--color-line)] py-4 xl:flex-row xl:items-center xl:justify-between">
-          {/* 摘要条：三态/未排期/逾期任务计数，点击即过滤（S30） */}
+          {/* 摘要条：三态/未排期/逾期任务计数（服务端 facets，不受状态选择影响），点击即过滤（S30/S30-6） */}
           <div className="flex flex-wrap items-center gap-1.5 text-[12px]">
             {STATUS_KEYS.map((s) => (
-              <FilterChip key={s} active={statuses.has(s)} onClick={() => toggleStatus(s)}>
-                {PROJECT_STATUS_LABEL[s]} {stats.byStatus[s]}
+              <FilterChip key={s} active={statuses.has(s)} onClick={() => { toggleStatus(s); setPage(1) }}>
+                {PROJECT_STATUS_LABEL[s]} {facets.byStatus[s] ?? 0}
               </FilterChip>
             ))}
-            <FilterChip active={onlyUnscheduled} onClick={() => setOnlyUnscheduled(!onlyUnscheduled)}>未排期 {stats.unscheduled}</FilterChip>
-            <FilterChip active={onlyOverdue} onClick={() => setOnlyOverdue(!onlyOverdue)}>逾期任务 {stats.overdueTasks}</FilterChip>
+            <FilterChip active={onlyUnscheduled} onClick={() => { setOnlyUnscheduled(!onlyUnscheduled); setPage(1) }}>未排期 {facets.unscheduled}</FilterChip>
+            <FilterChip active={onlyOverdue} onClick={() => { setOnlyOverdue(!onlyOverdue); setPage(1) }}>逾期任务 {facets.overdueTasks}</FilterChip>
           </div>
 
           <div className="grid grid-cols-2 gap-2 sm:flex sm:items-center">
             <div className="relative col-span-2 w-full sm:col-span-1 sm:w-56">
               <Search aria-hidden="true" size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--color-ink-faint)]" />
-              <input aria-label="搜索" className={`${inputCls} pl-9`} placeholder="搜索项目 / 客户" value={q} onChange={(e) => setQ(e.target.value)} />
+              <input aria-label="搜索" className={`${inputCls} pl-9`} placeholder="搜索项目 / 客户 / 牵头人 / 类型" value={q} onChange={(e) => setQ(e.target.value)} />
             </div>
             <div className="w-full sm:w-36">
-              <select aria-label="优先级" className={inputCls} value={priority} onChange={(e) => setPriority(e.target.value)}>
+              <select aria-label="优先级" className={inputCls} value={priority} onChange={(e) => { setPriority(e.target.value); setPage(1) }}>
                 <option value="all">全部优先级</option>
                 {Object.entries(PRIORITY_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
               </select>
@@ -133,7 +135,7 @@ export default function Projects({ view }: { view: PortfolioView }) {
             {view === 'table' && (
               <div className="w-full sm:w-36">
                 <select aria-label="排序维度" className={inputCls} value={sort}
-                  onChange={(e) => { const v = e.target.value as SortKey; setSort(v); localStorage.setItem('pmo.projects.sort', v) }}>
+                  onChange={(e) => { const v = e.target.value as SortKey; setSort(v); setPage(1); localStorage.setItem('pmo.projects.sort', v) }}>
                   {Object.entries(SORT_LABEL).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
               </div>
@@ -156,16 +158,29 @@ export default function Projects({ view }: { view: PortfolioView }) {
         </div>
       </section>
 
-      <div className="editorial-enter-late">
-        {filtered.length === 0 ? <Card><Empty hint="无符合条件的项目" /></Card> : (
-          view === 'board' ? <BoardView rows={filtered} />
-            : view === 'people' ? <PeopleView rows={filtered} />
-              : view === 'timeline' ? <TimelineView rows={filtered} />
-                : <TableView rows={sortedScheduled} unscheduled={unscheduled} onPriority={onPriority} />
+      <div className="editorial-enter-late space-y-4">
+        {projects.length === 0 ? <Card><Empty hint="无符合条件的项目" /></Card> : (
+          view === 'board' ? <BoardView rows={projects} />
+            : view === 'people' ? <PeopleView rows={projects} />
+              : view === 'timeline' ? <TimelineView rows={projects} />
+                : <TableView rows={scheduled} unscheduled={unscheduled} onPriority={onPriority} />
         )}
+
+        {/* S30-7 分页器：服务端分页，四视图共用 */}
+        <div data-testid="portfolio-pager" className="flex flex-wrap items-center justify-between gap-3 text-[12px] text-[var(--color-ink-soft)]">
+          <span className="num">共 {total} 项 · 第 {page} / {lastPage} 页</span>
+          <div className="flex items-center gap-2">
+            <select aria-label="每页条数" className={`${inputCls} w-auto py-1 text-[12px]`} value={pageSize}
+              onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1) }}>
+              {PAGE_SIZES.map((n) => <option key={n} value={n}>{n} 条/页</option>)}
+            </select>
+            <Btn small disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</Btn>
+            <Btn small disabled={page >= lastPage} onClick={() => setPage(page + 1)}>下一页</Btn>
+          </div>
+        </div>
       </div>
 
-      {creating && <CreateModal members={members} onClose={() => setCreating(false)} onDone={async () => { setCreating(false); toast('立项成功'); await refresh() }} />}
+      {creating && <CreateModal members={members} onClose={() => setCreating(false)} onDone={async () => { setCreating(false); toast('立项成功'); await load() }} />}
     </div>
   )
 }

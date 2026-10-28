@@ -7,7 +7,9 @@ import { getSetting } from './settings.js'
 
 const OPEN_PROJECT = `p.status = 'active'` // S29 三态：在跑=进行中
 // S36：已删任务退出指标口径；S57（v0.62）：追踪口径只认工作类——纯提醒有独立送达通道，不占分母
-const OPEN_TASK = `t.status IN ('todo','doing') AND t.deleted_at IS NULL AND t.kind = 'work'`
+const OPEN_TASK = `t.status IN ('todo','doing','blocked') AND t.deleted_at IS NULL AND t.kind = 'work'`
+// S5-5（v0.79，K63）：任务口径指标只统计进行中项目——终态项目的冻结任务（S29 取消后状态仍 todo/doing）退出
+const OPEN_TASK_IN_ACTIVE_PROJECT = `${OPEN_TASK} AND t.project_id IN (SELECT id FROM projects WHERE status = 'active')`
 const DAY = 86400000
 
 function daysSince(ts) {
@@ -28,7 +30,7 @@ export const METRICS = [
     id: 'overdue_tasks',
     name: '逾期任务数 / 逾期率',
     domain: '经营有效性',
-    definition: '计划结束日<今日且状态≠完成的任务；率=逾期数÷全部未完任务',
+    definition: '计划结束日<今日且状态≠完成的任务；率=逾期数÷全部未完任务；仅统计进行中项目（终态项目冻结任务退出口径，S5-5）',
     dims: ['project', 'member', 'priority'],
     timeBasis: '按日',
     freq: '每日',
@@ -37,7 +39,7 @@ export const METRICS = [
     id: 'unassigned_tasks',
     name: '未指派任务数',
     domain: '业务',
-    definition: '已设计划开始日但责任人留空的任务（默认路径责任人=牵头人，出现即兜底告警）',
+    definition: '已设计划开始日但责任人留空的任务（默认路径责任人=牵头人，出现即兜底告警）；仅统计进行中项目（终态项目冻结任务退出口径，S5-5）',
     dims: ['project', 'lead'],
     timeBasis: '按日',
     freq: '每周',
@@ -64,7 +66,7 @@ export const METRICS = [
     id: 'keyperson_load',
     name: '关键人负载',
     domain: '经营有效性',
-    definition: '每人：进行中项目参与数 + 未完任务数 + 被依赖未满足项数；超过并行上限标红',
+    definition: '每人：进行中项目参与数 + 未完任务数（仅进行中项目，终态冻结任务退出，S5-5）+ 被依赖未满足项数；超过并行上限标红',
     dims: ['member', 'team'],
     timeBasis: '按日',
     freq: '每周',
@@ -142,7 +144,7 @@ const IMPLEMENTATIONS = {
            COUNT(*) AS open_tasks,
            ROUND(1.0 * SUM(CASE WHEN t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY() THEN 1 ELSE 0 END) / COUNT(*), 4) AS overdue_rate
          FROM tasks t LEFT JOIN projects p ON t.project_id = p.id LEFT JOIN members m ON m.id = t.responsible_member_id
-         WHERE ${OPEN_TASK} GROUP BY ${dims.col}`
+         WHERE ${OPEN_TASK_IN_ACTIVE_PROJECT} GROUP BY ${dims.col}`
       )
       .all()
     return { columns: [dims.alias, 'overdue', 'openTasks', 'overdueRate'], rows: camelizeRows(rows) }
@@ -158,7 +160,8 @@ const IMPLEMENTATIONS = {
       .prepare(
         `SELECT ${dims.col} AS ${dims.alias}, COUNT(*) AS count FROM tasks t
          JOIN projects p ON t.project_id = p.id ${dims.join || ''}
-         WHERE t.responsible_member_id IS NULL AND t.plan_start_date IS NOT NULL AND ${OPEN_TASK.replace(/t\./g, 't.')}
+         WHERE t.responsible_member_id IS NULL AND t.plan_start_date IS NOT NULL AND p.status = 'active'
+           AND ${OPEN_TASK_IN_ACTIVE_PROJECT}
          GROUP BY ${dims.col}`
       )
       .all()
@@ -211,7 +214,7 @@ const IMPLEMENTATIONS = {
         `SELECT ${dims} AS ${groupBy}, m.is_key_person, m.max_parallel_projects,
            (SELECT COUNT(DISTINCT p2.id) FROM projects p2 WHERE p2.status = 'active' AND (p2.lead_member_id = m.id
               OR p2.id IN (SELECT project_id FROM tasks WHERE responsible_member_id = m.id AND status IN ('todo','doing','blocked') AND deleted_at IS NULL AND kind = 'work'))) AS parallel_projects,
-           (SELECT COUNT(*) FROM tasks t2 WHERE t2.responsible_member_id = m.id AND t2.status IN ('todo','doing') AND t2.deleted_at IS NULL AND t2.kind = 'work') AS open_tasks
+           (SELECT COUNT(*) FROM tasks t2 WHERE t2.responsible_member_id = m.id AND ${OPEN_TASK_IN_ACTIVE_PROJECT.replace(/t\./g, 't2.')}) AS open_tasks
          FROM members m WHERE m.status = 'active' GROUP BY ${dims}, m.id ORDER BY parallel_projects DESC`
       )
       .all()
