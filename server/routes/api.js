@@ -15,6 +15,7 @@ import { assertValue } from '../engine/enums.js'
 import { listPushes } from '../brain/push.js' // S46 通知收件箱
 import { llmUsage } from '../engine/llmUsage.js' // S47 LLM 用量
 import { myTasksBoard } from '../engine/statusBoard.js' // S66 我的任务工作台
+import * as dailyBoard from '../engine/dailyBoard.js' // S69 常态项目周视图/每日打卡
 
 export function registerApiRoutes(app) {
   const db = app.db
@@ -199,6 +200,16 @@ export function registerApiRoutes(app) {
   app.get('/api/v1/projects/:id/events', async (req) =>
     ({ events: events.listEvents(db, { projectId: Number(req.params.id), status: req.query.status }) })
   )
+
+  // S69（v0.80，K64）：常态项目周视图——GET 取周格子矩阵（week=任意日定位所在周，缺省当前北京自然周）；
+  // POST 打卡（taskId/day/status(pending=重置)/note；可补过去、拒未来；记录型事件留痕）
+  app.get('/api/v1/projects/:id/daily-board', async (req) =>
+    dailyBoard.weeklyBoard(db, Number(req.params.id), { weekAnchor: req.query?.week }))
+
+  app.post('/api/v1/projects/:id/daily-board', async (req, reply) =>
+    reply.status(201).send(
+      dailyBoard.setDayStatus(db, { projectId: Number(req.params.id), ...req.body }, req.member.id)
+    ))
 
   app.post('/api/v1/projects/:id/events', async (req, reply) => {
     return reply.status(201).send(

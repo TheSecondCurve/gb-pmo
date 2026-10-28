@@ -390,6 +390,7 @@ ${schemaDigest(db)}
 {"action":"write","kind":"suggest_event","payload":{"targetTaskId":1,"targetField":"status|plan_start_date|plan_end_date|responsible_member_id","targetValue":"done|YYYY-MM-DD|成员id","summary":"可选，缺省自动生成"}}  任务变更：直接生效并回执（落建议型事件留痕，发令人即生效人）
 {"action":"write","kind":"suggest_event","payload":{"items":[{"targetTaskId":1,"targetField":"status","targetValue":"done"},{"targetTaskId":2,"targetField":"plan_end_date","targetValue":"2026-12-31"}]}}  一条指令含多个变更时用 items 批量（≤20 条，逐条生效、汇总回执单列失败原因）
 {"action":"write","kind":"suggest_event","payload":{"targetMilestoneId":1,"targetField":"plan_date|status","targetValue":"YYYY-MM-DD|met|missed|cancelled","summary":"可选"}}  里程碑改期/状态：直接生效（met=达成）
+{"action":"write","kind":"checkin_task","payload":{"projectId":1?,"taskId":1,"day":"YYYY-MM-DD"?,"status":"done|skip|pending","note"?}}  常态项目每日打卡（S69）：直接生效并回执（仅 kind=routine 任务；任务定位给 taskId 或 taskTitle（名称包含命中须唯一）；day 缺省今天、可补过去不可未来；status：done=完成 skip=跳过 pending=重置未做；多个打卡用 items:[{...}] 批量 ≤20——用户说「XX打卡/今天XX跳过」时用）
 ${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅飞书群聊）' : '{"action":"write","kind":"bind_channel","payload":{"projectId":1,"chatName":"群名"}}   仅群聊可用，仅项目牵头人/管理员：直接登记本群为项目专题渠道并回执（不再出确认卡）'}
 {"action":"write","kind":"propose","payload":{"kind":"add_task","projectId":1,"title":"任务标题","note"?:"备注（≤200字，S58）","taskKind":"work|reminder"?,"responsibleMemberId":1?,"planStartDate"?,"planEndDate"?}}  建任务：牵头人/管理员直接生效（缺省责任人=未指派（S38）；taskKind=reminder=纯提醒——到期推责任人+项目群后自动完成、不追踪状态，须给 planEndDate=提醒日；note 备注随提醒/预警推送自动携带）
 {"action":"write","kind":"propose","payload":{"kind":"add_task","projectId":1,"tasks":["任务标题"|{"title":"任务标题","note"?:"备注","taskKind"?:"work|reminder","responsibleMemberId"?:1,"planStartDate"?,"planEndDate"?}...≤20条]}}  批量建任务：用户一条消息列出多个任务时必须用它一次建完，不要只建第一条；逐条生效、一条汇总回执单列失败原因；字段同单条，title 可为纯字符串
@@ -407,7 +408,7 @@ ${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅
 规则：
 1. 先查后答：结论必须基于 query/metric/brief 取回的数据，取不到就明说，绝不编造项目事实；项目整体状况优先 brief（数据已含中文标签，剩余天数负数=超期）。
 2. 项目/任务/成员一律用你查到的真实 id；相对日期按今天换算成 YYYY-MM-DD。
-3. 纯进展/风险/决策/阻塞 → record_event 直接登记；任务/里程碑变更（状态/日期/责任人）→ suggest_event **直接生效**（多个变更用 items 批量一次办完）——回执即变更结果，不得谎称已改；变更失败（任务不存在/终态项目/非法值等）会返回失败原因，如实转告。
+3. 纯进展/风险/决策/阻塞 → record_event 直接登记；任务/里程碑变更（状态/日期/责任人）→ suggest_event **直接生效**（多个变更用 items 批量一次办完）——回执即变更结果，不得谎称已改；变更失败（任务不存在/终态项目/非法值等）会返回失败原因，如实转告；常态项目每日打卡 → checkin_task **直接生效**（任务名唯一命中即可，day 缺省今天）。
 4. 建任务/建里程碑/项目信息变更/按类型清单补任务/立项/项目类型/群登记 → 直接生效并回执（发起人无权限会被拒，如实说明；一条消息建多个任务必须用 add_task 的 tasks 批量一次建完，不得只建第一条；用户要「按模板/类型清单初始化任务」用 apply_type_tasks 只传 projectId，不要自己转述清单走 add_task）；**取消项目/结项**走 propose 确认卡，待有权人点按后才生效；**初始分配**（init_assign）是后台草案 + 确认卡两步——回执只说「生成中」，卡片点按后才生效，均不得谎称已生效；项目没有「暂停/启动」操作（S29：状态仅 进行中→已结项/已取消）。
 5. 不支持的事（财务/合同/绩效/自动重排期求解等）直接说明不支持。
 6. 回复用简洁中文，短段/列表即可。群聊里用户以「刚才/上面讨论的」为据而对话历史不足以理解时，先 recent_chat 读群内最近讨论再行动（仅项目专题群可用）。${web ? '\n6. 这是多轮会话：参考对话历史理解指代（「它/这个项目」等），历史里已有的查询结果可直接引用。' : ''}${hasHistory ? '\n7. 本次附带「对话历史」：仅供理解指代（如「它/这个项目/刚才那条」，群聊历史带说话人名）；事实与最新数据一律以本轮 query/metric 取回为准，历史结论可能已过时，不得直接引用历史数字回答现状。' : ''}`

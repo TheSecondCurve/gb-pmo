@@ -1,17 +1,22 @@
 import { camelizeRow, camelizeRows } from '../db/index.mjs'
-import { today } from '../db/time.js'
+import { today, isCalendarDay } from '../db/time.js'
 import { assertValue, label } from './enums.js'
 import { getProject } from './projects.js'
 import { memberName } from './members.js'
-import { HTTP_URL, normalizeTaskNote } from './projectTypes.js'
+import { HTTP_URL, normalizeTaskNote, normalizeWeekdays } from './projectTypes.js'
 import { addEvent } from './events.js'
 import { audit } from './auth.js'
+import { parseWeekdays, weekdaysLabel } from './dailyBoard.js'
+
+// v0.80（S69）：isCalendarDay 移入 db/time.js（日期纯函数归位），此处 re-export 维持既有导入方（initAssign 等）
+export { isCalendarDay } from '../db/time.js'
 
 const TASK_COLS = `t.*, m.name AS responsible_name, p.name AS project_name, p.status AS project_status`
 
 function decorate(rows) {
   return rows.map((r) => ({
     ...camelizeRow(r),
+    weekdays: parseWeekdays(r.weekdays),
     isOverdue: Boolean(r.plan_end_date && r.plan_end_date < today() && r.status !== 'done'),
   }))
 }
@@ -63,8 +68,27 @@ const invRow = (t) => ({
  *  v0.50（S45）：返回体扩 scope/groups（卡片模板渲染用）；text 字段内容不变（web/审计消费方零影响）。 */
 export function tasksInventory(db, { projectId } = {}) {
   if (projectId) {
-    const project = db.prepare('SELECT id, name FROM projects WHERE id = ?').get(projectId)
+    const project = db.prepare('SELECT id, name, kind FROM projects WHERE id = ?').get(projectId)
     if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
+    // S69（v0.80）：常态项目按「常态清单」呈现——行=模板（带适用星期/责任人），无「未完」框架与排期
+    if (project.kind === 'routine') {
+      const rows = db.prepare(
+        `SELECT t.id, t.title, t.kind, t.status, t.weekdays, m.name AS responsible_name
+         FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
+         WHERE t.project_id = ? AND t.deleted_at IS NULL ORDER BY t.id`
+      ).all(projectId)
+      const lines = [`项目「${project.name}」常态任务清单：${rows.length} 条（周视图按天打卡管理，S69）`, '']
+      lines.push(...rows.slice(0, INV_MAX_PER_PROJECT).map((t) =>
+        `· #${t.id} ${t.title}（${weekdaysLabel(parseWeekdays(t.weekdays))}${t.responsible_name ? `，${t.responsible_name}` : ''}）`))
+      if (rows.length > INV_MAX_PER_PROJECT) lines.push(`（其余 ${rows.length - INV_MAX_PER_PROJECT} 条略）`)
+      if (!rows.length) lines.push('（暂无常态任务，可在详情页或群里让我添加）')
+      return {
+        text: lines.join('\n'), unassigned: 0, total: rows.length,
+        scope: 'project', projectName: project.name,
+        groups: [{ name: project.name, sections: [{ key: 'plain', tasks: rows.map(invRow) }] },
+        ],
+      }
+    }
     const rows = db.prepare(
       `SELECT t.id, t.title, t.kind, t.status, t.plan_end_date, m.name AS responsible_name
        FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
@@ -99,7 +123,7 @@ export function tasksInventory(db, { projectId } = {}) {
   const rows = db.prepare(
     `SELECT t.id, t.title, t.kind, t.status, t.plan_end_date, t.project_id
      FROM tasks t JOIN projects p ON p.id = t.project_id
-       WHERE t.responsible_member_id IS NULL AND t.status != 'done' AND t.deleted_at IS NULL AND p.status = 'active' ORDER BY t.project_id, t.id`
+       WHERE t.responsible_member_id IS NULL AND t.status != 'done' AND t.deleted_at IS NULL AND t.kind != 'routine' AND p.status = 'active' ORDER BY t.project_id, t.id`
   ).all()
   for (const t of rows) byProject.get(t.project_id)?.rows.push(t)
   const total = rows.length
@@ -123,16 +147,6 @@ function assertActiveMember(db, memberId) {
   const m = db.prepare(`SELECT id FROM members WHERE id = ? AND status = 'active'`).get(Number(memberId))
   if (!m) throw Object.assign(new Error('责任人不存在或已离职'), { statusCode: 400 })
   return m.id
-}
-
-const DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/
-
-/** YYYY-MM-DD 真实日历日校验（纯算术比对，拒绝 2026-13-40 这类滚动越界；无时区语义，S39 草案/应用共用）。 */
-export function isCalendarDay(s) {
-  if (typeof s !== 'string' || !DATE_SHAPE.test(s)) return false
-  const [y, m, d] = s.split('-').map(Number)
-  const dt = new Date(Date.UTC(y, m - 1, d))
-  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
 }
 
 /**
@@ -190,21 +204,42 @@ export function createTask(db, input, by) {
     throw Object.assign(new Error('项目已结项/取消，任务面只读'), { statusCode: 409 })
   }
   // S57（v0.62，K40）：任务分类——work=工作（缺省）/ reminder=纯提醒（到期一次性推送后自动完成）
-  const kind = input.kind == null || input.kind === '' ? 'work' : assertValue('taskKind', input.kind)
+  // S69（v0.80，K64）：routine=常态打卡（常态项目缺省；无状态/排期语义，带适用星期，缺省每天）
+  const kind = input.kind == null || input.kind === ''
+    ? (project.kind === 'routine' ? 'routine' : 'work')
+    : assertValue('taskKind', input.kind)
+  let weekdays = null
+  if (project.kind === 'routine') {
+    if (kind !== 'routine') {
+      throw Object.assign(new Error('常态项目的任务一律为常态任务（kind=routine）——无交付排期/提醒语义，每日执行走周视图打卡（S69）'), { statusCode: 400 })
+    }
+    if (planStartDate || planEndDate) {
+      throw Object.assign(new Error('常态任务无计划起止（每日执行走周视图打卡，S69）'), { statusCode: 400 })
+    }
+    weekdays = (normalizeWeekdays(input.weekdays) ?? [1, 2, 3, 4, 5, 6, 7]).join(',')
+  } else if (kind === 'routine') {
+    throw Object.assign(new Error('常态任务只能建在常态项目（projects.kind=routine，S69）'), { statusCode: 400 })
+  }
   // S58（v0.64，K42）：任务备注（≤200 字，记录型字段）
   const note = normalizeTaskNote(input.note) ?? null
   // S38/K20（v0.42 推翻 D3）：责任人与项目牵头人解耦，缺省=未指派（NULL），不再回填牵头人
   const owner = responsibleMemberId == null || responsibleMemberId === '' ? null : assertActiveMember(db, responsibleMemberId)
   const now = Date.now()
   const info = db.prepare(
-    `INSERT INTO tasks (project_id, title, note, responsible_member_id, status, plan_start_date, plan_end_date, kind, source, created_at, updated_at)
-     VALUES (?, ?, ?, ?, 'todo', ?, ?, ?, 'manual', ?, ?)`
-  ).run(projectId, title, note, owner, planStartDate || null, planEndDate || null, kind, now, now)
-  audit(db, { memberId: by, action: 'task.create', objectType: 'task', objectId: info.lastInsertRowid, detail: { kind, hasNote: Boolean(note) } })
+    `INSERT INTO tasks (project_id, title, note, responsible_member_id, status, plan_start_date, plan_end_date, kind, weekdays, source, created_at, updated_at)
+     VALUES (?, ?, ?, ?, 'todo', ?, ?, ?, ?, 'manual', ?, ?)`
+  ).run(projectId, title, note, owner,
+    kind === 'routine' ? null : (planStartDate || null),
+    kind === 'routine' ? null : (planEndDate || null),
+    kind, weekdays, now, now)
+  audit(db, { memberId: by, action: 'task.create', objectType: 'task', objectId: info.lastInsertRowid, detail: { kind, weekdays, hasNote: Boolean(note) } })
   // S59（v0.65，K43）：任务新增落进展——record 型 progress 事件进讨论面进展列（即时生效，append-only）
   addEvent(db, {
     projectId, eventType: 'progress', nature: 'record', sourcePlatform: 'web', generatedBy: 'web',
-    summary: `🆕 新增任务「${title}」`, speakerMemberId: by,
+    summary: kind === 'routine'
+      ? `🆕 新增常态任务「${title}」（${weekdaysLabel(parseWeekdays(weekdays))}）`
+      : `🆕 新增任务「${title}」`,
+    speakerMemberId: by,
   })
   return getTask(db, Number(info.lastInsertRowid))
 }
@@ -217,8 +252,25 @@ export function updateTask(db, id, patch, by) {
   if (cur.project_status === 'closed' || cur.project_status === 'cancelled') {
     throw Object.assign(new Error('项目已结项/取消，任务面只读'), { statusCode: 409 })
   }
+  // S69（v0.80，K64）：常态任务无状态/排期语义——行=模板，每日执行走周视图打卡；行停用走删除
+  if (cur.kind === 'routine') {
+    for (const f of ['status', 'planStartDate', 'planEndDate']) {
+      if (f in patch) {
+        throw Object.assign(new Error('常态任务无状态/计划起止语义（S69）——每日执行走周视图打卡，行停用请删除'), { statusCode: 400 })
+      }
+    }
+  }
   const fields = {}
   if ('title' in patch) fields.title = patch.title
+  // S69：适用星期（仅常态任务；≥1 天，1=周一…7=周日）
+  if ('weekdays' in patch) {
+    if (cur.kind !== 'routine') {
+      throw Object.assign(new Error('适用星期仅常态任务可配置（S69）'), { statusCode: 400 })
+    }
+    const days = normalizeWeekdays(patch.weekdays)
+    if (!days) throw Object.assign(new Error('适用星期至少勾选 1 天'), { statusCode: 400 })
+    fields.weekdays = days.join(',')
+  }
   if ('responsibleMemberId' in patch) {
     // S38-3：清空（''）→ NULL 未指派；非空须为在职成员
     fields.responsible_member_id = patch.responsibleMemberId === '' || patch.responsibleMemberId == null

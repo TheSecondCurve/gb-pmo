@@ -25,7 +25,7 @@ export async function projectDigest(db, projectId, { llm: llmOverride, windowDay
     db.prepare(
       `SELECT t.id, t.title, t.status, t.plan_start_date, t.plan_end_date, m.name AS responsible_name
        FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
-       WHERE t.project_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL ORDER BY t.plan_end_date`
+       WHERE t.project_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL AND t.kind != 'routine' ORDER BY t.plan_end_date`
     ).all(projectId)
   )
   const overdue = tasks.filter((t) => t.planEndDate && t.planEndDate < today())
@@ -100,7 +100,7 @@ export async function personDigest(db, memberId, { llm: llmOverride, send } = {}
     db.prepare(
       `SELECT t.id, t.title, t.note, t.status, t.plan_start_date, t.plan_end_date, p.name AS project_name, p.id AS project_id
        FROM tasks t JOIN projects p ON p.id = t.project_id
-       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL AND p.status = 'active' ORDER BY t.plan_end_date`
+       WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL AND t.kind != 'routine' AND p.status = 'active' ORDER BY t.plan_end_date`
     ).all(memberId)
   )
   const overdue = tasks.filter((t) => t.planEndDate && t.planEndDate < today())

@@ -43,3 +43,25 @@ export function bjStamp(at = new Date()) {
 export function addDays(day, n) {
   return new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10)
 }
+
+/** 北京日历日的星期（1=周一…7=周日；S69 周视图/适用星期口径，纯日期串无时区语义）。 */
+export function weekdayOf(day) {
+  const utc = new Date(Date.parse(`${day}T00:00:00Z`)).getUTCDay() // 0=周日…6=周六
+  return utc === 0 ? 7 : utc
+}
+
+/** day 所在北京自然周的周一（S69：weeklyBoard 以任意日定位所在周）。 */
+export function mondayOf(day) {
+  return addDays(day, -(weekdayOf(day) - 1))
+}
+
+const DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/
+
+/** YYYY-MM-DD 真实日历日校验（纯算术比对，拒绝 2026-13-40 这类滚动越界；无时区语义）。
+ *  v0.80（S69）自 engine/tasks.js 移入：日期纯函数归位时间层，dailyBoard 无环引用 tasks。 */
+export function isCalendarDay(s) {
+  if (typeof s !== 'string' || !DATE_SHAPE.test(s)) return false
+  const [y, m, d] = s.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
+}

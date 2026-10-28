@@ -14,11 +14,13 @@ import { assertValue, label } from '../../engine/enums.js'
 import { mapSpeaker } from '../extract.js'
 import { upsertChannel } from '../../engine/tasks.js'
 import { createProposal, PROPOSAL_KINDS } from '../../engine/proposals.js'
-import { normalizeTypeTasks } from '../../engine/projectTypes.js'
+import { normalizeTypeTasks, normalizeWeekdays } from '../../engine/projectTypes.js'
 import { planTypeTasks } from '../../engine/projects.js'
 import { bindProjectWiki, recordToWiki } from '../../engine/wiki.js'
 import { getSetting } from '../../engine/settings.js'
 import { camelizeRow } from '../../db/index.mjs'
+import { today } from '../../db/time.js'
+import { findRoutineTaskByHint, setDayStatus, weekdaysLabel } from '../../engine/dailyBoard.js'
 import { buildInitAssignCard } from './cards.js'
 import * as feishuConnector from '../connectors/feishu.js'
 import * as wecomConnector from '../connectors/wecom.js'
@@ -119,11 +121,12 @@ export async function runWriteTool(db, { kind, payload = {} }, ctx) {
     if (kind === 'record_wiki') return await writeRecordWiki(db, payload, ctx)
     if (kind === 'bind_wiki') return await writeBindWiki(db, payload, ctx)
     if (kind === 'suggest_event') return writeSuggestEvent(db, payload, ctx)
+    if (kind === 'checkin_task') return writeCheckinTask(db, payload, ctx)
     if (kind === 'bind_channel') return writeBindChannel(db, payload, ctx)
     if (kind === 'trigger') return await runTrigger(db, payload, ctx)
     if (kind === 'propose') return await writePropose(db, payload, ctx)
     if (kind === 'init_assign') return await writeInitAssign(db, payload, ctx)
-    return refused(`不支持的写类型: ${kind}（可用 record_event/record_wiki/bind_wiki/suggest_event/bind_channel/trigger/propose/init_assign）`)
+    return refused(`不支持的写类型: ${kind}（可用 record_event/record_wiki/bind_wiki/suggest_event/checkin_task/bind_channel/trigger/propose/init_assign）`)
   } catch (e) {
     if (e.statusCode === 403) return refused(`权限不足：${e.message}`, 'refused_permission')
     return refused(`操作被拒绝：${e.message}`)
@@ -264,6 +267,59 @@ function applyMilestoneSuggest(db, payload, ctx, milestoneId) {
   return { eventId: evt.id, summary: evt.summary }
 }
 
+/**
+ * S69（v0.80，K64）：常态项目每日打卡——人的明确指令直接生效并回执（K25；打卡=记录型事件，不设确认卡）。
+ * 任务定位：taskId 精确，或 taskTitle/taskHint 标题精确→子串包含（命中须唯一，多义拒并列候选）；
+ * day 缺省今天（北京日，可补过去、拒未来）；status done=完成 / skip=跳过 / pending=重置未做；
+ * 一条指令多项打卡用 items 批量（≤20，逐条生效、汇总回执单列失败原因，与 suggest_event 同构）。
+ */
+function writeCheckinTask(db, payload, ctx) {
+  const items = Array.isArray(payload.items) ? payload.items : [payload]
+  if (!items.length) return refused('items 不能为空（单条打卡直接给 taskId/taskTitle + status）')
+  if (items.length > 20) return refused('一条指令批量打卡至多 20 条')
+  if (items.length === 1) {
+    const r = applyCheckin(db, items[0], payload, ctx) // 校验/生效失败抛中文 Error → runWriteTool 转 refused
+    return { type: 'receipt', text: `已打卡：${r.text}。` }
+  }
+  const ok = []
+  const failed = []
+  for (const item of items) {
+    try {
+      ok.push(applyCheckin(db, item, payload, ctx).text)
+    } catch (e) {
+      failed.push(`${item.taskId ? `任务 #${item.taskId}` : `「${item.taskTitle || item.taskHint || '?'}」`}（${e.message}）`)
+    }
+  }
+  if (!ok.length) return refused(`批量打卡全部失败：${failed.join('；')}`)
+  return { type: 'receipt', text: `已打卡 ${ok.length} 项：${ok.join('；')}${failed.length ? `。失败 ${failed.length} 项：${failed.join('；')}` : ''}` }
+}
+
+/** 单条打卡的定位 + 生效。校验失败/生效守卫抛中文 Error。 */
+function applyCheckin(db, item, payload, ctx) {
+  const projectId = Number(item.projectId ?? payload.projectId) || scopedProjectId(db, ctx.evt)
+  const project = projectId ? db.prepare('SELECT id, name, kind FROM projects WHERE id = ?').get(projectId) : null
+  if (!project) throw new Error('打卡需要明确项目：请给 projectId，或在项目专题群里 @我 打卡（专题群默认落到本群项目）')
+  if (project.kind !== 'routine') throw new Error('打卡仅常态项目可用（该项目是交付项目，S69）')
+  const taskId = Number(item.taskId)
+  // 定位：taskId 精确；否则按任务名（精确→子串包含，命中须唯一）——零命中/多义抛中文 Error
+  const task = Number.isInteger(taskId) && taskId > 0
+    ? (() => {
+        const row = db.prepare(`SELECT id, title FROM tasks WHERE id = ? AND project_id = ? AND kind = 'routine' AND deleted_at IS NULL`).get(taskId, project.id)
+        if (!row) throw new Error('taskId 须为该项目的常态任务（先 query 查任务清单）')
+        return row
+      })()
+    : findRoutineTaskByHint(db, project.id, item.taskTitle ?? item.taskHint)
+  const day = item.day ?? payload.day
+  const out = setDayStatus(db, {
+    projectId: project.id, taskId: task.id,
+    day: day == null || day === '' ? today() : String(day),
+    status: item.status ?? 'done', note: item.note,
+  }, ctx.member.id, { origin: 'bot', sourcePlatform: ctx.sourcePlatform })
+  const statusLabel = { done: '完成', skip: '跳过', pending: '重置为未做' }[out.status] || out.status
+  return { text: `任务「${task.title}」${out.day} ${statusLabel}${out.note ? `（${out.note}）` : ''}` }
+}
+
+
 function writeBindChannel(db, payload, ctx) {
   if (ctx.evt?.chatType !== 'group') return refused('群登记只在群聊里可用')
   const projectId = Number(payload.projectId)
@@ -395,19 +451,14 @@ async function writePropose(db, payload, ctx) {
 }
 
 function getProj(db, id) {
-  return Number(id) ? db.prepare('SELECT id, name, status, lead_member_id, plan_end_date FROM projects WHERE id = ?').get(Number(id)) : null
+  return Number(id) ? db.prepare('SELECT id, name, kind, status, lead_member_id, plan_end_date FROM projects WHERE id = ?').get(Number(id)) : null
 }
 
 /** add_task 单条字段软校验（单条/批量共用；硬校验在引擎生效时兜底）。返回 { payload, summary, title } 或 { error }。 */
 function validateTaskFields(db, proj, item) {
   const title = String(item.title || '').trim()
   if (!title) return { error: 'title 必填（任务标题）' }
-  // S57：任务分类（taskKind——payload.kind 是提议类型判别符，不可复用）
-  if (item.taskKind != null && item.taskKind !== 'work' && item.taskKind !== 'reminder') return { error: 'taskKind 须为 work（工作，缺省）或 reminder（纯提醒）' }
-  if (item.taskKind === 'reminder' && !item.planEndDate) return { error: '纯提醒任务必须给 planEndDate（提醒日 YYYY-MM-DD，到期推责任人+项目群后自动完成）' }
-  if (item.planStartDate && !DATE_OK.test(String(item.planStartDate))) return { error: 'planStartDate 须为 YYYY-MM-DD' }
-  if (item.planEndDate && !DATE_OK.test(String(item.planEndDate))) return { error: 'planEndDate 须为 YYYY-MM-DD' }
-  // S58：任务备注（软校验，硬校验在引擎 400 兜底）
+  // S57：任务备注（软校验，硬校验在引擎 400 兜底）
   if (item.note != null && (typeof item.note !== 'string' || !item.note.trim() || item.note.length > 200)) {
     return { error: 'note 须为 ≤200 字的非空字符串（可省略）' }
   }
@@ -416,6 +467,35 @@ function validateTaskFields(db, proj, item) {
     owner = db.prepare(`SELECT id, name FROM members WHERE id = ? AND status = 'active'`).get(Number(item.responsibleMemberId))
     if (!owner) return { error: '责任人不存在或已离职（先 query 查成员）' }
   }
+  // S69（K64）：常态项目——任务一律常态分类（kind=routine，无 work/reminder/排期语义），可带适用星期（缺省每天）
+  if (proj.kind === 'routine') {
+    if (item.taskKind != null && item.taskKind !== 'routine') {
+      return { error: '常态项目的任务一律为常态分类（无需 taskKind，也无 work/reminder 语义，S69）' }
+    }
+    if (item.planStartDate || item.planEndDate) return { error: '常态任务无计划起止（每日执行走周视图打卡，S69）' }
+    let weekdays
+    try {
+      weekdays = item.weekdays === undefined ? undefined : normalizeWeekdays(item.weekdays)
+    } catch (e) {
+      return { error: e.message }
+    }
+    const wd = weekdays ?? [1, 2, 3, 4, 5, 6, 7]
+    return {
+      payload: {
+        projectId: proj.id, title: title.slice(0, 200), taskKind: 'routine', weekdays: wd,
+        ...(item.note ? { note: String(item.note).trim() } : {}),
+        ...(owner ? { responsibleMemberId: owner.id } : {}),
+      },
+      summary: `项目「${proj.name}」新增常态任务「${title.slice(0, 200)}」（${weekdaysLabel(wd)}${owner ? `，责任人 ${owner.name}` : ''}）`,
+      title: title.slice(0, 50),
+    }
+  }
+  // S57：任务分类（taskKind——payload.kind 是提议类型判别符，不可复用）
+  if (item.taskKind != null && item.taskKind !== 'work' && item.taskKind !== 'reminder') return { error: 'taskKind 须为 work（工作，缺省）或 reminder（纯提醒）' }
+  if (item.taskKind === 'routine') return { error: '常态任务只能建在常态项目（S69）' }
+  if (item.taskKind === 'reminder' && !item.planEndDate) return { error: '纯提醒任务必须给 planEndDate（提醒日 YYYY-MM-DD，到期推责任人+项目群后自动完成）' }
+  if (item.planStartDate && !DATE_OK.test(String(item.planStartDate))) return { error: 'planStartDate 须为 YYYY-MM-DD' }
+  if (item.planEndDate && !DATE_OK.test(String(item.planEndDate))) return { error: 'planEndDate 须为 YYYY-MM-DD' }
   return {
     payload: {
       projectId: proj.id, title: title.slice(0, 200),
@@ -445,6 +525,13 @@ function softValidateProposal(db, kind, p) {
     const summaryText = String(p.summary || '').trim()
     if (!summaryText) return { error: 'summary 必填（S29：结项必须留结项总结；可先基于事件流起草）' }
     if (proj.status !== 'active') return { error: `项目已是终态（${label('projectStatus', proj.status)}），不可再结项` }
+    // S69：常态项目手动结项豁免「全部任务完成」（常态任务永不 done）；交付项目维持 S8 校验提示
+    if (proj.kind === 'routine') {
+      return {
+        payload: { projectId: proj.id, summary: summaryText.slice(0, 200) },
+        summary: `项目「${proj.name}」结项：${summaryText}（常态项目：手动结项豁免任务完成检查，S69）`,
+      }
+    }
     const open = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND status != 'done' AND deleted_at IS NULL`).get(proj.id).n
     return {
       payload: { projectId: proj.id, summary: summaryText.slice(0, 200) },
