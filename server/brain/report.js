@@ -37,11 +37,11 @@ export async function dailyReport(db, { force = false, send } = {}) {
     const isAdmin = m.role === 'admin'
     const sections = []
 
-    // 责任人视角：名下任务 + 待确认建议 + 明日到期
+    // 责任人视角：名下任务 + 待确认建议 + 明日到期（S69：排除常态任务——永不完成，周视图自管每日执行）
     const myTasks = camelizeRows(
       db.prepare(
         `SELECT t.id, t.title, t.note, t.plan_end_date, p.name AS project_name FROM tasks t JOIN projects p ON p.id = t.project_id
-         WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL`
+         WHERE t.responsible_member_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL AND t.kind != 'routine'`
       ).all(m.id)
     )
     const tomorrow = today(now.getTime() + 86400000)

@@ -5,6 +5,7 @@ import { addEvent } from './events.js'
 import { audit } from './auth.js'
 import { memberName } from './members.js'
 import { resolveTypeForCreate, typeTaskItems, normalizeTypeTasks, normalizePromptText } from './projectTypes.js'
+import { parseWeekdays } from './dailyBoard.js'
 
 const OPEN_STATUSES = ['active'] // S29（v0.28）三态：进行中→已结项/已取消
 const TERMINAL_STATUSES = ['closed', 'cancelled']
@@ -58,6 +59,18 @@ export function createProject(db, input, by) {
   if (!name) throw Object.assign(new Error('项目名必填'), { statusCode: 400 })
   if (!leadMemberId) throw Object.assign(new Error('牵头人必填（S1-1）'), { statusCode: 400 })
   assertValue('priority', priority)
+  // S69（v0.80，K64）：项目类别——delivery=交付项目（缺省）/ routine=常态项目（周视图每日打卡、
+  // 无交付日期、结项豁免「全部任务完成」）；立项选定后不可变更（updateProject 拒绝）。
+  const kind = input.kind == null || input.kind === '' ? 'delivery' : assertValue('projectKind', input.kind)
+  const isRoutine = kind === 'routine'
+  if (isRoutine) {
+    if (planStartDate || planEndDate) {
+      throw Object.assign(new Error('常态项目无计划起止/交付日期（S69）——按周视图管理每日执行'), { statusCode: 400 })
+    }
+    if (autoSchedule) {
+      throw Object.assign(new Error('常态项目不做倒排（无交付日期，S69）'), { statusCode: 400 })
+    }
+  }
   const lead = db.prepare(`SELECT id, name FROM members WHERE id = ? AND status = 'active'`).get(leadMemberId)
   if (!lead) throw Object.assign(new Error('牵头人不存在或已离职'), { statusCode: 400 })
   const type = resolveTypeForCreate(db, { typeCode, templateCode })
@@ -66,15 +79,15 @@ export function createProject(db, input, by) {
   const items = customItems ?? typeTaskItems(db, type.id)
   const source = customItems !== undefined ? 'manual' : 'template'
   const titles = items.map((it) => it.title)
-  const schedule = autoSchedule ? backScheduleDates({ planStartDate, planEndDate, count: titles.length }) : null
+  const schedule = !isRoutine && autoSchedule ? backScheduleDates({ planStartDate, planEndDate, count: titles.length }) : null
 
   const now = Date.now()
   const created = db.transaction(() => {
     const info = db.prepare(
-      `INSERT INTO projects (name, template_code, project_type_id, status, priority, lead_member_id, client_name,
+      `INSERT INTO projects (name, template_code, project_type_id, kind, status, priority, lead_member_id, client_name,
          plan_start_date, plan_end_date, actual_start_date, init_extra, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(name, type.code, type.id, priority, leadMemberId, clientName || null,
+       VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(name, type.code, type.id, kind, priority, leadMemberId, clientName || null,
       planStartDate || null, planEndDate || null, today(), initExtra ?? null, by ?? null, now, now)
     const projectId = Number(info.lastInsertRowid)
     const refCount = items.reduce((s, it) => s + it.refs.length, 0)
@@ -82,10 +95,17 @@ export function createProject(db, input, by) {
     items.forEach((item, i) => {
       const win = schedule?.[i]
       // S58：默认备注随任务拷贝（模板路径来自类型清单；自定义路径 normalizeTypeTasks 归一，未给为 NULL）
+      // S69：常态项目任务一律 kind=routine（带适用星期，缺省每天；无计划起止）
+      const taskWeekdays = isRoutine ? (item.weekdays ?? [1, 2, 3, 4, 5, 6, 7]) : null
       const taskInfo = db.prepare(
-        `INSERT INTO tasks (project_id, title, note, responsible_member_id, status, plan_start_date, plan_end_date, source, created_at, updated_at)
-         VALUES (?, ?, ?, NULL, 'todo', ?, ?, ?, ?, ?)`
-      ).run(projectId, item.title, item.note ?? null, win ? win.planStartDate : (planStartDate || today()), win ? win.planEndDate : null, source, now, now)
+        `INSERT INTO tasks (project_id, title, note, responsible_member_id, status, plan_start_date, plan_end_date, kind, weekdays, source, created_at, updated_at)
+         VALUES (?, ?, ?, NULL, 'todo', ?, ?, ?, ?, ?, ?, ?)`
+      ).run(projectId, item.title, item.note ?? null,
+        isRoutine ? null : (win ? win.planStartDate : (planStartDate || today())),
+        isRoutine ? null : (win ? win.planEndDate : null),
+        isRoutine ? 'routine' : 'work',
+        taskWeekdays ? taskWeekdays.join(',') : null,
+        source, now, now)
       // S33：模板/自定义任务的参考随标题拷贝进 task_refs（创建人=立项人；落表即被 S23 全套能力接管）
       item.refs.forEach((ref) => refStmt.run(Number(taskInfo.lastInsertRowid), ref.title, ref.url, ref.note, by ?? null, now))
     })
@@ -95,10 +115,12 @@ export function createProject(db, input, by) {
     }
     addEvent(db, {
       projectId, eventType: 'decision', nature: 'record', sourcePlatform: 'web', generatedBy: 'web',
-      summary: `项目立项：类型「${type.name}」${customItems !== undefined ? `· 自定义任务 ${titles.length} 项` : `· 预填清单 ${titles.length} 项`}，牵头人 ${lead.name}${planEndDate ? `，计划 ${planStartDate || ''}~${planEndDate}` : ''}${schedule ? '，任务按交付日期倒排' : ''}${refCount ? `，预填参考资料 ${refCount} 条` : ''}`,
+      summary: isRoutine
+        ? `项目立项：常态项目（类型「${type.name}」· ${customItems !== undefined ? '自定义' : '预填'}常态任务 ${titles.length} 项，牵头人 ${lead.name}，按周视图每日打卡管理）`
+        : `项目立项：类型「${type.name}」${customItems !== undefined ? `· 自定义任务 ${titles.length} 项` : `· 预填清单 ${titles.length} 项`}，牵头人 ${lead.name}${planEndDate ? `，计划 ${planStartDate || ''}~${planEndDate}` : ''}${schedule ? '，任务按交付日期倒排' : ''}${refCount ? `，预填参考资料 ${refCount} 条` : ''}`,
       speakerMemberId: by ?? null,
     })
-    audit(db, { memberId: by, action: 'project.create', objectType: 'project', objectId: projectId, detail: { typeCode: type.code, taskSource: source, tasks: titles.length, taskRefs: refCount, autoSchedule: Boolean(autoSchedule) } })
+    audit(db, { memberId: by, action: 'project.create', objectType: 'project', objectId: projectId, detail: { typeCode: type.code, kind, taskSource: source, tasks: titles.length, taskRefs: refCount, autoSchedule: Boolean(schedule) } })
     return projectId
   })
   const id = created()
@@ -196,6 +218,7 @@ export function getProjectDetail(db, id) {
     .all(id)
   const taskRows = tasks.map((t) => ({
     ...camelizeRow(t),
+    weekdays: parseWeekdays(t.weekdays),
     isOverdue: Boolean(t.plan_end_date && t.plan_end_date < today() && t.status !== 'done'),
   }))
   return {
@@ -323,6 +346,13 @@ export function updateProject(db, id, patch, by) {
   if ('status' in patch) {
     throw Object.assign(new Error('项目状态仅可经结项/取消变更（S29）：请走 POST /projects/:id/close|cancel'), { statusCode: 400 })
   }
+  // S69：项目类别立项选定后不可变更（两类项目的任务语义/视图/结项规则全然不同，K64）
+  if ('kind' in patch) {
+    throw Object.assign(new Error('项目类别（交付/常态）不可变更（S69）——如需另起一类项目请新建立项'), { statusCode: 400 })
+  }
+  if (cur.kind === 'routine' && (('planStartDate' in patch && patch.planStartDate) || ('planEndDate' in patch && patch.planEndDate))) {
+    throw Object.assign(new Error('常态项目无计划起止/交付日期（S69）——按周视图管理每日执行'), { statusCode: 400 })
+  }
   const fields = {}
   if ('name' in patch) fields.name = patch.name
   if ('clientName' in patch) fields.client_name = patch.clientName || null
@@ -374,13 +404,17 @@ export function closeProject(db, id, { summary } = {}, by) {
   if (TERMINAL_STATUSES.includes(cur.status)) {
     throw Object.assign(new Error(`项目已${cur.status === 'closed' ? '结项' : '取消'}（S29 终态不可逆）`), { statusCode: 409 })
   }
-  const openTasks = db
-    .prepare(`SELECT id, title FROM tasks WHERE project_id = ? AND status != 'done' AND deleted_at IS NULL`)
-    .all(id)
-  if (openTasks.length) {
-    throw Object.assign(new Error('存在未完成任务，全部标记完成后方可结项（S8-1，v0.6 无「取消」处置）'), {
-      statusCode: 409, openTasks,
-    })
+  // S69（v0.80，K64）：常态项目手动结项豁免「全部任务完成」——常态任务永不 done（模板行），
+  // 不豁免则永远结不了项；结项总结必填不变（S29 结束留因原则与项目类别无关）。
+  if (cur.kind !== 'routine') {
+    const openTasks = db
+      .prepare(`SELECT id, title FROM tasks WHERE project_id = ? AND status != 'done' AND deleted_at IS NULL`)
+      .all(id)
+    if (openTasks.length) {
+      throw Object.assign(new Error('存在未完成任务，全部标记完成后方可结项（S8-1，v0.6 无「取消」处置）'), {
+        statusCode: 409, openTasks,
+      })
+    }
   }
   const text = String(summary || '').trim()
   if (!text) throw Object.assign(new Error('结项总结必填（S29：结束项目必须留原因文本；可先取 AI 复盘草稿改后提交）'), { statusCode: 400 })
