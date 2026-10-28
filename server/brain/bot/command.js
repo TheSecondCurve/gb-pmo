@@ -367,7 +367,7 @@ export function buildSystemPrompt(db, { member, channel, chatType, surface = 'im
       ? `当前对话：项目专题群，默认项目「${p.name}」（id=${p.id}）——不点名项目的登记/变更/查询默认落到它。`
       : channel
         ? '当前对话：通用群（已登记为通用渠道），无默认项目，涉及具体项目先确认。'
-        : '当前对话：未登记项目群（无默认项目，涉及具体项目先确认项目名/id）。'
+        : '当前对话：未登记项目群（无默认项目，涉及具体项目先确认项目名/id）。用户要在此群立项时用 quick_create_project（群名做项目名、发起人当牵头人，一条链含绑群与建知识页）。'
   }
   return `你是「企业项目大脑」的${web ? 'AI 助手（web 会话）' : '机器人助手（以应用自身身份应答，不冒充任何成员）'}。
 ${ctxLine}
@@ -386,7 +386,8 @@ ${schemaDigest(db)}
 {"action":"write","kind":"record_event","payload":{"projectId":1,"eventType":"progress|risk|decision|blocker","summary":"一句中文"}}
 {"action":"write","kind":"record_wiki","payload":{"projectId":1,"eventType":"progress|decision|risk|blocker|record","summary":"用户要记录的原文"}}  把内容记到项目绑定的知识库页面（S61；用户说「记一下/记到文档里/写到知识库」时用；按类型分小节；**summary 必须是用户要记录的完整原文——禁止总结/浓缩/改写，逐字保留所有细节**；未绑定页面时会出确认卡——用户点确认后自动在默认父页面下新建子页并记录，不要重复发起）
 {"action":"write","kind":"bind_wiki","payload":{"projectId":1,"wikiUrl":"https://xxx.feishu.cn/wiki/<token>"}}  绑定项目到知识库已有页面（仅牵头人/管理员；用户贴 wiki 链接说「绑定这个页面」时用）
-{"action":"write","kind":"bind_wiki","payload":{"projectId":1,"parentWikiUrl":"https://xxx.feishu.cn/wiki/<父页面token>","newTitle":"子页标题"}}  在指定页面下新建子页并绑定（仅牵头人/管理员；用户说「在《X》下新建《Y》」时用）
+{"action":"write","kind":"bind_wiki","payload":{"projectId":1,"newTitle":"子页标题"}}  新建项目知识页并绑定（仅牵头人/管理员；用户说「新建一个项目飞书页/知识库页面」时用——**不要先问用户要父页面**：不给父页系统会自动挂到配置的默认父页面，未配置时才回执引导）
+{"action":"write","kind":"bind_wiki","payload":{"projectId":1,"parentWikiUrl":"https://xxx.feishu.cn/wiki/<父页面token>","newTitle":"子页标题"}}  在指定页面下新建子页并绑定（用户明确给了父页面时用）
 {"action":"write","kind":"suggest_event","payload":{"targetTaskId":1,"targetField":"status|plan_start_date|plan_end_date|responsible_member_id","targetValue":"done|YYYY-MM-DD|成员id","summary":"可选，缺省自动生成"}}  任务变更：直接生效并回执（落建议型事件留痕，发令人即生效人）
 {"action":"write","kind":"suggest_event","payload":{"items":[{"targetTaskId":1,"targetField":"status","targetValue":"done"},{"targetTaskId":2,"targetField":"plan_end_date","targetValue":"2026-12-31"}]}}  一条指令含多个变更时用 items 批量（≤20 条，逐条生效、汇总回执单列失败原因）
 {"action":"write","kind":"suggest_event","payload":{"targetMilestoneId":1,"targetField":"plan_date|status","targetValue":"YYYY-MM-DD|met|missed|cancelled","summary":"可选"}}  里程碑改期/状态：直接生效（met=达成）
@@ -397,7 +398,8 @@ ${web ? '{"action":"write","kind":"bind_channel",...}   本场景不可用（仅
 {"action":"write","kind":"propose","payload":{"kind":"apply_type_tasks","projectId":1}}  按项目类型清单补任务（S35-8）：用户说「按模板/类型清单初始化任务」「把模板里的任务补上」时用——**只传 projectId**，清单由系统从项目自身类型的内嵌清单拷入（标题/备注/参考齐全，与项目既有同名任务自动跳过），牵头人/管理员直接生效并回执「补建 N 项、跳过 M 项」；不要把类型清单口述成 add_task 批量
 {"action":"write","kind":"propose","payload":{"kind":"add_milestone","projectId":1,"name":"里程碑名","planDate"?}}  建里程碑：牵头人/管理员直接生效
 {"action":"write","kind":"propose","payload":{"kind":"update_project","projectId":1,"name"?,"clientName"?,"priority":"high|medium|low"?,"planStartDate"?,"planEndDate"?,"leadMemberId":1?,"initExtra"?}}  项目信息变更：牵头人/管理员直接生效（至少一个字段；状态不可经此改，S29）
-{"action":"write","kind":"propose","payload":{"kind":"create_project","name":"...","typeCode":"...","leadMemberId":1,"planStartDate?","planEndDate?","initExtra"?:"初始分配补充要求（本项目特例，S64）","tasks":["标题"|{"title":"...","refs":[{"title":"SOP名","url":"https://...","note?":"备注"}]}...]?,"autoSchedule":true?}}  立项：直接生效（发起人须为管理员或拟任牵头人本人；tasks 缺省按类型内嵌清单实例化、含类型预设的逐步骤参考资料；纯标题覆盖=不带参考资料，refs 显式给出才带；autoSchedule=true 按「计划开始（缺省今天）→交付日期」倒排每条任务计划起止，须有 planEndDate）
+{"action":"write","kind":"propose","payload":{"kind":"create_project","name":"...","typeCode":"...","leadMemberId":1,"planStartDate?","planEndDate?","initExtra"?:"初始分配补充要求（本项目特例，S64）","tasks":["标题"|{"title":"...","refs":[{"title":"SOP名","url":"https://...","note?:"备注"}]}...]?,"autoSchedule":true?}}  立项：直接生效（发起人须为管理员或拟任牵头人本人；tasks 缺省按类型内嵌清单实例化、含类型预设的逐步骤参考资料；纯标题覆盖=不带参考资料，refs 显式给出才带；autoSchedule=true 按「计划开始（缺省今天）→交付日期」倒排每条任务计划起止，须有 planEndDate）
+{"action":"write","kind":"quick_create_project","payload":{"name"?,"typeCode"?}}  快速立项（S70）：仅**未登记项目群**的群聊可用——一条链 建项目（name 缺省=群名、牵头人=发起人、typeCode 缺省=全局默认类型）→ 本群绑专题渠道 → 默认父页面下建知识页；用户在新群说「建个项目/快速立项/立项」时用它，不要拆成 create_project+bind_channel 多步；已登记群立项仍走 create_project（不隐式换绑本群）
 {"action":"write","kind":"propose","payload":{"kind":"create_project_type","code":"...","name":"...","tasks":["标题"|{"title":"...","refs":[{"title":"SOP名","url":"https://..."}...]}...]}}  新建项目类型：仅管理员直接生效（任务清单内嵌于类型；有标准 SOP/知识库文档的步骤可挂 refs，每步 ≤10 条，立项时随任务预填给执行人，S33）
 {"action":"write","kind":"propose","payload":{"kind":"cancel_project","projectId":1,"reason":"取消原因（必填）"}}  取消项目【终态·出确认卡】：原因必填（S29），牵头人/管理员点按确认后才生效
 {"action":"write","kind":"propose","payload":{"kind":"close_project","projectId":1,"summary":"结项总结（必填）"}}   结项【终态·出确认卡】：总结必填（S29；确认时按 S8 校验：任务须全部完成）

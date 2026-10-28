@@ -15,8 +15,8 @@ import { mapSpeaker } from '../extract.js'
 import { upsertChannel } from '../../engine/tasks.js'
 import { createProposal, PROPOSAL_KINDS } from '../../engine/proposals.js'
 import { normalizeTypeTasks, normalizeWeekdays } from '../../engine/projectTypes.js'
-import { planTypeTasks } from '../../engine/projects.js'
-import { bindProjectWiki, recordToWiki } from '../../engine/wiki.js'
+import { planTypeTasks, createProject } from '../../engine/projects.js'
+import { bindProjectWiki, recordToWiki, getDefaultParentToken, wikiPageUrl } from '../../engine/wiki.js'
 import { getSetting } from '../../engine/settings.js'
 import { camelizeRow } from '../../db/index.mjs'
 import { today } from '../../db/time.js'
@@ -123,6 +123,7 @@ export async function runWriteTool(db, { kind, payload = {} }, ctx) {
     if (kind === 'suggest_event') return writeSuggestEvent(db, payload, ctx)
     if (kind === 'checkin_task') return writeCheckinTask(db, payload, ctx)
     if (kind === 'bind_channel') return writeBindChannel(db, payload, ctx)
+    if (kind === 'quick_create_project') return await runQuickCreate(db, payload, ctx) // S70：新群快速立项一条链
     if (kind === 'trigger') return await runTrigger(db, payload, ctx)
     if (kind === 'propose') return await writePropose(db, payload, ctx)
     if (kind === 'init_assign') return await writeInitAssign(db, payload, ctx)
@@ -375,7 +376,9 @@ async function writeRecordWiki(db, payload, ctx) {
   }
 }
 
-/** S61（v0.66，K45）：绑定项目到知识库页面（贴链接，或在指定页面下新建子页）。仅牵头人/管理员。 */
+/** S61（v0.66，K45）：绑定项目到知识库页面（贴链接，或在指定页面下新建子页）。仅牵头人/管理员。
+ *  S70（v0.82，K66）：只给 newTitle 不给父页时回落默认父页面（明确新建指令直生效，K25——与 K47
+ *  「记一下」隐含建页走确认卡是两档语义）；未配默认父页维持引导式拒绝。 */
 async function writeBindWiki(db, payload, ctx) {
   const projectId = Number(payload.projectId)
   const project = projectId ? db.prepare('SELECT id, name, lead_member_id FROM projects WHERE id = ?').get(projectId) : null
@@ -383,13 +386,118 @@ async function writeBindWiki(db, payload, ctx) {
   if (ctx.member.role !== 'admin' && project.lead_member_id !== ctx.member.id) {
     return refused('只有该项目的牵头人或系统管理员可以绑定知识库，请 TA 来操作', 'refused_permission')
   }
+  let bindArgs = { wikiUrl: payload.wikiUrl, parentWikiUrl: payload.parentWikiUrl, newTitle: payload.newTitle }
+  let viaDefaultParent = false
+  if (!payload.wikiUrl && !payload.parentWikiUrl && !payload.parentNodeToken) {
+    if (!payload.newTitle) {
+      return refused('绑定知识库需要更多信息：把要绑定的页面链接发我，或说「新建一个项目飞书页」（配置了知识库默认父页面时我会自动挂载）。')
+    }
+    const parentToken = getDefaultParentToken(db)
+    if (!parentToken) {
+      return refused('新建子页需要父页面：把父页面的飞书 wiki 链接一并发我（如「父页面 https://xxx.feishu.cn/wiki/xxx，新建一个项目页」），或让管理员在配置台「外部依赖→知识库默认父页面」配置后直接说「新建一个项目飞书页」。')
+    }
+    bindArgs = { parentNodeToken: parentToken, newTitle: payload.newTitle }
+    viaDefaultParent = true
+  }
   try {
-    const b = await bindProjectWiki(db, project.id, {
-      wikiUrl: payload.wikiUrl, parentWikiUrl: payload.parentWikiUrl, newTitle: payload.newTitle,
-    }, ctx.member.id)
-    return { type: 'receipt', text: `项目「${project.name}」已绑定知识库页面《${b.title || '未命名'}》，之后说「记一下…」我就会写进去。` }
+    const b = await bindProjectWiki(db, project.id, bindArgs, ctx.member.id)
+    return {
+      type: 'receipt',
+      text: viaDefaultParent
+        ? `项目「${project.name}」已在默认父页面下新建并绑定知识库页面《${b.title || '未命名'}》，之后说「记一下…」我就会写进去。`
+        : `项目「${project.name}」已绑定知识库页面《${b.title || '未命名'}》，之后说「记一下…」我就会写进去。`,
+    }
   } catch (e) {
     return refused(e.message)
+  }
+}
+
+// —— S70（v0.82，K66）：新群快速立项——一条链 建项目→绑群→默认父页建知识页（best-effort 不阻塞）——
+
+/** 可用项目类型清单（类型缺失拒绝时列候选，不猜）。 */
+function activeTypeList(db) {
+  return db.prepare(`SELECT code, name FROM project_types WHERE status = 'active' ORDER BY id`).all()
+    .map((t) => `${t.code}=${t.name}`).join('、')
+}
+
+/** 从默认父页 URL 提取 host（回执链接用；解析失败兜底 feishu.cn）。 */
+function hostOf(url) {
+  try { return new URL(url).host } catch { return 'feishu.cn' }
+}
+
+/**
+ * 快速立项核心（/init 斜杠与 write quick_create_project 共用，K66）。
+ * payload: { name?（缺省=群名）, typeCode?（缺省=projects.quickCreateTypeCode） }。
+ * 缺省规则：项目名=群名（evt.chatTitle，缺失时连接器 getChat 回拉）、牵头人=发起人
+ * （天然满足 createProject「管理员或拟任牵头人本人」权限矩阵）；类型解析不出则拒绝并列候选。
+ * 信任边界（K25）：对话面明确指令直接生效；知识页 best-effort——失败不阻塞立项与绑群。
+ */
+export async function runQuickCreate(db, payload = {}, ctx = {}) {
+  const evt = ctx.evt || {}
+  const platform = evt.platform || ctx.sourcePlatform || 'feishu'
+  if (evt.chatType !== 'group') return refused('快速立项只在群聊里可用——在新项目群里 @我 发 /init [类型码]。')
+
+  // 群名解析：chatTitle（网关带入）→ 连接器 getChat 回拉 → 明确报错
+  let groupName = evt.chatTitle || null
+  if (!groupName) {
+    try {
+      const chat = await CHAT_CONNECTORS[platform]?.getChat?.(getSetting(db, `im.${platform}`), evt.chatId)
+      groupName = chat?.name || null
+    } catch { /* 保持 null，走报错 */ }
+  }
+  const name = String(payload.name || groupName || '').trim()
+  if (!name) {
+    return refused('拿不到本群的群名（飞书接口失败或未授权），无法以群名立项——请稍后重试，或改用自然语言告诉我项目名（「建个项目，名字叫 XX」）。')
+  }
+
+  // 守卫：群已是专题渠道 → 拒绝（防误绑重绑）
+  const existing = db.prepare(
+    'SELECT c.channel_type, c.project_id, p.name AS project_name FROM channels c LEFT JOIN projects p ON p.id = c.project_id WHERE c.platform = ? AND c.group_key = ?'
+  ).get(platform, evt.chatId)
+  if (existing?.channel_type === 'dedicated') {
+    return refused(`本群已绑定为项目「${existing.project_name || `#${existing.project_id}`}」的专题渠道，不能在此快速立项。要建新项目，请把我拉进一个新群再发 /init。`)
+  }
+
+  // 类型解析：参数 → 全局默认 → 拒绝列候选（不猜）
+  const code = String(payload.typeCode || getSetting(db, 'projects').quickCreateTypeCode || '').trim()
+  if (!code) {
+    return refused(`快速立项需要项目类型：重发「/init <类型码>」，或让管理员在配置台「外部依赖→快速立项默认类型」配置全局默认。可用类型：${activeTypeList(db)}`)
+  }
+  const type = db.prepare(`SELECT code, name FROM project_types WHERE code = ? AND status = 'active'`).get(code)
+  if (!type) {
+    return refused(`项目类型 ${code} 不存在或已停用。可用类型：${activeTypeList(db)}`)
+  }
+
+  // ① 建项目（任务按类型清单实例化；立项事件+审计在引擎内）
+  let proj
+  try {
+    proj = createProject(db, { name, typeCode: type.code, leadMemberId: ctx.member.id }, ctx.member.id)
+  } catch (e) {
+    return refused(`立项失败：${e.message}`)
+  }
+
+  // ② 绑群为专题渠道（cursor=当前时刻，不回灌历史；群名回填渠道名）
+  upsertChannel(db, { platform, groupKey: evt.chatId, name: groupName || name, channelType: 'dedicated', projectId: proj.id }, ctx.member.id)
+
+  // ③ 默认父页下建知识页并绑定（best-effort：失败不阻塞，回执单列原因）
+  let wikiLine
+  try {
+    const parentToken = getDefaultParentToken(db)
+    if (!parentToken) {
+      wikiLine = '知识页未建：未配置默认父页面（管理员在配置台「外部依赖→知识库默认父页面」配置后，说「新建一个项目飞书页」即可补建）'
+    } else {
+      const b = await bindProjectWiki(db, proj.id, { parentNodeToken: parentToken, newTitle: proj.name }, ctx.member.id)
+      wikiLine = `知识页：已在默认父页面下新建《${b.title || proj.name}》 → ${wikiPageUrl(b.nodeToken, hostOf(getSetting(db, 'wiki').defaultParentUrl))}`
+    }
+  } catch (e) {
+    wikiLine = `知识页未建：${e.message}`
+  }
+
+  const taskCount = db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND deleted_at IS NULL').get(proj.id).n
+  return {
+    type: 'receipt',
+    result: 'replied',
+    text: `快速立项完成 ✓\n· 项目「${proj.name}」（#${proj.id}，类型 ${type.name}，牵头人 ${ctx.member.name}）\n· 任务按类型清单实例化 ${taskCount} 项——可对我说「初始分配一下」补责任人与排期\n· ${wikiLine}\n· 本群已绑定为项目专题渠道（从现在开始定时抽取归档，不回灌历史）`,
   }
 }
 

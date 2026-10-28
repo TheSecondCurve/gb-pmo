@@ -135,6 +135,9 @@ export const DEFAULT_SETTINGS = {
   'im.wecom': { corpId: '', secret: '', publicKeyVer: '', privateKey: '', sdkUrl: '' },
   // S62（v0.67，K47）知识库默认父页面：项目未绑定时记录经确认卡在此页下新建子页；管理员配置台可改
   wiki: { defaultParentUrl: '' },
+  // S70（v0.82，K66）快速立项默认类型：新群 /init 未显式给类型码时兜底。缺省 custom（自由创建，
+  // 空项目锚点，migration 0037 重新启用）；保存时不校验存在性，立项时校验（类型停用则明确报错）
+  projects: { quickCreateTypeCode: 'custom' },
   // S26（v0.19）管理员诊断台：诊断 shell 等价容器执行权——开关默认关，仅可信内网排障用，全程审计
   debug: { shellEnabled: false, timeoutMs: 10000, maxOutputBytes: 131072 },
   // S24 Web AI 助手会话：每成员每日指令限额（北京日，与 bot_commands 审计同口径）
