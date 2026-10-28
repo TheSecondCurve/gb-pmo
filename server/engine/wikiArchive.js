@@ -73,8 +73,16 @@ export function getLatestWikiArchiveRun(db, projectId) {
  */
 export async function startWikiArchive(db, projectId, by, { llm, defer = true } = {}) {
   const pid = Number(projectId)
-  const project = db.prepare('SELECT id, name, status FROM projects WHERE id = ?').get(pid)
+  const project = db.prepare('SELECT id, name, status, kind FROM projects WHERE id = ?').get(pid)
   if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
+  // S72（v0.84，K68）：常态项目关闭全量归档——长生命周期群恒定触顶量护栏且 truncated 截丢早期内容，
+  // 产出为交付叙事；执行历史看周视图与打卡记录。守卫只挡新触发，存量 running 与已生成内容不动。
+  if (project.kind === 'routine') {
+    throw Object.assign(
+      new Error('常态项目不支持全量汇总归档：群消息为日常执行噪音且量大（归档口径不适用）——执行历史请看项目周视图与打卡记录（S72）'),
+      { statusCode: 400 }
+    )
+  }
   if (!getProjectWiki(db, pid)) {
     throw Object.assign(new Error('该项目还未绑定知识库页面——先在项目详情页「知识库」卡绑定，再生成项目汇总'), { statusCode: 400 })
   }

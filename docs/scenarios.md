@@ -762,6 +762,16 @@ S68 晨报按交付口径组装，常态项目群每天收到空转报告（逾�
 | S71-4 | 当推送交付项目时，S68 四节骨架、LLM 综述（purpose=morning）、近期开工窗口完全不变（回归锚点） | `server/test/s71-routine-morning.test.mjs` + `server/test/s68-morning-push.test.mjs` |
 | S71-5 | 当守卫与幂等触发时：常态项目当日已推跳过、无绑定专题群跳过、单项目失败不阻塞其余——全部沿用 S68 口径，pushes 落行字段一致 | `server/test/s71-routine-morning.test.mjs` |
 
+## S72（P0）— 全员（web）— 常态项目关闭「生成项目汇总」全量归档（v0.84）
+
+S63 汇总归档对常态项目语义与成本双重不匹配（20000 条护栏恒定触顶且 truncated 截丢早期内容、产出为交付叙事、单进程长任务挤占调度）。前后端双层关闭：引擎 startWikiArchive 对 kind='routine' 400（不落台账），文案指明替代（周视图/打卡记录）；前端 routine 项目不渲染按钮。交付项目原样；守卫只挡新触发。决策见 design.md K68。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S72-1 | 当常态项目（已绑知识页+专题群、其余前置全通过）触发 startWikiArchive 时，应返回 400 且文案含「常态项目」与替代指引，不落 wiki_archive_runs 行 | `server/test/s72-routine-archive-guard.test.mjs` |
+| S72-2 | 当交付项目触发时，S63 原流程不受影响（正常落 running 台账）；守卫只挡新触发，存量 running 与已生成内容不受影响 | `server/test/s72-routine-archive-guard.test.mjs` + `server/test/s63-wiki-archive.test.mjs` |
+| S72-3 | 当打开常态项目详情页时，知识库卡不渲染「生成项目汇总」按钮；交付项目详情页按钮原样 | `src/smoke.test.tsx` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |
