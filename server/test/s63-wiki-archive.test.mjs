@@ -415,8 +415,9 @@ describe('S63 项目群全量汇总归档知识库', () => {
     const body = insertedChildren(calls)
     const files = body.children.filter((b) => b.block_type === 18)
     expect(files.length).toBe(2)
-    expect(files[0].file).toEqual({ token: 'ft_1', name: '报价单.pdf' })
-    expect(files[1].file.name).toBe('fk_b')
+    // v0.80.1 工程防线：file 块载荷按官方 schema 仅含 token（多带 name 有 99992402 严格校验风险）；文件名在图注里
+    expect(files[0].file).toEqual({ token: 'ft_1' })
+    expect(files[1].file).toEqual({ token: 'ft_2' })
     const captions = body.children.filter((b) => b.block_type === 2).map((b) => b.text.elements[0].text_run.content)
     expect(captions.some((t) => t.includes('李四') && t.includes('报价单.pdf'))).toBe(true)
     // 附件消息原文不混入汇总文本行；有效文本（t1）在无 LLM 时进 lines 供分块——这里只断言写入的生成区不含 file_key
@@ -460,5 +461,73 @@ describe('S63 项目群全量汇总归档知识库', () => {
     expect(latest.id).toBe(run.id)
     expect(latest.status).toBe('done')
     expect(latest.createdBy).toBe(members.admin.id)
+  })
+})
+
+// —— 【工程防线】S63 写入修复（v0.80.1）：gb-test 线上 run#1 实证——飞书 docx 批量建块接口单次
+// children ≤50 的硬上限（超限整包被拒：99992402 field validation failed，~80 块一次 POST）；
+// file 块创建载荷按官方 schema 仅含 token（名称由图注文本块承担，多字段有严格校验风险）。 ——
+
+/** 收集全部 docx 内容插入 POST（排除 batch_delete）的请求体。 */
+function allInsertBodies(calls) {
+  return calls
+    .filter((x) => x.url.includes('/docx/v1/documents/') && x.url.includes('/children') && !x.url.includes('batch_delete') && x.opts.method === 'POST')
+    .map((x) => JSON.parse(x.opts.body))
+}
+
+describe('【工程防线】S63 写块分批与 file 块 schema（99992402 修复）', () => {
+  it('分批写入：块数超 50 自动拆多次 POST，单次 ≤50、块数不丢、幂等锚点=首批首块', async () => {
+    const p = fresh()
+    await bindWiki(p)
+    // 时间线做大：模板任务置 done + 50 条记录事件 → 64 条 → 截 60 + 省略说明 = 61 块，加结构块约 71 块
+    db.prepare("UPDATE tasks SET status = 'done' WHERE project_id = ?").run(p.id)
+    for (let i = 0; i < 50; i++) {
+      addEvent(db, { projectId: p.id, eventType: 'progress', nature: 'record', summary: `进展事项 ${i}`, speakerMemberId: members.admin.id })
+    }
+    const calls = stubArchiveFetch({ pages: [{ items: [], has_more: false }] })
+    const run = await startWikiArchive(db, p.id, members.admin.id, { defer: false })
+    expect(run.status).toBe('done')
+    const bodies = allInsertBodies(calls)
+    expect(bodies.length).toBeGreaterThanOrEqual(2) // 修复前整包一次 POST（线上被飞书 99992402 拒）
+    for (const b of bodies) expect(b.children.length).toBeLessThanOrEqual(50)
+    expect(bodies.reduce((s, b) => s + b.children.length, 0)).toBeGreaterThan(50) // 块数完整送达
+    expect(run.firstBlockId).toBe('gen1') // 幂等锚点=首批首块（分批后仍取首批返回）
+  })
+
+  it('file 块载荷仅含 token（官方 schema）：name 不进块结构，文件名由图注文本块承担', async () => {
+    const p = fresh()
+    await bindWiki(p)
+    const createdSec = createdSecOf(p.id)
+    const calls = stubArchiveFetch({
+      pages: [{ items: [msg('mf', createdSec + 3600, 'fs_li', '', { msgType: 'file', fileKey: 'fk1', fileName: '验收报告.pdf' })], has_more: false }],
+      fileResponder: (_url) => ({ ok: true, status: 200, headers: { get: () => 'application/pdf' }, body: (async function* () { yield Uint8Array.from([1, 2, 3]) })() }),
+    })
+    const run = await startWikiArchive(db, p.id, members.admin.id, { defer: false })
+    expect(run.status).toBe('done')
+    expect(run.fileCount).toBe(1)
+    const blocks = allInsertBodies(calls).flatMap((b) => b.children)
+    const fileBlocks = blocks.filter((b) => b.block_type === 18)
+    expect(fileBlocks.length).toBe(1)
+    expect(Object.keys(fileBlocks[0].file)).toEqual(['token']) // 多字段会被严格校验拒（99992402 风险面）
+    expect(fileBlocks[0].file.token).toBe('ft_1')
+    const texts = blocks.filter((b) => b.block_type === 2).map((b) => b.text.elements[0].text_run.content)
+    expect(texts.some((t) => t.includes('验收报告.pdf'))).toBe(true) // 文件名在图注里可见
+  })
+
+  it('insertDocBlocks 指定 index 时随批递增：120 块 → 3 次 POST（50/50/20），index = 7/57/107', async () => {
+    const { insertDocBlocks } = await import('../brain/connectors/feishu.js')
+    let postSeq = 0 // 独立计数器（calls 含 token 调用，勿用 calls.length 生成 id）
+    const calls = stubFetch([['/children', (_url, opts) => {
+      const n = JSON.parse(opts.body).children.length
+      const seq = ++postSeq
+      return okJson({ children: Array.from({ length: n }, (_, i) => ({ block_id: `b_${seq}_${i}` })) })
+    }]])
+    const blocks = Array.from({ length: 120 }, (_, i) => ({ block_type: 2, text: { elements: [{ text_run: { content: `行${i}` } }] } }))
+    const created = await insertDocBlocks({ appId: 'a', appSecret: 's' }, 'doc1', blocks, 7)
+    const posts = calls.filter((c) => String(c.url).includes('/children') && c.opts.method === 'POST')
+    expect(posts.map((c) => JSON.parse(c.opts.body).children.length)).toEqual([50, 50, 20])
+    expect(posts.map((c) => JSON.parse(c.opts.body).index)).toEqual([7, 57, 107])
+    expect(created).toHaveLength(120)
+    expect(created[0].block_id).toBe('b_1_0') // 首块来自首批（幂等锚点语义不变）
   })
 })
