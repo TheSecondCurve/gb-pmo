@@ -379,3 +379,15 @@
 - 理由：用户 2026-10-26 要求浏览器至少 1 年不用重新登录。内网小团队 + D1 全员透明，会话被盗的横向危害有限，而每周重登是实打实的日常摩擦；补偿控制已在：httpOnly + HMAC 签名（防脚本读取与篡改）、服务端 `sessions` 行可即时撤销（登出 DELETE、离职联动 DELETE 并吊销令牌），Agent PAT 面独立 90 天不受影响。
 - 不做：滑动续期（需求是「一年内不重登」而非「永不重登」，每请求写库不值当）；「记住我」两档（内网单一场景不需要）；`secure` 标记（内网可能 HTTP 直连，交给反代/部署层决定）；过期 session 行定期清理（一人一次登录一行，体量可忽略，`idx_sessions_expires` 已在）。
 - 待办/风险：`updateMember` 改密码只换 hash、**不清退该成员既有会话**——会话拉到 400 天后此缺口放大（密码泄露后重置密码无法逐出已登录的会话），建议后续补「改密即清退该成员全部 session」（管理员重置自己密码时会同时登出自己，可接受）。
+
+## K62 项目组合页服务端查询化：默认只看进行中 + 模糊查询 + 分页（S30-6/S30-7，v0.79）
+
+- 决策：`GET /api/v1/projects` 从「全量取回、前端筛」升级为**服务端查询**（engine 新增 `queryProjects`，`listProjects` 保留为数组形态薄壳供既有测试/调用方使用）：①`q` 模糊查询——按空白分词，各词 AND，须命中 `p.name`/`p.client_name`/牵头人名/类型名（`COALESCE(pt.name, p.template_code)`，与前端展示口径一致）任一字段，LIKE `%词%` + `ESCAPE '\'`（`%`/`_` 按字面匹配），SQLite LIKE 对 ASCII 天然大小写不敏感；②`priority` 单值过滤；③`sort` ∈ priority（缺省，优先级档位+最近更新）/ delivery（进行中且填交付日期的按日升序在前，其余沉底——终态与无日期同沉，镜像前端 `daysToDelivery ?? Infinity` 语义）/ activity（最近事件降序、无事件沉底）/ updated，服务端排序保证**跨页有序**；④`unscheduled`/`overdue` 快捷过滤（对应既有摘要芯片：双日期全空 / 逾期任务>0）；⑤`page`/`pageSize` 分页（1~100，缺省 20；**不带分页参数=全量返回**，Dashboard 等既有消费方零改动）；⑥响应附 `total`（当前筛选全量计数）与 `facets.byStatus/unscheduled/overdueTasks`——**facets 仅受 q/priority 影响、不受状态选择影响**，摘要芯片计数在分页下依然准确（此前前端从全量数据算计数，分页后必须服务端给）。前端默认状态集从三态全开改为**仅进行中**（点已结项/已取消芯片才纳入查询，至少保留一个状态）。
+- 理由：用户 2026-10-28 要求——项目多了以后，已结项项目淹没在跑项目（默认全展示）、搜索只有前端 substring、列表无分页。v0.29 §7.12「项目数量级小，无分页需求」的前提已被现实推翻；一次性取全三态 + 前端筛选的架构在几百个项目时既慢又不可扩展，把筛选/排序/分页下沉到 SQL 是 SQLite 单机形态下最自然的一档。
+- 边界：不做游标分页（单机 SQLite、组合页有跳页诉求，OFFSET 足够）；`q` 不做全文索引/拼音/分词搜索（LIKE 覆盖 项目名/客户/牵头人/类型 四字段的子串与多词 AND，够用）；`facets` 不做独立端点（多一次往返不值当）；四视图仍为纯前端切换（对当前页渲染），看板/人员/时间线在分页下呈现当前页的分组与甘特——语义如实（「当前筛选的第 N 页」），不虚构全量；Dashboard 不分页（在跑项目量级小，维持现状）。
+
+## K63 指标层终态项目退出：全局看板不再统计已结项/已取消（S5-5，v0.79）
+
+- 决策：`engine/metrics.js` 补齐**进行中项目**过滤——`overdue_tasks` 与 `unassigned_tasks` 的 WHERE 增 `p.status = 'active'`，`keyperson_load` 的 open_tasks 子查询增 `project_id IN (SELECT id FROM projects WHERE status = 'active')`；三张定义卡文案同步写明口径（「仅统计进行中项目的任务」）。running_projects/silent_projects/project_health/dashboard 列表本就 `p.status='active'`（无需改），并补测试锚定「**无交付日期的在跑项目照常计入**」（列表与 running_projects 都不依赖 plan_end_date，此前无锚定，用户 2026-10-28 明确要求确保）。
+- 理由：S29-3 承诺「终态项目未完任务退出指标」，但只落在了预警/梳理/日报等 brain 路径（那些 SQL 都显式 `p.status='active'`），metrics 层三个任务口径指标漏了——**取消**项目的任务冻结（状态仍是 todo/doing），其逾期/未指派任务与负载一直污染全局看板数字（结项项目因结项校验全部任务完成，实际不受影响）。指标口径唯一真相源在 metrics.js，修一处 dashboard 与 Agent metrics 端点同源生效（S5-3）。
+- 边界：不改 `OPEN_TASK` 常量本体（它在 project_health 等处本就运行在 active 项目定域内，动它需要连带子查询 join，收益为负）；weekly_project_flow 的 `closed` 行是**流量**口径（本周结项数），语义即统计终态事件，不在此列；tasks 表不加项目状态冗余列（JOIN 足够，单机量级）。

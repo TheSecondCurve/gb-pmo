@@ -209,29 +209,109 @@ export function getProjectDetail(db, id) {
   }
 }
 
-/** S5-1 全局列表：按优先级档位排序，含健康度要素（逾期数 / 最近实质更新）。 */
+/** S5-1 全局列表：按优先级档位排序，含健康度要素（逾期数 / 最近实质更新）。S30-7（v0.79）起为 queryProjects 的数组薄壳。 */
 export function listProjects(db, { statuses = OPEN_STATUSES } = {}) {
-  const ph = statuses.map(() => '?').join(',')
-  const rows = db
-    .prepare(
-      `SELECT p.*, m.name AS lead_name, pt.name AS type_name,
-         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.status IN ('todo','doing','blocked')
-            AND t.deleted_at IS NULL AND t.kind = 'work' AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY()) AS overdue_tasks,
-         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.deleted_at IS NULL AND t.kind = 'work') AS tasks_total,
-         (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.deleted_at IS NULL AND t.kind = 'work' AND t.status = 'done') AS tasks_done,
-         (SELECT MAX(e.business_time) FROM project_events e WHERE e.project_id = p.id AND e.status = 'effective') AS last_event_at
-       FROM projects p LEFT JOIN members m ON m.id = p.lead_member_id
-       LEFT JOIN project_types pt ON pt.id = p.project_type_id
-       WHERE p.status IN (${ph})
-       ORDER BY ${PRIORITY_ORDER}, p.updated_at DESC`
-    )
-    .all(...statuses)
-  return rows.map((r) => {
-    const row = camelizeRow(r)
-    row.silentDays = row.lastEventAt ? Math.floor((Date.now() - row.lastEventAt) / 86400000) : null
-    row.daysToDelivery = daysToDelivery(r)
-    return row
-  })
+  return queryProjects(db, { statuses }).projects
+}
+
+/**
+ * S30-7（v0.79，K62）服务端查询：项目组合页的筛选/排序/分页下沉到 SQL。
+ * - q 模糊：按空白分词、各词 AND，须命中 项目名/客户名/牵头人名/类型名（含 template_code 兜底）任一，
+ *   LIKE %词% + ESCAPE '\'（%/_ 按字面匹配；SQLite LIKE 对 ASCII 天然大小写不敏感）；
+ * - sort ∈ priority（缺省）/delivery（进行中且填交付日期的按日升序，其余沉底——镜像前端 daysToDelivery ?? Infinity）
+ *   /activity（最近事件降序、无事件沉底）/updated，服务端排序保证跨页有序；
+ * - unscheduledOnly（双日期全空）/overdueOnly（有逾期任务）快捷过滤；
+ * - page/pageSize 分页（路由层已校验 1~100）；不传分页参数=全量返回（Dashboard 等既有消费方）；
+ * - 响应附 total（当前筛选全量计数）与 facets（byStatus/unscheduled/overdueTasks，仅受 q/priority 影响、
+ *   不受状态选择影响——摘要芯片计数在分页下依然准确）。
+ */
+export const PROJECT_SORT_KEYS = ['priority', 'delivery', 'activity', 'updated']
+
+const OVERDUE_TASKS_SUB = (alias = 'p') => `
+  (SELECT COUNT(*) FROM tasks t WHERE t.project_id = ${alias}.id
+     AND t.status IN ('todo','doing','blocked') AND t.deleted_at IS NULL AND t.kind = 'work'
+     AND t.plan_end_date IS NOT NULL AND t.plan_end_date < BJ_TODAY())`
+
+const SORT_ORDER = {
+  priority: `${PRIORITY_ORDER}, p.updated_at DESC`,
+  // 交付临近：进行中且填交付日期的按日升序在前，终态/无日期沉底成组不穿插（S30-2 语义进 SQL）
+  delivery: `(p.status = 'active' AND p.plan_end_date IS NOT NULL) DESC, p.plan_end_date ASC, ${PRIORITY_ORDER}, p.updated_at DESC`,
+  activity: `(last_event_at IS NULL), last_event_at DESC`, // 无事件沉底
+  updated: 'p.updated_at DESC',
+}
+
+const LIKE_FIELDS = `p.name LIKE ? ESCAPE '\\' OR p.client_name LIKE ? ESCAPE '\\' OR m.name LIKE ? ESCAPE '\\' OR COALESCE(pt.name, p.template_code) LIKE ? ESCAPE '\\'`
+
+function qTokens(q) {
+  return String(q || '').split(/\s+/).map((t) => t.trim()).filter(Boolean)
+}
+
+/** q/priority → WHERE 片段（facets 基准也用它：不含状态选择）。 */
+function softFilter({ q, priority }) {
+  const where = []
+  const args = []
+  for (const tok of qTokens(q)) {
+    const like = `%${tok.replace(/[\\%_]/g, (c) => `\\${c}`)}%`
+    where.push(`(${LIKE_FIELDS})`)
+    args.push(like, like, like, like)
+  }
+  if (priority) {
+    where.push('p.priority = ?')
+    args.push(priority)
+  }
+  return { where, args }
+}
+
+export function queryProjects(db, {
+  statuses = OPEN_STATUSES, q, priority, sort = 'priority',
+  unscheduledOnly = false, overdueOnly = false, page, pageSize,
+} = {}) {
+  const soft = softFilter({ q, priority })
+  const where = [`p.status IN (${statuses.map(() => '?').join(',')})`, ...soft.where]
+  const args = [...statuses, ...soft.args]
+  if (unscheduledOnly) where.push('(p.plan_start_date IS NULL AND p.plan_end_date IS NULL)')
+  if (overdueOnly) where.push(`${OVERDUE_TASKS_SUB()} > 0`)
+
+  const body = `
+    FROM projects p LEFT JOIN members m ON m.id = p.lead_member_id
+    LEFT JOIN project_types pt ON pt.id = p.project_type_id
+    WHERE ${where.join(' AND ')}`
+  const select = `
+    SELECT p.*, m.name AS lead_name, pt.name AS type_name,
+      ${OVERDUE_TASKS_SUB()} AS overdue_tasks,
+      (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.deleted_at IS NULL AND t.kind = 'work') AS tasks_total,
+      (SELECT COUNT(*) FROM tasks t WHERE t.project_id = p.id AND t.deleted_at IS NULL AND t.kind = 'work' AND t.status = 'done') AS tasks_done,
+      (SELECT MAX(e.business_time) FROM project_events e WHERE e.project_id = p.id AND e.status = 'effective') AS last_event_at`
+  const order = PROJECT_SORT_KEYS.includes(sort) ? SORT_ORDER[sort] : SORT_ORDER.priority
+  const limit = Number.isInteger(page) && Number.isInteger(pageSize) && pageSize > 0
+    ? ` LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`
+    : ''
+  const rows = db.prepare(`${select}${body} ORDER BY ${order}${limit}`).all(...args)
+  const total = db.prepare(`SELECT COUNT(*) AS n${body}`).get(...args).n
+
+  // facets：三态计数/未排期/逾期任务总数——只受 q/priority 影响（状态选择/分页不改变芯片计数）
+  const fwhere = soft.where.length ? soft.where.join(' AND ') : '1=1'
+  const frows = db.prepare(`
+    SELECT p.status, COUNT(*) AS n,
+      SUM(CASE WHEN p.plan_start_date IS NULL AND p.plan_end_date IS NULL THEN 1 ELSE 0 END) AS unscheduled,
+      SUM(${OVERDUE_TASKS_SUB()}) AS overdue_tasks
+    FROM projects p LEFT JOIN members m ON m.id = p.lead_member_id
+    LEFT JOIN project_types pt ON pt.id = p.project_type_id
+    WHERE ${fwhere} GROUP BY p.status`).all(...soft.args)
+  const facets = { byStatus: { active: 0, closed: 0, cancelled: 0 }, unscheduled: 0, overdueTasks: 0 }
+  for (const r of frows) {
+    facets.byStatus[r.status] = r.n
+    facets.unscheduled += r.unscheduled
+    facets.overdueTasks += r.overdue_tasks
+  }
+  return { projects: rows.map(shapeListRow), total, facets }
+}
+
+function shapeListRow(r) {
+  const row = camelizeRow(r)
+  row.silentDays = row.lastEventAt ? Math.floor((Date.now() - row.lastEventAt) / 86400000) : null
+  row.daysToDelivery = daysToDelivery(r)
+  return row
 }
 
 /** S5-2 优先级调整等字段维护：立即生效 + 事件痕迹。S29：不再受理 status（状态仅经结项/取消变更）；终态项目只读。 */
