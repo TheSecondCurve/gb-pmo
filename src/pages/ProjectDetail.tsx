@@ -339,8 +339,8 @@ export default function ProjectDetail({ id }: { id: number }) {
 
         <Card title="知识库（飞书）" actions={
           <span className="flex items-center gap-2">
-            {/* S63：手动触发全量汇总归档（绑定页面后可用；running 中防重入） */}
-            {wiki && canArchiveWiki && (
+            {/* S63：手动触发全量汇总归档（绑定页面后可用；running 中防重入）；S72：常态项目关闭（K68） */}
+            {wiki && canArchiveWiki && !routine && (
               <Btn small kind="primary" disabled={archiveRun?.status === 'running'} onClick={startArchive}>
                 {archiveRun?.status === 'running' ? '生成中…' : '生成项目汇总'}
               </Btn>
