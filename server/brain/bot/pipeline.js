@@ -12,19 +12,20 @@ import { morningReport } from '../../engine/morning.js'
 import { tasksInventory } from '../../engine/tasks.js'
 import { myWork, weekAhead, riskBoard } from '../../engine/statusBoard.js' // S53
 import { runAgentLoop } from './agent.js'
-import { runQueryTool, runMetricTool, runWriteTool, runBriefTool, runRecentChatTool, runMinutesTool } from './tools.js'
+import { runQueryTool, runMetricTool, runWriteTool, runBriefTool, runRecentChatTool, runMinutesTool, runQuickCreate } from './tools.js'
 
 // —— 帮助文案（按 surface；/bind 仅飞书私聊，web 清单不出现） ——
 
 const HELP_IM = `我是项目大脑机器人，可以直接用自然语言使唤我：
 · 查询/汇总：「我的任务」「A 项目现在怎么样」「逾期有哪些」「总结一下 A 项目」
 · 快捷命令（零等待）：/my（我的任务+明日到期+待确认）、/week（本周到期任务与里程碑）、/risk（全局风险板）、/morning（今日晨报）、/tasks（任务盘点）
+· 快速立项：新项目群里 @我 发 /init [类型码]——群名做项目名、你当牵头人，一条链建项目（类型任务清单）+ 绑本群 + 在默认父页面下建知识页
 · 登记：「登记进展：接口联调完成」「登记风险：等客户环境」（记录型，直接生效）
 · 变更：「把任务 #12 标为完成」「任务 #12 推迟到 2026-10-05」「任务 #12 转给小王」（直接生效并回执；一条指令可含多个变更，批量一次办完）
 · 项目维护：「建个任务：XXX」「加个里程碑：XX 验收」「更新项目优先级为高」（牵头人/管理员直接生效；一条消息列多个任务会一次建完）；「取消项目」「结项」会出确认卡，牵头人/管理员点按后才生效
 · 群登记：管理员或牵头人在群里 @我 说「这是 XX 项目的群」（直接登记生效）
 · 记忆：我记得本会话最近的对话（约 2 小时内、群聊含他人发言），发 /new 立刻清空重新开始
-· 命令：/bind <绑定码>（绑定飞书账号，仅私聊）、/new（开新话题）、/morning、/tasks、/my、/week、/risk、/help`
+· 命令：/bind <绑定码>（绑定飞书账号，仅私聊）、/new（开新话题）、/init [类型码]（新群快速立项）、/morning、/tasks、/my、/week、/risk、/help`
 
 const HELP_WEB = `我是项目大脑 AI 助手，直接用自然语言使唤我：
 · 查询/汇总：「我的任务」「A 项目现在怎么样」「逾期有哪些」「总结一下 A 项目」
@@ -163,9 +164,24 @@ async function slashRisk(db, env, reply) {
   }
 }
 
+// S70（v0.82，K66）：新群快速立项——零 LLM 斜杠（先于未登记群开关/限额/LLM 配置分发）：
+// 项目名=群名、牵头人=发起人、类型=参数 → projects.quickCreateTypeCode → 拒绝列候选。
+async function slashInit(db, env, reply) {
+  if (!env.member) {
+    return reply('还未识别你的飞书账号。请先在系统 web 端登录生成飞书绑定码（10 分钟内有效），再私聊我发送 /bind <绑定码> 完成绑定。', { intent: 'init', result: 'guidance' })
+  }
+  if (env.chatType !== 'group') {
+    return reply('快速立项只在群聊里可用——在新项目群里 @我 发 /init [类型码]。', { memberId: env.member.id, intent: 'init', result: 'replied' })
+  }
+  const typeCode = env.args.trim().split(/\s+/)[0] || undefined
+  const r = await runQuickCreate(db, { typeCode }, { member: env.member, evt: env.evt, platform: env.platform })
+  return reply(r.text, { memberId: env.member.id, intent: 'init', result: r.result || 'replied' })
+}
+
 const SLASH_COMMANDS = {
   '/bind': { surfaces: ['im'], run: slashBind },
   '/new': { surfaces: ['im', 'web'], aliases: ['/clear'], run: slashNew },
+  '/init': { surfaces: ['im'], aliases: ['/立项', '/快速立项'], run: slashInit }, // S70 快速立项
   '/morning': { surfaces: ['im', 'web'], aliases: ['/晨报', '/today'], run: slashMorning },
   '/tasks': { surfaces: ['im', 'web'], aliases: ['/任务', '/盘点'], run: slashTasks },
   '/my': { surfaces: ['im', 'web'], aliases: ['/我的'], run: slashMy }, // S53

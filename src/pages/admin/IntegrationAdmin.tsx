@@ -250,7 +250,32 @@ function FeishuCard() {
         {calMsg && <div className="mt-2 text-[12px]">{calMsg}</div>}
       </Card>
       <WikiDefaultParentCard />
+      <QuickCreateTypeCard />
     </div>
+  )
+}
+
+/** S70（v0.82，K66）：快速立项默认类型——新群 /init 未显式给类型码时兜底；与默认父页面卡同页（一套流程两配置）。 */
+function QuickCreateTypeCard() {
+  const { toast } = useStore()
+  const [code, setCode] = useState<string | null>(null)
+  useEffect(() => {
+    void (async () => {
+      const s = await api.settings()
+      setCode((s.projects as { quickCreateTypeCode?: string })?.quickCreateTypeCode ?? '')
+    })()
+  }, [])
+  if (code === null) return null
+  return (
+    <Card title="快速立项默认类型（S70）：新项目群 @机器人 /init 未给类型码时使用">
+      <p className="mb-3 text-[12px] leading-5 text-[var(--color-ink-soft)]">
+        新项目群 @机器人 发 /init [类型码] 一条链完成：立项（群名做项目名、发起人当牵头人、类型任务清单实例化）→ 绑本群为专题渠道 → 在上方「知识库默认父页面」下建项目知识页。此处配的编码在指令未给类型码时兜底（缺省 custom=自由创建，空项目锚点）；留空 = 必须显式给类型码。编码不在保存时校验，立项时校验并明确报错。
+      </p>
+      <div className="flex items-center gap-2">
+        <input className={`${inputCls} flex-1`} value={code} onChange={(e) => setCode(e.target.value)} placeholder="如 lianmai_365（见「项目管理→项目类型」）" />
+        <Btn kind="primary" onClick={async () => { await api.putSetting('projects', { quickCreateTypeCode: code }); toast('快速立项默认类型已保存') }}>保存</Btn>
+      </div>
+    </Card>
   )
 }
 

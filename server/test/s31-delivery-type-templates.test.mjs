@@ -63,14 +63,18 @@ describe('S31 四类交付项目类型预置', () => {
     }
   })
 
-  it('S31-3: 当迁移完成后，占位类型应为停用态且不可再立项（历史项目不受影响）', async () => {
+  it('S31-3: 当迁移完成后，占位类型应为停用态且不可再立项（历史项目不受影响；custom 除外，v0.82 重新启用）', async () => {
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const res = await authed(ctx.app, cookie, 'GET', '/api/v1/project-types')
     const byCode = Object.fromEntries(res.body.types.map((t) => [t.code, t]))
     for (const code of PLACEHOLDER_CODES) {
       expect(byCode[code], `缺少占位类型 ${code}`).toBeTruthy()
-      expect(byCode[code].status).toBe('disabled')
     }
+    // software_delivery/consulting 维持停用（0017）；custom 例外——0037 重新启用为「自由创建」，
+    // 作快速立项默认类型（S70/K66，用户 2026-10-28 拍板）
+    expect(byCode.software_delivery.status).toBe('disabled')
+    expect(byCode.consulting.status).toBe('disabled')
+    expect(byCode.custom.status).toBe('active')
     // 停用类型立项应 400（S17-8 既有校验）
     const create = await authed(ctx.app, cookie, 'POST', '/api/v1/projects', {
       name: '旧占位类型立项', typeCode: 'software_delivery', leadMemberId: ctx.members.lead.id,
