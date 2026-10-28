@@ -63,6 +63,8 @@ export function createProject(db, input, by) {
   // 无交付日期、结项豁免「全部任务完成」）；立项选定后不可变更（updateProject 拒绝）。
   const kind = input.kind == null || input.kind === '' ? 'delivery' : assertValue('projectKind', input.kind)
   const isRoutine = kind === 'routine'
+  // S69-8（K65）：执行视图默认窗口（仅常态项目有意义；缺省 week，中央枚举校验）
+  const boardSpan = isRoutine ? (input.boardSpan == null || input.boardSpan === '' ? 'week' : assertValue('boardSpan', input.boardSpan)) : 'week'
   if (isRoutine) {
     if (planStartDate || planEndDate) {
       throw Object.assign(new Error('常态项目无计划起止/交付日期（S69）——按周视图管理每日执行'), { statusCode: 400 })
@@ -84,10 +86,10 @@ export function createProject(db, input, by) {
   const now = Date.now()
   const created = db.transaction(() => {
     const info = db.prepare(
-      `INSERT INTO projects (name, template_code, project_type_id, kind, status, priority, lead_member_id, client_name,
+      `INSERT INTO projects (name, template_code, project_type_id, kind, board_span, status, priority, lead_member_id, client_name,
          plan_start_date, plan_end_date, actual_start_date, init_extra, created_by, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(name, type.code, type.id, kind, priority, leadMemberId, clientName || null,
+       VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(name, type.code, type.id, kind, boardSpan, priority, leadMemberId, clientName || null,
       planStartDate || null, planEndDate || null, today(), initExtra ?? null, by ?? null, now, now)
     const projectId = Number(info.lastInsertRowid)
     const refCount = items.reduce((s, it) => s + it.refs.length, 0)
@@ -354,6 +356,13 @@ export function updateProject(db, id, patch, by) {
     throw Object.assign(new Error('常态项目无计划起止/交付日期（S69）——按周视图管理每日执行'), { statusCode: 400 })
   }
   const fields = {}
+  // S69-8（K65）：执行视图默认窗口——仅常态项目可设（交付项目视图与打卡无关），中央枚举校验
+  if ('boardSpan' in patch) {
+    if (cur.kind !== 'routine') {
+      throw Object.assign(new Error('执行视图窗口仅常态项目可设置（S69-8）'), { statusCode: 400 })
+    }
+    fields.board_span = assertValue('boardSpan', patch.boardSpan)
+  }
   if ('name' in patch) fields.name = patch.name
   if ('clientName' in patch) fields.client_name = patch.clientName || null
   if ('planStartDate' in patch) fields.plan_start_date = patch.planStartDate || null

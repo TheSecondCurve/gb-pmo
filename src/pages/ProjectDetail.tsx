@@ -185,7 +185,7 @@ export default function ProjectDetail({ id }: { id: number }) {
           S57（v0.62）：进度与甘特只认工作类——纯提醒送达不算工作完成度（与 brief/metrics 口径一致，K40）。
           S69（v0.80，K64）：常态项目以周视图二维表代替——甘特对无期限项目无意义。 */}
       {routine
-        ? <DailyWeekGrid projectId={id} readonly={readonly} onChanged={() => void refresh()} />
+        ? <DailyWeekGrid projectId={id} defaultSpan={p.boardSpan ?? 'week'} readonly={readonly} onChanged={() => void refresh()} />
         : <ProgressSchedule tasks={p.tasks.filter((t) => t.kind !== 'reminder')} milestones={p.milestones} projectEndDate={p.planEndDate} />}
 
       <Card title={`02 · 任务面（${p.tasks.length}）${readonly ? ' · 只读' : ''}`} actions={!readonly ? (

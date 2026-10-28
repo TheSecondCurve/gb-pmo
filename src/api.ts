@@ -112,9 +112,15 @@ export const api = {
   // S66（v0.73）：我的任务工作台（纯读，按会话成员定域）
   myTasks: () => req<import('./types').MyTasksBoard>('GET', '/api/v1/my-tasks'),
 
-  // S69（v0.80，K64）：常态项目周视图（week=任意日定位所在周，缺省当前北京自然周）与每日打卡
-  dailyBoard: (id: number, week?: string) =>
-    req<import('./types').DailyBoardData>('GET', `/api/v1/projects/${id}/daily-board${week ? `?week=${week}` : ''}`),
+  // S69（v0.80 K64 / v0.81 K65）：常态项目执行视图（span=week|biweek|month 三档，缺省取项目默认；
+  // anchor=任意日定位所在期，缺省今天；导航锚点服务端下发）与每日打卡
+  dailyBoard: (id: number, opts: { anchor?: string; span?: string } = {}) => {
+    const s = new URLSearchParams()
+    if (opts.anchor) s.set('anchor', opts.anchor)
+    if (opts.span) s.set('span', opts.span)
+    const qs = s.toString()
+    return req<import('./types').DailyBoardData>('GET', `/api/v1/projects/${id}/daily-board${qs ? `?${qs}` : ''}`)
+  },
   setDayStatus: (projectId: number, body: { taskId: number; day: string; status: string; note?: string }) =>
     req<import('./types').DailyCell & { eventId: number | null }>('POST', `/api/v1/projects/${projectId}/daily-board`, body),
 

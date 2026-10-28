@@ -1,10 +1,12 @@
-// S69（v0.80，design.md K64）：常态项目每周执行周视图 + 每日打卡引擎。
+// S69（v0.80，design.md K64）：常态项目执行视图 + 每日打卡引擎。
+// v0.81（K65，S69-8）：窗口三档 span（周/双周/月）——窗口数学唯一真相源在引擎（BOARD_SPANS 表驱动），
+// 前端导航只消费响应里的 prevAnchor/nextAnchor，不做任何日期推算；行统计为「本期」口径。
 // 建模：任务行=模板（tasks.kind='routine' + weekdays 适用星期），每日执行状态独立落
 // task_day_records（(task_id, day) 唯一，惰性 upsert——不预生成实例，无记录=未做；重置=删行）。
 // 打卡=记录型事件（K50 语义）：每次状态变更同步落讨论面 record 型 progress 事件（append-only）+ 审计。
-// 周语义：北京自然周周一锚点（S19），weeklyBoard 以任意日定位所在周；拒绝未来日期打卡（可补过去）。
+// 打卡按天不按期：三档窗口下「可补过去、拒未来」与适用星期语义均不变（周档=北京自然周周一锚点，S19）。
 
-import { today, addDays, bjWeekStartMs, weekdayOf, mondayOf, isCalendarDay } from '../db/time.js'
+import { today, addDays, weekdayOf, mondayOf, isCalendarDay, dayDiff, monthStartOf, nextMonthStartOf, monthShiftOf } from '../db/time.js'
 import { assertValue, label } from './enums.js'
 import { addEvent } from './events.js'
 import { audit } from './auth.js'
@@ -12,6 +14,43 @@ import { normalizeTaskNote, normalizeWeekdays } from './projectTypes.js'
 
 const WEEKDAY_CHARS = ['', '一', '二', '三', '四', '五', '六', '日']
 export const ALL_WEEK = [1, 2, 3, 4, 5, 6, 7]
+
+/**
+ * 双周全局纪元锚（K65）：2024-01-01 恰为周一，自它起每 14 天一期——连续、确定、跨年不断链。
+ * （按年锚「当年第一个周一」各年首周一间隔非 14 倍数，跨年处会断出残期，弃用。）
+ */
+export const BIWEEK_EPOCH = '2024-01-01'
+
+const biweekStartOf = (day) => addDays(BIWEEK_EPOCH, Math.floor(dayDiff(BIWEEK_EPOCH, day) / 14) * 14)
+
+const rangeOf = (start, n) => Array.from({ length: n }, (_, i) => addDays(start, i))
+const rangeUntil = (start, exclusiveEnd) => {
+  const days = []
+  for (let d = start; d < exclusiveEnd; d = addDays(d, 1)) days.push(d)
+  return days
+}
+
+/**
+ * 执行视图窗口目录（K65：加档=加一行配置，无 if/else 散落）。每档两件事：
+ * window(anchor) → 期内逐日 days[]；shift(start, ±n) → 相邻期锚点（导航服务端下发）。
+ */
+export const BOARD_SPANS = {
+  week: {
+    label: '周',
+    window: (anchor) => rangeOf(mondayOf(anchor), 7),
+    shift: (start, n) => addDays(start, n * 7),
+  },
+  biweek: {
+    label: '双周',
+    window: (anchor) => rangeOf(biweekStartOf(anchor), 14),
+    shift: (start, n) => addDays(start, n * 14),
+  },
+  month: {
+    label: '月',
+    window: (anchor) => rangeUntil(monthStartOf(anchor), nextMonthStartOf(anchor)),
+    shift: (start, n) => monthShiftOf(start, n),
+  },
+}
 
 /** 适用星期的中文标签：全周=「每天」，否则「每周一、三、五」。 */
 export function weekdaysLabel(weekdays) {
@@ -28,33 +67,37 @@ export function parseWeekdays(csv) {
 }
 
 function assertRoutineProject(db, projectId) {
-  const project = db.prepare('SELECT id, name, kind, status FROM projects WHERE id = ?').get(Number(projectId))
+  const project = db.prepare('SELECT id, name, kind, status, board_span FROM projects WHERE id = ?').get(Number(projectId))
   if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
   if (project.kind !== 'routine') {
-    throw Object.assign(new Error('周视图仅常态项目可用（该项目是交付项目，S69）'), { statusCode: 400 })
+    throw Object.assign(new Error('执行视图仅常态项目可用（该项目是交付项目，S69）'), { statusCode: 400 })
   }
   return project
 }
 
 /**
- * S69-2 周视图取数：行=常态任务（编号/标题/备注/责任人/适用星期），列=周一~周日格子。
- * weekAnchor=任意北京日历日（定位所在周，缺省当前自然周，周一锚点 S19）；
- * 格子含 状态（pending=无记录）/备注/操作人/来源；不适用日 applicable=false；
- * 行尾 weekDone/weekApplicable、表尾 summary（含逐日 perDay 完成数）。终态项目可读（历史可查）。
+ * S69-2/S69-8 执行视图取数：行=常态任务（编号/标题/备注/责任人/适用星期），列=窗口内逐日格子。
+ * span ∈ week|biweek|month（解析序 = 参数 → 项目默认 board_span → week，中央枚举校验非法 400）；
+ * anchor=任意北京日历日（定位所在期，缺省今天）；响应含 start/end/days/prevAnchor/nextAnchor——
+ * 窗口数学唯一在引擎，前端导航零日期推算。格子含 状态（pending=无记录）/备注/操作人/来源，
+ * 不适用日 applicable=false；行尾 periodDone/periodApplicable（本期口径）、表尾 summary（逐日 perDay）。
+ * 终态项目可读（历史可查）。
  */
-export function weeklyBoard(db, projectId, { weekAnchor, now = Date.now() } = {}) {
+export function getDailyBoard(db, projectId, { anchor, span, now = Date.now() } = {}) {
   const project = assertRoutineProject(db, projectId)
-  let monday
-  if (weekAnchor === undefined || weekAnchor === null || weekAnchor === '') {
-    monday = today(bjWeekStartMs(now))
+  const resolvedSpan = assertValue('boardSpan', span || project.board_span || 'week')
+  let anchorDay
+  if (anchor === undefined || anchor === null || anchor === '') {
+    anchorDay = today(now)
   } else {
-    if (!isCalendarDay(String(weekAnchor))) {
-      throw Object.assign(new Error('week 须为真实日历日 YYYY-MM-DD（任意一天，定位所在周）'), { statusCode: 400 })
+    if (!isCalendarDay(String(anchor))) {
+      throw Object.assign(new Error('anchor 须为真实日历日 YYYY-MM-DD（任意一天，定位所在期）'), { statusCode: 400 })
     }
-    monday = mondayOf(String(weekAnchor))
+    anchorDay = String(anchor)
   }
-  const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i))
-  const sunday = days[6]
+  const days = BOARD_SPANS[resolvedSpan].window(anchorDay)
+  const start = days[0]
+  const end = days[days.length - 1]
 
   const tasks = db.prepare(
     `SELECT t.id AS task_id, t.title, t.note, t.weekdays, t.responsible_member_id, m.name AS responsible_name
@@ -67,7 +110,7 @@ export function weeklyBoard(db, projectId, { weekAnchor, now = Date.now() } = {}
     for (const r of db.prepare(
       `SELECT r.*, m.name AS operator_name FROM task_day_records r LEFT JOIN members m ON m.id = r.operator_member_id
        WHERE r.task_id IN (${ids.map(() => '?').join(',')}) AND r.day >= ? AND r.day <= ?`
-    ).all(...ids, monday, sunday)) {
+    ).all(...ids, start, end)) {
       records.set(`${r.task_id}|${r.day}`, r)
     }
   }
@@ -88,13 +131,13 @@ export function weeklyBoard(db, projectId, { weekAnchor, now = Date.now() } = {}
         updatedAt: r ? r.updated_at : null,
       }
     })
-    const weekApplicable = cells.filter((c) => c.applicable).length
-    const weekDone = cells.filter((c) => c.applicable && c.status === 'done').length
+    const periodApplicable = cells.filter((c) => c.applicable).length
+    const periodDone = cells.filter((c) => c.applicable && c.status === 'done').length
     return {
       taskId: t.task_id, title: t.title, note: t.note ?? null,
       weekdays, weekdaysLabel: weekdaysLabel(weekdays),
       responsibleMemberId: t.responsible_member_id ?? null, responsibleName: t.responsible_name ?? null,
-      cells, weekApplicable, weekDone,
+      cells, periodApplicable, periodDone,
     }
   })
 
@@ -103,16 +146,21 @@ export function weeklyBoard(db, projectId, { weekAnchor, now = Date.now() } = {}
     done: rows.reduce((s, r) => s + (r.cells.find((c) => c.day === day)?.status === 'done' ? 1 : 0), 0),
     skip: rows.reduce((s, r) => s + (r.cells.find((c) => c.day === day)?.status === 'skip' ? 1 : 0), 0),
   }))
-  const applicableCells = rows.reduce((s, r) => s + r.weekApplicable, 0)
+  const applicableCells = rows.reduce((s, r) => s + r.periodApplicable, 0)
   const summary = {
     tasks: rows.length,
     applicableCells,
-    done: rows.reduce((s, r) => s + r.weekDone, 0),
+    done: rows.reduce((s, r) => s + r.periodDone, 0),
     skip: rows.reduce((s, r) => s + r.cells.filter((c) => c.applicable && c.status === 'skip').length, 0),
     pending: applicableCells - rows.reduce((s, r) => s + r.cells.filter((c) => c.applicable && c.status !== 'pending').length, 0),
     perDay,
   }
-  return { projectId: project.id, weekStart: monday, weekEnd: sunday, days, tasks: rows, summary }
+  return {
+    projectId: project.id, span: resolvedSpan, start, end, days,
+    prevAnchor: BOARD_SPANS[resolvedSpan].shift(start, -1),
+    nextAnchor: BOARD_SPANS[resolvedSpan].shift(start, 1),
+    tasks: rows, summary,
+  }
 }
 
 /**

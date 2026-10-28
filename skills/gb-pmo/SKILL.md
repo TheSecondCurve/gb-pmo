@@ -126,6 +126,7 @@ client.sh action generate_person_digest '{}'
 | project_type_id | INTEGER |  |
 | init_extra | TEXT |  |
 | kind | TEXT |  |
+| board_span | TEXT |  |
 
 ### tasks
 
@@ -488,6 +489,7 @@ client.sh action generate_person_digest '{}'
 - **projectStatus**: active=进行中、closed=已结项、cancelled=已取消
 - **projectTypeStatus**: active=启用、disabled=停用
 - **projectKind**: delivery=交付项目、routine=常态项目
+- **boardSpan**: week=周、biweek=双周、month=月
 - **priority**: high=高、medium=中、low=低
 - **taskStatus**: todo=未开始、doing=进行中、done=完成
 - **taskKind**: work=工作、reminder=纯提醒、routine=常态打卡

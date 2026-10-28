@@ -55,6 +55,24 @@ export function mondayOf(day) {
   return addDays(day, -(weekdayOf(day) - 1))
 }
 
+/** day 所在自然月的第一天（YYYY-MM-01；S69-8 月窗口，纯日期串算术）。 */
+export function monthStartOf(day) {
+  return `${day.slice(0, 7)}-01`
+}
+
+/** day 所在自然月的下月第一天（跨年正确；月窗口右界与月导航用）。 */
+export function nextMonthStartOf(day) {
+  const [y, m] = day.split('-').map(Number)
+  return m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`
+}
+
+/** 自然月整月平移 n 个月（入参为月内任意日，返回目标月 1 号；y·12+m 整数化，跨年正确）。 */
+export function monthShiftOf(day, n) {
+  const [y, m] = day.split('-').map(Number)
+  const t = y * 12 + (m - 1) + n
+  return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}-01`
+}
+
 const DATE_SHAPE = /^\d{4}-\d{2}-\d{2}$/
 
 /** YYYY-MM-DD 真实日历日校验（纯算术比对，拒绝 2026-13-40 这类滚动越界；无时区语义）。
