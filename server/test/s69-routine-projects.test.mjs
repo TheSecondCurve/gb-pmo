@@ -2,7 +2,7 @@ import { describe, it, expect, afterAll } from 'vitest'
 import { setupDb, seedMembers, setupApp, loginCookie, authed } from './helpers.mjs'
 import { createProject, updateProject, closeProject, queryProjects } from '../engine/projects.js'
 import { createTask, updateTask, deleteTask, tasksInventory } from '../engine/tasks.js'
-import { weeklyBoard, setDayStatus } from '../engine/dailyBoard.js'
+import { getDailyBoard, setDayStatus } from '../engine/dailyBoard.js'
 import { listEvents } from '../engine/events.js'
 import { runWriteTool } from '../brain/bot/tools.js'
 import { PROPOSAL_KINDS } from '../engine/proposals.js'
@@ -73,8 +73,8 @@ describe('S69 常态项目与每周执行周视图', () => {
 
   it('S69-2: 周视图取数——默认当前北京自然周、week 定位任意周、格子矩阵与不适用日；路由可用', async () => {
     const monday = today(bjWeekStartMs())
-    const board = weeklyBoard(db, routine.id)
-    expect(board.weekStart).toBe(monday)
+    const board = getDailyBoard(db, routine.id)
+    expect(board.start).toBe(monday)
     expect(board.days).toHaveLength(7)
     expect(board.days[0]).toBe(monday)
     expect(board.days[6]).toBe(addDays(monday, 6))
@@ -91,15 +91,16 @@ describe('S69 常态项目与每周执行周视图', () => {
     expect(mwf.cells.map((c) => c.applicable)).toEqual([true, false, true, false, true, false, false])
 
     // week=任意日定位所在周（周三 → 本周一）；汇总统计结构齐全
-    const shifted = weeklyBoard(db, routine.id, { weekAnchor: addDays(monday, 16) }) // 下下周三
-    expect(shifted.weekStart).toBe(addDays(monday, 14))
+    const shifted = getDailyBoard(db, routine.id, { anchor: addDays(monday, 16) }) // 下下周三
+    expect(shifted.start).toBe(addDays(monday, 14))
     expect(shifted.summary).toMatchObject({ tasks: 2, applicableCells: 10 }) // 每天 7 + 周一三五 3
     expect(shifted.summary.perDay).toHaveLength(7)
 
     // 非常态项目 400 / 项目不存在 404
-    expect(() => weeklyBoard(db, delivery.id)).toThrow(/常态/)
-    expect(() => weeklyBoard(db, 99999)).toThrow(/不存在/)
-    expect(() => weeklyBoard(db, routine.id, { weekAnchor: '2026-13-40' })).toThrow(/日历日/)
+    expect(() => getDailyBoard(db, delivery.id)).toThrow(/常态/)
+    expect(() => getDailyBoard(db, 99999)).toThrow(/不存在/)
+    expect(() => getDailyBoard(db, routine.id, { anchor: '2026-13-40' })).toThrow(/日历日/)
+    expect(() => getDailyBoard(db, routine.id, { span: 'fortnight' })).toThrow(/invalid boardSpan/)
 
     // 路由层：GET/POST daily-board（登录态）
     const { app, db: appDb, members: appMembers } = await setupApp()
@@ -109,7 +110,7 @@ describe('S69 常态项目与每周执行周视图', () => {
       const cookie = await loginCookie(app, 'zhangsan', 'pass-123456')
       const got = await authed(app, cookie, 'GET', `/api/v1/projects/${p.id}/daily-board`)
       expect(got.status).toBe(200)
-      expect(got.body.weekStart).toBe(monday)
+      expect(got.body.start).toBe(monday)
       expect(got.body.tasks[0].taskId).toBe(t.id)
       const posted = await authed(app, cookie, 'POST', `/api/v1/projects/${p.id}/daily-board`, { taskId: t.id, day: today(), status: 'done', note: '第 1 章' })
       expect(posted.status).toBe(201)
@@ -239,7 +240,7 @@ describe('S69 常态项目与每周执行周视图', () => {
     expect(closed.status).toBe('closed')
 
     // 周视图仍可读（历史可查），打卡与任务面只读
-    const board = weeklyBoard(db, routine.id)
+    const board = getDailyBoard(db, routine.id)
     expect(board.tasks.length).toBe(3) // 看资讯/周报整理/资讯晚报
     expect(() => setDayStatus(db, { projectId: routine.id, taskId: dailyTask.id, day: today(), status: 'done' }, members.admin.id)).toThrow(/409|只读/)
     expect(() => updateTask(db, dailyTask.id, { title: '改名' }, members.admin.id)).toThrow(/409|只读/)
@@ -307,7 +308,70 @@ describe('S69 常态项目与每周执行周视图', () => {
 
     // 软删退出周视图
     deleteTask(db, viaProposal.id, members.admin.id)
-    const board = weeklyBoard(db, live.id)
+    const board = getDailyBoard(db, live.id)
     expect(board.tasks.map((x) => x.taskId)).toEqual([t.id])
+  })
+
+  it('S69-8: 执行视图三档窗口——周（缺省/自然周）/ 双周（全局纪元锚 2024-01-01 起 14 天，跨年不断链）/ 月（自然月含闰年 2 月）+ 导航锚点服务端下发', () => {
+    const live = createProject(db, { name: '窗口常态', kind: 'routine', typeCode: 'routine_ops', leadMemberId: members.lead.id, tasks: ['窗口项'] }, members.admin.id)
+
+    // 周（缺省）：自然周周一锚点（S19 既有口径不变）
+    const week = getDailyBoard(db, live.id, { anchor: '2026-10-28' }) // 周三
+    expect(week.span).toBe('week')
+    expect(week.start).toBe('2026-10-26')
+    expect(week.days).toHaveLength(7)
+    expect(week.prevAnchor).toBe('2026-10-19')
+    expect(week.nextAnchor).toBe('2026-11-02')
+
+    // 双周：全局纪元锚（2024-01-01 恰为周一）——期内任意日定位同期，跨期对齐 14 天
+    expect(weekdayOf('2024-01-01')).toBe(1) // 纪元锚自检：确为周一
+    const b1 = getDailyBoard(db, live.id, { span: 'biweek', anchor: '2024-01-03' })
+    expect(b1.start).toBe('2024-01-01')
+    expect(b1.days).toHaveLength(14)
+    expect(b1.end).toBe('2024-01-14')
+    expect(getDailyBoard(db, live.id, { span: 'biweek', anchor: '2024-01-14' }).start).toBe('2024-01-01') // 期末周日仍属同期
+    const b2 = getDailyBoard(db, live.id, { span: 'biweek', anchor: '2024-01-15' })
+    expect(b2.start).toBe('2024-01-15') // 周一开新期
+    expect(b2.prevAnchor).toBe('2024-01-01')
+    expect(b2.nextAnchor).toBe('2024-01-29')
+    // 跨年不断链：任一天的期起点与纪元锚的距离必为 14 的整数倍（按年锚会在跨年处断出残期）
+    const b3 = getDailyBoard(db, live.id, { span: 'biweek', anchor: '2026-10-28' })
+    expect(weekdayOf(b3.start)).toBe(1)
+    expect(b3.days).toHaveLength(14)
+
+    // 月：自然月 1 号~月底，天数如实（28/29/30/31），跨月导航用年月算术
+    const feb = getDailyBoard(db, live.id, { span: 'month', anchor: '2026-02-10' })
+    expect(feb.start).toBe('2026-02-01')
+    expect(feb.days).toHaveLength(28) // 2026 平年 2 月
+    expect(feb.end).toBe('2026-02-28')
+    const febLeap = getDailyBoard(db, live.id, { span: 'month', anchor: '2028-02-10' })
+    expect(febLeap.days).toHaveLength(29) // 闰年 2 月
+    const dec = getDailyBoard(db, live.id, { span: 'month', anchor: '2026-12-31' })
+    expect(dec.days).toHaveLength(31)
+    expect(dec.end).toBe('2026-12-31')
+    expect(dec.prevAnchor).toBe('2026-11-01')
+    expect(dec.nextAnchor).toBe('2027-01-01') // 跨年导航正确
+
+    // 格子语义与行统计随窗口泛化（本期口径）
+    const t = dec.tasks[0]
+    expect(t.periodApplicable).toBe(31) // 窗口项默认每天 → 12 月 31 格全适用
+    expect(t.cells).toHaveLength(31)
+    expect(dec.summary.perDay).toHaveLength(31)
+  })
+
+  it('S69-8: 项目级默认窗口——board_span 持久化与解析序（参数 > 项目默认 > 周）；交付项目不可设', () => {
+    const live = createProject(db, { name: '默认窗口', kind: 'routine', typeCode: 'routine_ops', leadMemberId: members.lead.id, tasks: ['默认项'], boardSpan: 'biweek' }, members.admin.id)
+    // 立项落默认；不带 span 的取数按项目默认开窗
+    expect(db.prepare('SELECT board_span FROM projects WHERE id = ?').get(live.id).board_span).toBe('biweek')
+    expect(getDailyBoard(db, live.id, { anchor: '2026-10-28' }).days).toHaveLength(14)
+    // 显式参数覆盖项目默认
+    expect(getDailyBoard(db, live.id, { anchor: '2026-10-28', span: 'month' }).days).toHaveLength(31)
+    // 项目默认可改；非法值 400；交付项目设值 400
+    updateProject(db, live.id, { boardSpan: 'month' }, members.admin.id)
+    expect(getDailyBoard(db, live.id, { anchor: '2026-10-28' }).days).toHaveLength(31)
+    expect(() => updateProject(db, live.id, { boardSpan: 'quarter' }, members.admin.id)).toThrow(/invalid boardSpan/)
+    expect(() => updateProject(db, delivery.id, { boardSpan: 'month' }, members.admin.id)).toThrow(/常态/)
+    // 未设默认的常态项目缺省周
+    expect(getDailyBoard(db, routine.id).span).toBe('week')
   })
 })

@@ -21,6 +21,7 @@ export interface InitAssignmentRow {
 export interface ProjectRow {
   id: number; name: string; templateCode: string; projectTypeId?: number | null; typeName?: string | null
   kind?: 'delivery' | 'routine' // S69：项目类别（交付/常态，立项选定后不可变更）
+  boardSpan?: 'week' | 'biweek' | 'month' // S69-8（K65）：常态项目执行视图默认窗口（切换即持久化）
   status: string; priority: 'high' | 'medium' | 'low'
   leadMemberId: number; leadName: string; clientName?: string | null
   planStartDate?: string | null; planEndDate?: string | null
@@ -117,7 +118,8 @@ export interface MyTasksBoard {
   projects: Array<{ projectId: number; projectName: string; tasks: MyTaskRow[] }>
 }
 
-// S69（v0.80，K64）：常态项目周视图（GET /api/v1/projects/:id/daily-board）
+// S69（v0.80 K64 / v0.81 K65）：常态项目执行视图（GET /api/v1/projects/:id/daily-board?span=&anchor=）
+// 窗口三档（周/双周/月），窗口数学唯一在引擎——前端导航只消费 prevAnchor/nextAnchor，零日期推算。
 export interface DailyCell {
   day: string // YYYY-MM-DD（北京日）
   applicable: boolean // 该任务在本日是否适用（适用星期勾选）
@@ -131,15 +133,20 @@ export interface DailyBoardTask {
   taskId: number; title: string; note: string | null
   weekdays: number[]; weekdaysLabel: string
   responsibleMemberId: number | null; responsibleName: string | null
-  cells: DailyCell[]; weekApplicable: number; weekDone: number
+  cells: DailyCell[]; periodApplicable: number; periodDone: number // 本期口径
 }
 export interface DailyBoardData {
-  projectId: number; weekStart: string; weekEnd: string; days: string[]
+  projectId: number
+  span: 'week' | 'biweek' | 'month'
+  start: string; end: string; days: string[]
+  prevAnchor: string; nextAnchor: string // 相邻期锚点（引擎下发，导航用）
   tasks: DailyBoardTask[]
   summary: { tasks: number; applicableCells: number; done: number; skip: number; pending: number; perDay: Array<{ day: string; done: number; skip: number }> }
 }
 
+export type BoardSpan = 'week' | 'biweek' | 'month'
 export const PROJECT_KIND_LABEL: Record<string, string> = { delivery: '交付项目', routine: '常态项目' }
+export const BOARD_SPAN_LABEL: Record<string, string> = { week: '周', biweek: '双周', month: '月' }
 export const DAY_STATUS_LABEL: Record<string, string> = { pending: '未做', done: '完成', skip: '跳过' }
 export const DAY_STATUS_TONE: Record<string, Tone> = { pending: 'muted', done: 'ok', skip: 'warn' }
 export const WEEKDAY_SHORT: string[] = ['', '一', '二', '三', '四', '五', '六', '日']
