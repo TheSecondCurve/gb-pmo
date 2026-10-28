@@ -750,6 +750,18 @@ web 侧边栏 `#/my` 页：跨在跑项目聚合本人未完任务（/my 斜杠�
 | S70-7 | 当管理员在配置台「外部依赖」页保存 `projects.quickCreateTypeCode` 时应可保存回读（与默认父页面卡相邻）；getSetting 深合并默认值（缺省 custom） | `server/test/s70-quick-create.test.mjs` |
 | S70-8 | 当飞书网关处理群消息时，应把外部判定已拉取的 getChat 群名随事件传入（`chatTitle`），供快速立项与群登记回填渠道名 | `server/test/s70-quick-create.test.mjs` |
 
+## S71（P0）— 全员（项目群）— 常态项目晨报专用版：今日/明日待办与「默认归属人」（v0.83）
+
+S68 晨报按交付口径组装，常态项目群每天收到空转报告（逾期/近期开工基于计划起止——常态任务没有；「未完共 N 项」把常态任务全计入且永远不动）。现 `dailyProjectMorningPush` 按 `projects.kind` 分叉：常态版= 说明行（默认归属人负责日常执行，其他成员可协助打卡）+【今日待办】（适用星期判定，逐条带打卡状态，未做排前）+【明日待办】（纯预览）+【昨日以来动态】（保留置尾）；取数与周视图 dailyBoard 同源（weekdays + task_day_records）；不经 LLM；交付项目完全不变。决策见 design.md K67。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S71-1 | 当常态项目被推送时，正文应为 说明行+【今日待办】+【明日待办】+【昨日以来动态】结构，不出现【项目概况】/【逾期任务】/【近期开工】；全程不经 LLM（同批交付项目综述正常调用，常态项目零调用） | `server/test/s71-routine-morning.test.mjs` |
+| S71-2 | 当组装今日待办时，应按适用星期判定当日适用（与周视图同源），状态读当日 task_day_records；排序 未做→⤴跳过→✓已完成；节头带合计与三态计数；当日无适用任务给明确空态行 | `server/test/s71-routine-morning.test.mjs` |
+| S71-3 | 当展示常态任务归属时，应使用「默认归属人：X」措辞（未指派如实标注），说明行注明其他成员可协助打卡；数据模型与打卡 operator 口径不变 | `server/test/s71-routine-morning.test.mjs` |
+| S71-4 | 当推送交付项目时，S68 四节骨架、LLM 综述（purpose=morning）、近期开工窗口完全不变（回归锚点） | `server/test/s71-routine-morning.test.mjs` + `server/test/s68-morning-push.test.mjs` |
+| S71-5 | 当守卫与幂等触发时：常态项目当日已推跳过、无绑定专题群跳过、单项目失败不阻塞其余——全部沿用 S68 口径，pushes 落行字段一致 | `server/test/s71-routine-morning.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |
