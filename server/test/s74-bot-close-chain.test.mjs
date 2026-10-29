@@ -122,7 +122,7 @@ describe('S74 机器人结项一条链', () => {
     const bare = createProject(ctx.db, { name: 'S74未绑页项目', typeCode: 'lianmai_365', leadMemberId: ctx.members.lead.id }, ctx.members.admin.id)
     upsertChannel(ctx.db, { platform: 'feishu', groupKey: 'oc_s74_bare', channelType: 'dedicated', projectId: bare.id }, ctx.members.admin.id)
     ctx.db.prepare("UPDATE tasks SET status = 'done' WHERE project_id = ?").run(bare.id)
-    const r2 = await triggerClose('oc_s74_bare', { name: 'om_s74d' })
+    await triggerClose('oc_s74_bare', { name: 'om_s74d' })
     expect(projRow(bare.id).status).toBe('closed')
     expect(archiveRuns(bare.id)).toBe(0)
     expect(projRow(bare.id).closeout_summary).toMatch(/结项/) // 兜底文案（无链接可用）
