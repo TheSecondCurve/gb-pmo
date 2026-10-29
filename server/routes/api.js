@@ -156,7 +156,10 @@ export function registerApiRoutes(app) {
 
   app.post('/api/v1/projects/:id/close', async (req) => {
     // S8/S29：摘要必填（engine 强校验）；AI 草稿走 closeout-draft 端点预填、人工改后提交
-    return projects.closeProject(db, Number(req.params.id), { summary: req.body?.summary }, req.member.id)
+    const detail = projects.closeProject(db, Number(req.params.id), { summary: req.body?.summary }, req.member.id)
+    // S29-5（v0.87.2，K73）：绑定了知识页则结项后标记标题【已结项】——尽力而为不阻断，提示随响应带出
+    const wikiCloseMark = await wiki.wikiCloseMarkNotice(db, Number(req.params.id), req.member.id)
+    return { ...detail, wikiCloseMark }
   })
 
   app.get('/api/v1/projects/:id/closeout-draft', async (req) => {

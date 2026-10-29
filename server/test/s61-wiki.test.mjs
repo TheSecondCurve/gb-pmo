@@ -2,7 +2,7 @@ import { describe, it, expect, afterAll, afterEach } from 'vitest'
 import { setupDb, seedMembers } from './helpers.mjs'
 import { createProject } from '../engine/projects.js'
 import { setSetting } from '../engine/settings.js'
-import { parseWikiNodeToken, getProjectWiki, bindProjectWiki, recordToWiki } from '../engine/wiki.js'
+import { parseWikiNodeToken, getProjectWiki, bindProjectWiki, recordToWiki, markWikiClosed, wikiCloseMarkNotice } from '../engine/wiki.js'
 
 // PRD S61（v0.66，K45）— 项目 ↔ 飞书知识库页面绑定 + 机器人写页面：
 // 贴链接绑定已有页面 / 指定页面下新建子页；用户「记一下」指令把内容按类型分小节追加到绑定页面。
@@ -153,5 +153,72 @@ describe('S61 知识库绑定与写入', () => {
     const append = calls.find((c) => c.url.includes('/docx/v1/documents/doc1/blocks/doc1/children'))
     const content = JSON.parse(append.opts.body).children[1].text.elements[0].text_run.content
     expect(content).toBe('一期范围已定') // 原文本就简洁，不被二次加工
+  })
+
+  // —— S61-7 / S29-5（v0.87.2，K73）：结项自动标记知识页标题【已结项】——尽力而为、幂等可重入
+  it('S61-7: markWikiClosed——取节点当前标题追加【已结项】，PATCH 改节点标题并同步绑定行 + audit', async () => {
+    const p = freshProject('标记项目')
+    stubFetch([['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n7', obj_token: 'doc7', obj_type: 'docx', title: '标记项目页', space_id: 'sp1' } })]])
+    await bindProjectWiki(db, p.id, { wikiUrl: 'https://x.feishu.cn/wiki/n7' }, members.admin.id)
+    // 节点标题已被别人改成 v2（绑定行 title 是绑定时刻快照）——标记必须基于节点当前标题，不回写旧值
+    const calls = stubFetch([
+      ['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n7', obj_token: 'doc7', obj_type: 'docx', title: '标记项目页 v2', space_id: 'sp1' } })],
+      ['/wiki/v2/spaces/sp1/nodes/n7', (url, opts) => {
+        expect(opts.method).toBe('PATCH')
+        expect(JSON.parse(opts.body).title).toBe('标记项目页 v2【已结项】')
+        return okJson({})
+      }],
+    ])
+    const r = await markWikiClosed(db, p.id, members.admin.id)
+    expect(r.marked).toBe(true)
+    expect(r.title).toBe('标记项目页 v2【已结项】')
+    expect(getProjectWiki(db, p.id).title).toBe('标记项目页 v2【已结项】') // 绑定行 title 同步
+    expect(calls.some((c) => c.url.includes('/wiki/v2/spaces/sp1/nodes/n7'))).toBe(true)
+    const auditRow = db.prepare("SELECT detail FROM audit_logs WHERE action = 'project.wiki.close_mark' ORDER BY id DESC LIMIT 1").get()
+    expect(auditRow).toBeTruthy()
+  })
+
+  it('S61-7: 幂等——标题已带【已结项】不重复追加（零 PATCH）；未绑定项目无操作且不发飞书请求', async () => {
+    const p = freshProject('幂等项目')
+    stubFetch([['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n6', obj_token: 'doc6', obj_type: 'docx', title: '幂等项目页', space_id: 'sp1' } })]])
+    await bindProjectWiki(db, p.id, { wikiUrl: 'https://x.feishu.cn/wiki/n6' }, members.admin.id)
+    const calls = stubFetch([
+      ['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n6', obj_token: 'doc6', obj_type: 'docx', title: '幂等项目页【已结项】', space_id: 'sp1' } })],
+      ['/wiki/v2/spaces/sp1/nodes/n6', () => okJson({})],
+    ])
+    const r = await markWikiClosed(db, p.id, members.admin.id)
+    expect(r.marked).toBe(false)
+    expect(r.reason).toBe('already')
+    expect(calls.some((c) => c.opts?.method === 'PATCH')).toBe(false)
+    // 未绑定项目：连 get_node 都不发（未绑定闸在飞书凭证检查之前）
+    const p2 = freshProject('未绑定标记项目')
+    const before = calls.length
+    expect(await markWikiClosed(db, p2.id, members.admin.id)).toEqual({ marked: false, reason: 'unbound' })
+    expect(calls.length).toBe(before)
+  })
+
+  it('S29-5: wikiCloseMarkNotice——成功带新标题、失败翻人话提示不抛出（结项不因标记受阻）、未绑定返回 null', async () => {
+    const p = freshProject('提示项目')
+    stubFetch([['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n5', obj_token: 'doc5', obj_type: 'docx', title: '提示项目页', space_id: 'sp1' } })]])
+    await bindProjectWiki(db, p.id, { wikiUrl: 'https://x.feishu.cn/wiki/n5' }, members.admin.id)
+    // 失败路径：PATCH 权限不足（131006）→ 人话提示含可执行指引，不抛出
+    stubFetch([
+      ['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n5', obj_token: 'doc5', obj_type: 'docx', title: '提示项目页', space_id: 'sp1' } })],
+      ['/wiki/v2/spaces/sp1/nodes/n5', () => ({ ok: true, json: async () => ({ code: 131006, msg: 'forbidden' }) })],
+    ])
+    const fail = await wikiCloseMarkNotice(db, p.id, members.admin.id)
+    expect(fail).toContain('知识页标题标记失败')
+    expect(fail).toContain('知识库') // 权限类中文指引透传（K45）
+    // 成功路径：提示含标记后的标题
+    stubFetch([
+      ['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n5', obj_token: 'doc5', obj_type: 'docx', title: '提示项目页', space_id: 'sp1' } })],
+      ['/wiki/v2/spaces/sp1/nodes/n5', () => okJson({})],
+    ])
+    const okMsg = await wikiCloseMarkNotice(db, p.id, members.admin.id)
+    expect(okMsg).toContain('知识页标题已标记')
+    expect(okMsg).toContain('【已结项】')
+    // 未绑定 → null（回执里无需播报）
+    const p2 = freshProject('未绑定提示项目')
+    expect(await wikiCloseMarkNotice(db, p2.id, members.admin.id)).toBeNull()
   })
 })

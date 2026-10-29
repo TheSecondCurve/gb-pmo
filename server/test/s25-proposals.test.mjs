@@ -89,6 +89,42 @@ describe('S25 Agent 提议式项目与配置操作', () => {
     expect(ctx.db.prepare('SELECT closeout_summary FROM projects WHERE id = ?').get(p.id).closeout_summary).toBe('验收通过')
   })
 
+  it('S29-5: 提议确认结项且项目已绑知识页——确认响应带 wikiCloseMark 提示，页面标题追加【已结项】', async () => {
+    ctx = await setupApp()
+    const admin = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    const { setSetting } = await import('../engine/settings.js')
+    const { bindProjectWiki } = await import('../engine/wiki.js')
+    setSetting(ctx.db, 'im.feishu', { appId: 'a', appSecret: 's' }, ctx.members.admin.id)
+    const p = await mkProject(admin, ctx.members.lead.id, '提议结项标记项目')
+    const okJson = (data) => ({ ok: true, json: async () => ({ code: 0, data }) })
+    const realFetch = globalThis.fetch
+    globalThis.fetch = async (rawUrl, opts = {}) => {
+      const url = String(rawUrl)
+      if (url.includes('tenant_access_token')) return { ok: true, json: async () => ({ code: 0, tenant_access_token: 'tok' }) }
+      if (url.includes('/wiki/v2/spaces/get_node')) return okJson({ node: { node_token: 'n295', obj_token: 'doc295', obj_type: 'docx', title: '提议结项标记项目页', space_id: 'sp295' } })
+      if (url.includes('/wiki/v2/spaces/sp295/nodes/n295')) {
+        expect(opts.method).toBe('PATCH')
+        expect(JSON.parse(opts.body).title).toBe('提议结项标记项目页【已结项】')
+        return okJson({})
+      }
+      return okJson({})
+    }
+    try {
+      await bindProjectWiki(ctx.db, p.id, { wikiUrl: 'https://x.feishu.cn/wiki/n295' }, ctx.members.admin.id)
+      ctx.db.prepare(`UPDATE tasks SET status = 'done' WHERE project_id = ?`).run(p.id)
+      const sid = (await authed(ctx.app, admin, 'POST', '/api/v1/chat/sessions', {})).body.id
+      const res = await chatPropose(admin, sid, '把待结项目结项', { kind: 'close_project', projectId: p.id, summary: '验收通过' })
+      const proposalId = res.body.assistant.meta.proposalId
+      const confirmed = await authed(ctx.app, admin, 'POST', `/api/v1/proposals/${proposalId}/confirm`)
+      expect(confirmed.status).toBe(200)
+      expect(confirmed.body.wikiCloseMark).toContain('知识页标题已标记')
+      expect(confirmed.body.wikiCloseMark).toContain('【已结项】')
+      expect(ctx.db.prepare('SELECT title FROM project_wiki_bindings WHERE project_id = ?').get(p.id).title).toBe('提议结项标记项目页【已结项】')
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+
   it('S25-4: 口述立项直改（v0.46/K25）——拟任牵头人/管理员直接生效；无权发起人拒绝；缺载荷 refused', async () => {
     ctx = await setupApp()
     const admin = await loginCookie(ctx.app, 'admin', 'admin-pass-123')

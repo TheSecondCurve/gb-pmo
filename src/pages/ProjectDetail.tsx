@@ -424,7 +424,7 @@ export default function ProjectDetail({ id }: { id: number }) {
       {refsTask !== null && (
         <TaskRefsModal taskId={refsTask.id} taskTitle={refsTask.title} readonly={readonly} onClose={() => setRefsTask(null)} />
       )}
-      {closing && <CloseModal p={p} onClose={() => setClosing(false)} onDone={async () => { setClosing(false); toast('项目已结项归档'); await refresh() }} />}
+      {closing && <CloseModal p={p} onClose={() => setClosing(false)} onDone={async (wikiMark) => { setClosing(false); toast(wikiMark ? `项目已结项归档 · ${wikiMark}` : '项目已结项归档'); await refresh() }} />}
       {cancelling && <CancelModal p={p} onClose={() => setCancelling(false)} onDone={async () => { setCancelling(false); toast('项目已取消归档'); await refresh() }} />}
       {binding && <BindChannelModal projectId={id} onClose={() => setBinding(false)} onDone={async () => { setBinding(false); toast('渠道已绑定'); await refresh() }} />}
       {bindingWiki && <BindWikiModal projectId={id} onClose={() => setBindingWiki(false)} onDone={async () => { setBindingWiki(false); toast('知识库已绑定'); await refresh() }} />}
@@ -813,7 +813,7 @@ function AddEvent({ projectId, onDone }: { projectId: number; onDone: () => Prom
   )
 }
 
-function CloseModal({ p, onClose, onDone }: { p: ProjectDetail; onClose: () => void; onDone: () => Promise<void> }) {
+function CloseModal({ p, onClose, onDone }: { p: ProjectDetail; onClose: () => void; onDone: (wikiMark?: string | null) => Promise<void> }) {
   const routine = p.kind === 'routine' // S69：常态项目结项豁免「全部任务完成」（手动结项即可）
   const [unfinished, setUnfinished] = useState(() => (routine ? [] : p.tasks.filter((t) => t.status !== 'done')))
   const [summary, setSummary] = useState('')
@@ -836,8 +836,8 @@ function CloseModal({ p, onClose, onDone }: { p: ProjectDetail; onClose: () => v
   }
   const submit = async () => {
     try {
-      await api.closeProject(p.id, { summary: summary.trim() })
-      await onDone()
+      const out = await api.closeProject(p.id, { summary: summary.trim() })
+      await onDone(out?.wikiCloseMark)
     } catch (e) { setErr((e as Error).message) }
   }
   return (
