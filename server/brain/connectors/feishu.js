@@ -479,10 +479,14 @@ export async function deleteDocChildren(cfg, documentId, startIndex, endIndex) {
   })
 }
 
-/** 下载群消息图片（im/v1/images/:key）。返回 { bytes, contentType }；失败抛中文错误（403 提示 im:resource 权限）。 */
-export async function downloadChatImage(cfg, imageKey) {
+/**
+ * 下载群消息图片。v0.85.2：走消息资源接口（与附件同款，GET /im/v1/messages/:id/resources/:key?type=image）——
+ * 旧 /im/v1/images/:key 对 img_v3 键一律 234001 invalid param（gb-test 项目 4 群 25 张全失败实证），resources 接口正常。
+ * 返回 { bytes, contentType }；失败抛中文错误（403 提示 im:resource 权限）。
+ */
+export async function downloadChatImage(cfg, { messageId, imageKey }) {
   const token = await tenantToken(cfg)
-  const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/images/${encodeURIComponent(imageKey)}`, {
+  const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(messageId)}/resources/${encodeURIComponent(imageKey)}?type=image`, {
     headers: { authorization: `Bearer ${token}` },
   })
   const contentType = res.headers?.get?.('content-type') || ''
