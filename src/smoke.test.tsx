@@ -230,6 +230,7 @@ describe('S30 项目组合页（v0.29）', () => {
     status: 'active', priority: 'medium', leadMemberId: 1, leadName: '张三', clientName: null,
     planStartDate: null, planEndDate: null, daysToDelivery: null,
     overdueTasks: 0, silentDays: null, lastEventAt: null, updatedAt: 1759000000000,
+    createdAt: Date.parse('2026-08-08T10:00:00+08:00'), // 显式 +08:00 偏移定锚北京日历日 2026-08-08（K16：禁日期-only 反解）
     tasksTotal: 0, tasksDone: 0, ...over,
   })
   // P1 双端 / P2 只有交付 / P3 只有开始（high）/ P4 全空 / P5 已结项（有日期）/ P6 已取消（全空）
@@ -313,6 +314,19 @@ describe('S30 项目组合页（v0.29）', () => {
       const row30 = screen.getByText('只有交付项目').closest('tr')!
       expect(row13.compareDocumentPosition(row30) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     })
+  })
+
+  it('S30-2: 表格视图含「创建日期」列——epoch 按北京日历日 YYYY-MM-DD 渲染（含未排期分组行不缺格）', async () => {
+    location.hash = '#/projects'
+    render(<StoreProvider><Projects view="table" /></StoreProvider>)
+    expect(await screen.findByText('全排期项目')).toBeTruthy()
+    expect(screen.getByRole('columnheader', { name: '创建日期' })).toBeTruthy()
+    const row = screen.getByText('全排期项目').closest('tr')!
+    expect(row.textContent).toContain('2026-08-08')
+    // 未排期分组行横跨全部列（加列后 colSpan 同步 +1，不缺格）
+    const group = document.querySelector('[data-testid="unscheduled-group"] td') as HTMLElement | null
+    expect(group).toBeTruthy()
+    expect(group!.getAttribute('colspan')).toBe('9')
   })
 
   it('S30-6: 默认仅取进行中项目；点状态芯片纳入终态；芯片计数来自 facets 不受选择影响', async () => {

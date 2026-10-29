@@ -28,6 +28,7 @@ export interface ProjectRow {
   initExtra?: string | null // S64（v0.69）：项目级初始分配补充要求（叠加类型 init_prompt，AI 初始分配三层之一）
   daysToDelivery?: number | null // S21：剩余/超期天数（未来为正、已过为负；结项/取消或未填为 null）
   overdueTasks: number; silentDays: number | null; lastEventAt?: number | null; updatedAt: number
+  createdAt: number // 立项时刻（epoch 毫秒；queryProjects SELECT p.* 直出，组合页表格「创建日期」列消费）
   tasksTotal: number; tasksDone: number // S43（v0.44）：项目进度行属性（排除软删；非指标口径，K23）
 }
 export interface TaskRow {

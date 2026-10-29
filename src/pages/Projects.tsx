@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'r
 import { Search } from 'lucide-react'
 import { api } from '../api'
 import { useStore } from '../store'
-import { bjToday, dateRangeForm, fmtDateRange } from '../fmt'
+import { bjDay, bjToday, dateRangeForm, fmtDateRange } from '../fmt'
 import { barLayout, computeAxis, dayNum, monthTicks } from '../gantt'
 import { Badge, Btn, Card, Empty, Field, InlineSelect, Modal, Spinner, inputCls } from '../components/ui'
 import { PageMasthead } from '../components/editorial'
@@ -239,6 +239,7 @@ function TableView({ rows, unscheduled, onPriority }: {
         {fmtDateRange(p.planStartDate, p.planEndDate)} <DeliveryBadge p={p} />
       </td>
       <td className="text-[12px] text-[var(--color-ink-soft)]">{p.typeName || p.templateCode}</td>
+      <td className="num whitespace-nowrap text-[12px] text-[var(--color-ink-soft)]">{p.createdAt ? bjDay(p.createdAt) : '—'}</td>
     </tr>
   )
   return (
@@ -247,7 +248,7 @@ function TableView({ rows, unscheduled, onPriority }: {
         <thead className="bg-[var(--color-panel)]/45 text-left text-[10px] font-medium tracking-[0.08em] text-[var(--color-ink-soft)]">
           <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap [&>th]:px-4 [&>th]:py-3">
             <th>优先级</th><th>项目</th><th>牵头人</th><th>状态</th>
-            <th>进度</th><th className="num">逾期</th><th>交付周期（S21）</th><th>类型</th>
+            <th>进度</th><th className="num">逾期</th><th>交付周期（S21）</th><th>类型</th><th>创建日期</th>
           </tr>
         </thead>
         <tbody>
@@ -255,7 +256,7 @@ function TableView({ rows, unscheduled, onPriority }: {
           {unscheduled.length > 0 && (
             <>
               <tr data-testid="unscheduled-group" className="border-b border-[var(--color-line)] bg-[var(--color-panel)]/70">
-                <td colSpan={8} className="px-4 py-3 text-[11px] font-medium text-[var(--color-ink-soft)]">
+                <td colSpan={9} className="px-4 py-3 text-[11px] font-medium text-[var(--color-ink-soft)]">
                   未排期（{unscheduled.length}）— 松散管理合法态，填计划日期后参与排序与时间线
                 </td>
               </tr>
