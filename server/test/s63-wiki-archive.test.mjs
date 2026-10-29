@@ -413,9 +413,10 @@ describe('S63 项目群全量汇总归档知识库', () => {
     expect(uploads.length).toBe(2)
     expect(uploadParentTypes).toEqual(['docx_file', 'docx_file'])
     const body = insertedChildren(calls)
-    const files = body.children.filter((b) => b.block_type === 18)
+    const files = body.children.filter((b) => b.block_type === 23)
     expect(files.length).toBe(2)
-    // v0.80.1 工程防线：file 块载荷按官方 schema 仅含 token（多带 name 有 99992402 严格校验风险）；文件名在图注里
+    // v0.80.1 工程防线：file 块载荷按官方 schema 仅含 token（多带 name 有 99992402 严格校验风险）；
+    // v0.85：块类型 23=file（18=bitable，gb-test run#2 实证 1770001）——文件名在图注里
     expect(files[0].file).toEqual({ token: 'ft_1' })
     expect(files[1].file).toEqual({ token: 'ft_2' })
     const captions = body.children.filter((b) => b.block_type === 2).map((b) => b.text.elements[0].text_run.content)
@@ -464,9 +465,11 @@ describe('S63 项目群全量汇总归档知识库', () => {
   })
 })
 
-// —— 【工程防线】S63 写入修复（v0.80.1）：gb-test 线上 run#1 实证——飞书 docx 批量建块接口单次
-// children ≤50 的硬上限（超限整包被拒：99992402 field validation failed，~80 块一次 POST）；
-// file 块创建载荷按官方 schema 仅含 token（名称由图注文本块承担，多字段有严格校验风险）。 ——
+// —— 【工程防线】S63 写入修复（v0.80.1 + v0.85）：gb-test 线上实证——
+// v0.80.1：飞书 docx 批量建块接口单次 children ≤50 硬上限（超限整包被拒 99992402，~80 块一次 POST）；
+//   file 块创建载荷按官方 schema 仅含 token（名称由图注文本块承担）。
+// v0.85：file 块 block_type=23（官方枚举 18=bitable 多维表格）——run#2 实证：首批 50 块（纯文本/标题/列表）
+//   写入成功，含 file 块的第二批整包被 1770001 invalid param 拒掉，页面残留半截时间线。 ——
 
 /** 收集全部 docx 内容插入 POST（排除 batch_delete）的请求体。 */
 function allInsertBodies(calls) {
@@ -475,7 +478,7 @@ function allInsertBodies(calls) {
     .map((x) => JSON.parse(x.opts.body))
 }
 
-describe('【工程防线】S63 写块分批与 file 块 schema（99992402 修复）', () => {
+describe('【工程防线】S63 写块分批与 file 块 schema（99992402/1770001 修复）', () => {
   it('分批写入：块数超 50 自动拆多次 POST，单次 ≤50、块数不丢、幂等锚点=首批首块', async () => {
     const p = fresh()
     await bindWiki(p)
@@ -494,7 +497,7 @@ describe('【工程防线】S63 写块分批与 file 块 schema（99992402 修�
     expect(run.firstBlockId).toBe('gen1') // 幂等锚点=首批首块（分批后仍取首批返回）
   })
 
-  it('file 块载荷仅含 token（官方 schema）：name 不进块结构，文件名由图注文本块承担', async () => {
+  it('file 块载荷仅含 token（官方 schema）：block_type=23（18=bitable），name 不进块结构，文件名由图注承担', async () => {
     const p = fresh()
     await bindWiki(p)
     const createdSec = createdSecOf(p.id)
@@ -506,8 +509,9 @@ describe('【工程防线】S63 写块分批与 file 块 schema（99992402 修�
     expect(run.status).toBe('done')
     expect(run.fileCount).toBe(1)
     const blocks = allInsertBodies(calls).flatMap((b) => b.children)
-    const fileBlocks = blocks.filter((b) => b.block_type === 18)
+    const fileBlocks = blocks.filter((b) => b.block_type === 23)
     expect(fileBlocks.length).toBe(1)
+    expect(blocks.some((b) => b.block_type === 18)).toBe(false) // 18=bitable（gb-test 1770001 实证）
     expect(Object.keys(fileBlocks[0].file)).toEqual(['token']) // 多字段会被严格校验拒（99992402 风险面）
     expect(fileBlocks[0].file.token).toBe('ft_1')
     const texts = blocks.filter((b) => b.block_type === 2).map((b) => b.text.elements[0].text_run.content)
