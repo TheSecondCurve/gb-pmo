@@ -269,7 +269,7 @@ async function collectImageItems(db, cfg, images) {
   const items = []
   for (const m of images.slice(0, MAX_IMAGES)) {
     try {
-      const { bytes, contentType } = await downloadChatImage(cfg, m.imageKey)
+      const { bytes, contentType } = await downloadChatImage(cfg, { messageId: m.id, imageKey: m.imageKey })
       const speaker = mapSpeaker(db, 'feishu', m.speakerId)?.name ?? '未识别'
       items.push({ m, bytes, contentType, caption: `${today(m.ts)} ${speaker}` })
     } catch { /* 单张失败跳过不阻塞 */ }
@@ -409,7 +409,9 @@ function locateChapter(blocks) {
 /**
  * 写入章节：① 上次生成区还在（runs 锚点 firstBlockId，丢失按首标记前缀扫描兜底）→ 删旧区原位写新版；
  * ② 否则定位最后一个「项目汇总」章节末尾插入；③ 无该章节 → 文末新建 heading2 章节再写。
- * 返回按序的全部创建结果（含 block_id；首块即幂等锚点，媒体占位块也在此列——fillMediaBlocks 按下标对应）。
+ * 返回与传入 blocks **逐位对齐**的全部创建结果（含 block_id；首块即幂等锚点，媒体占位块也在此列——
+ * fillMediaBlocks 按下标对应）。v0.85.2：路径③新建的 heading2 不占 blocks 下标——slice(1) 剔除，
+ * 否则 created 整体偏移 +1（gb-test 项目 4 实证：首次归档 9 附件全失败、清理错删章节标题）。
  */
 async function writeArchiveSection(db, cfg, pid, documentId, blocks) {
   const existing = await listDocRootBlocks(cfg, documentId)
@@ -419,6 +421,13 @@ async function writeArchiveSection(db, cfg, pid, documentId, blocks) {
   let startIdx = prev?.firstBlockId ? existing.findIndex((b) => b.block_id === prev.firstBlockId) : -1
   if (startIdx < 0) startIdx = existing.findIndex((b) => b.block_type === 2 && blockText(b).startsWith(START_PREFIX))
   if (startIdx >= 0) {
+    // v0.85.2 锚点归一：旧台账锚点可能是「项目汇总」标题块（v0.85.1 首次归档路径落过）——标题紧邻
+    // 首标记时保留标题、从首标记开始替换（重跑不再吞掉章节标题，结构长期稳定）
+    const h = existing[startIdx]
+    if (h.block_type === 4 && blockText(h).includes(CHAPTER_TITLE)
+      && existing[startIdx + 1]?.block_type === 2 && blockText(existing[startIdx + 1]).startsWith(START_PREFIX)) {
+      startIdx += 1
+    }
     // 旧生成区：[首标记, 尾标记(含)]；尾标记丢失（上次写一半）时删到文末/下一章节末
     let endIdx = existing.length
     for (let j = startIdx + 1; j < existing.length; j++) {
@@ -429,5 +438,6 @@ async function writeArchiveSection(db, cfg, pid, documentId, blocks) {
   }
   const chapter = locateChapter(existing)
   if (chapter) return insertDocBlocks(cfg, documentId, blocks, chapter.end)
-  return insertDocBlocks(cfg, documentId, [heading2(CHAPTER_TITLE), ...blocks])
+  const created = await insertDocBlocks(cfg, documentId, [heading2(CHAPTER_TITLE), ...blocks])
+  return created.slice(1) // heading2 不占 blocks 下标——created 与 blocks 逐位对齐（mediaPlan blockIdx 依据）
 }

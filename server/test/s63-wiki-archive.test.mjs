@@ -68,11 +68,12 @@ function stubArchiveFetch({
     const url = String(rawUrl)
     calls.push({ url, opts })
     if (url.includes('tenant_access_token')) return { ok: true, json: async () => ({ code: 0, tenant_access_token: 'tok' }) }
-    if (url.includes('/im/v1/images/')) {
-      if (imageResponder) return imageResponder(url)
-      return { ok: false, status: 404, json: async () => ({ code: 404, msg: 'not found' }) }
-    }
     if (url.includes('/im/v1/messages/') && url.includes('/resources/')) {
+      // v0.85.2：图片与附件同走消息资源接口（旧 /im/v1/images/:key 对 img_v3 键 234001）
+      if (url.includes('type=image')) {
+        if (imageResponder) return imageResponder(url)
+        return { ok: false, status: 404, json: async () => ({ code: 404, msg: 'not found' }) }
+      }
       if (fileResponder) return fileResponder(url)
       return { ok: false, status: 404, json: async () => ({ code: 404, msg: 'not found' }) }
     }
@@ -199,8 +200,8 @@ describe('S63 项目群全量汇总归档知识库', () => {
     })
     const run = await startWikiArchive(db, p.id, members.admin.id, { defer: false })
     expect(run.status).toBe('done')
-    const msgCalls = calls.filter((c) => c.url.includes('/im/v1/messages'))
-    expect(msgCalls.length).toBe(2) // 分页拉完
+    const msgCalls = calls.filter((c) => c.url.includes('/im/v1/messages') && !c.url.includes('/resources/'))
+    expect(msgCalls.length).toBe(2) // 分页拉完（resources 是 v0.85.2 起图片/附件下载端点，不计入翻页）
     expect(msgCalls[0].url).toContain(`start_time=${createdSec}`) // 自项目创建时刻起
     expect(msgCalls[0].url).toContain('ByCreateTimeDesc')
     expect(msgCalls[1].url).toContain('page_token=p2')
@@ -314,15 +315,15 @@ describe('S63 项目群全量汇总归档知识库', () => {
   it('S63-6: 幂等重跑——按锚点删旧生成区（首标记到尾标记含）再原位写入，页面只留最新一版', async () => {
     const p = fresh()
     await bindWiki(p)
-    // 第一次：空页面（无章节）→ 文末新建；插入返回首块 gen1 落锚点
-    stubArchiveFetch({ blocks: [], insertResult: { children: [{ block_id: 'gen1' }] } })
+    // 第一次：空页面（无章节）→ 文末新建；锚点=首标记块（v0.85.2：heading2 不占位，insertResult 按序两块）
+    stubArchiveFetch({ blocks: [], insertResult: { children: [{ block_id: 'gen1' }, { block_id: 'gen2' }] } })
     const run1 = await startWikiArchive(db, p.id, members.admin.id, { defer: false })
     expect(run1.status).toBe('done')
-    expect(run1.firstBlockId).toBe('gen1')
+    expect(run1.firstBlockId).toBe('gen2') // 锚点=首标记（heading2 gen1 被剔除，不占 blocks 下标）
     // 第二次：页面已有旧生成区（首尾标记）+ 后续章节
     const blocks2 = [
       { block_id: 'b0', block_type: 4, heading2: el('项目汇总') },
-      { block_id: 'gen1', block_type: 2, text: el('🤖 项目大脑汇总 · 生成于 2026-10-10 09:00 · 回读群消息 5 条') },
+      { block_id: 'gen2', block_type: 2, text: el('🤖 项目大脑汇总 · 生成于 2026-10-10 09:00 · 回读群消息 5 条') },
       { block_id: 'g2', block_type: 12, bullet: el('[2026-06-01] 进展：旧条目') },
       { block_id: 'g3', block_type: 2, text: el('— 项目大脑汇总结束 —') },
       { block_id: 'b9', block_type: 4, heading2: el('附录') },
@@ -336,6 +337,14 @@ describe('S63 项目群全量汇总归档知识库', () => {
     const body2 = insertedChildren(calls2)
     expect(body2.index).toBe(1) // 原位写入新版
     expect(body2.children[0].text.elements[0].text_run.content).toContain('项目大脑汇总')
+
+    // v0.85.2 锚点归一：旧台账锚点是「项目汇总」标题块（v0.85.1 首次归档落过）→ 保留标题、从首标记替换
+    db.prepare("UPDATE wiki_archive_runs SET first_block_id = 'b0' WHERE id = ?").run(run2.id)
+    const calls3 = stubArchiveFetch({ blocks: blocks2 })
+    await startWikiArchive(db, p.id, members.admin.id, { defer: false })
+    const del3 = calls3.find((c) => c.url.includes('batch_delete'))
+    expect(JSON.parse(del3.opts.body)).toMatchObject({ start_index: 1, end_index: 4 }) // 标题 b0 保留，仍从首标记删
+    expect(insertedChildren(calls3).index).toBe(1)
   })
 
   it('S63-7: 运行台账——POST 立即返回 running；轮询到 done 带统计与页面链接；失败带中文错误', async () => {
@@ -406,6 +415,39 @@ describe('S63 项目群全量汇总归档知识库', () => {
     const captions = body.children.filter((b) => b.block_type === 2).map((b) => b.text.elements[0].text_run.content)
     expect(captions.some((t) => t.includes('李四'))).toBe(true) // 图注带说话人
     expect(captions.some((t) => t.includes('张三'))).toBe(true)
+  })
+
+  it('S63-8b: 首次归档（文末新建章节路径）两段式下标对齐——v0.85.2 回归：heading2 不再挤偏占位块映射', async () => {
+    const p = fresh()
+    await bindWiki(p)
+    const createdSec = createdSecOf(p.id)
+    const items = [
+      msg('i1', createdSec + 100, 'fs_zhang', '', { msgType: 'image', imageKey: 'ik_a' }),
+      msg('f1', createdSec + 200, 'fs_li', '', { msgType: 'file', fileKey: 'fk_a', fileName: '纪要.md' }),
+    ]
+    const calls = stubArchiveFetch({
+      pages: [{ items, has_more: false }],
+      imageResponder: () => ({ ok: true, status: 200, headers: { get: () => 'image/png' }, arrayBuffer: async () => new Uint8Array([1]).buffer }),
+      fileResponder: () => ({ ok: true, status: 200, headers: { get: () => 'text/markdown' }, body: (async function* () { yield Uint8Array.from([1]) })() }),
+    })
+    const run = await startWikiArchive(db, p.id, members.admin.id, { defer: false })
+    expect(run.status).toBe('done')
+    expect(run.imageCount).toBe(1)
+    expect(run.fileCount).toBe(1)
+    expect(JSON.parse(run.skippedFiles || '[]')).toEqual([]) // v0.85.1 在此路径 9/9 全挂（占位块下标被 heading2 挤偏）
+    // 图片走消息资源接口（v0.85.2：旧 /im/v1/images 234001）
+    expect(calls.some((c) => c.url.includes('/messages/i1/resources/ik_a?type=image'))).toBe(true)
+    expect(calls.some((c) => c.url.includes('/im/v1/images/'))).toBe(false)
+    // 首块=heading2（gen1）、锚点=首标记（gen2）；占位块映射按 blocks 下标：图片 ph 在 9（gen11）、附件 ph 在 12（gen14→view 子块 fb_gen14）
+    const body = insertedChildren(calls)
+    expect(body.children[0].block_type).toBe(4)
+    expect(run.firstBlockId).toBe('gen2')
+    const parents = uploadParentsOf(calls)
+    expect(parents).toEqual([['docx_image', 'gen11'], ['docx_file', 'fb_gen14']])
+    const repl = patchRequestsOf(calls)
+    expect(repl.find((r) => r.replace_image)?.block_id).toBe('gen11')
+    expect(repl.find((r) => r.replace_file)?.block_id).toBe('fb_gen14')
+    expect(deleteRangesOf(calls)).toEqual([]) // 全部成功，无清理删除
   })
 
   it('S65-1: file 附件消息解析出 file_key/file_name，且不再混入汇总文本行', async () => {
@@ -545,7 +587,7 @@ describe('【工程防线】S63 写块分批与 file 块 schema（99992402/17700
     expect(bodies.length).toBeGreaterThanOrEqual(2) // 修复前整包一次 POST（线上被飞书 99992402 拒）
     for (const b of bodies) expect(b.children.length).toBeLessThanOrEqual(50)
     expect(bodies.reduce((s, b) => s + b.children.length, 0)).toBeGreaterThan(50) // 块数完整送达
-    expect(run.firstBlockId).toBe('gen1') // 幂等锚点=首批首块（分批后仍取首批返回）
+    expect(run.firstBlockId).toBe('gen2') // 幂等锚点=首标记（v0.85.2：heading2 gen1 不占位，与 mediaPlan 下标同基）
   })
 
   it('媒体两段式防线：创建载荷零 token（1770001 实证），素材挂块 + replace_image/replace_file 换入', async () => {
