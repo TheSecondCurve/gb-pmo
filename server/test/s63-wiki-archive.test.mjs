@@ -616,6 +616,28 @@ describe('【工程防线】S63 写块分批与 file 块 schema（99992402/17700
     expect(patchRequestsOf(calls).length).toBe(1)
   })
 
+  it('create_time 毫秒口径归一：file/图片消息 13 位毫秒 → 秒，图注日期正常且时间序不被污染', async () => {
+    const p = fresh()
+    await bindWiki(p)
+    const createdSec = createdSecOf(p.id)
+    const items = [
+      msg('t1', createdSec + 100, 'fs_zhang', '开场文本'),
+      // file 消息 create_time 是 13 位毫秒（gb-test 实证）——msg() 直接透传，模拟飞书原始返回
+      msg('f1', (createdSec + 200) * 1000, 'fs_li', '', { msgType: 'file', fileKey: 'fk_ms', fileName: '逐字稿.md' }),
+    ]
+    const calls = stubArchiveFetch({
+      pages: [{ items, has_more: false }],
+      fileResponder: () => ({ ok: true, status: 200, headers: { get: () => 'text/markdown' }, body: (async function* () { yield Uint8Array.from([1]) })() }),
+    })
+    const run = await startWikiArchive(db, p.id, members.admin.id, { defer: false })
+    expect(run.status).toBe('done')
+    expect(run.fileCount).toBe(1)
+    const body = insertedChildren(calls)
+    const captions = body.children.filter((b) => b.block_type === 2).map((b) => b.text.elements[0].text_run.content)
+    const fileCap = captions.find((t) => t.includes('逐字稿.md'))
+    expect(fileCap).toMatch(/^\d{4}-\d{2}-\d{2} 李四 · 逐字稿\.md$/) // 日期正常（归一前是 '+058774-01'）
+  })
+
   it('insertDocBlocks 指定 index 时随批递增：120 块 → 3 次 POST（50/50/20），index = 7/57/107', async () => {
     const { insertDocBlocks } = await import('../brain/connectors/feishu.js')
     let postSeq = 0 // 独立计数器（calls 含 token 调用，勿用 calls.length 生成 id）
