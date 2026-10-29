@@ -16,7 +16,7 @@ import { upsertChannel, canManageChannel } from '../../engine/tasks.js'
 import { createProposal, PROPOSAL_KINDS } from '../../engine/proposals.js'
 import { normalizeTypeTasks, normalizeWeekdays } from '../../engine/projectTypes.js'
 import { planTypeTasks, createProject, closeProject } from '../../engine/projects.js'
-import { bindProjectWiki, recordToWiki, getDefaultParentToken, getProjectWiki, wikiPageUrl } from '../../engine/wiki.js'
+import { bindProjectWiki, recordToWiki, getDefaultParentToken, getProjectWiki, wikiPageUrl, wikiCloseMarkNotice } from '../../engine/wiki.js'
 import { getSetting } from '../../engine/settings.js'
 import { camelizeRow } from '../../db/index.mjs'
 import { today } from '../../db/time.js'
@@ -958,7 +958,9 @@ async function finalizeClose(db, { project, payload, ctx, pageUrl, messageCount 
   const summary = oral
     || (pageUrl ? `项目群全量汇总已归档：${pageUrl}` : `项目结项（群内 @机器人 结项，${today()}，未附总结）`)
   await closeProject(db, project.id, { summary }, ctx.member.id)
-  return closeChainFinalText(db, project, pageUrl, messageCount)
+  // S29-5（v0.87.2，K73）：绑定了知识页则标记标题【已结项】，结果播报进终态通知（失败不阻断结项）
+  const mark = await wikiCloseMarkNotice(db, project.id, ctx.member.id)
+  return [closeChainFinalText(db, project, pageUrl, messageCount), mark].filter(Boolean).join('\n')
 }
 
 /** 汇总完成后的续链（onDone 回调，尽力而为不抛出）：成功→播报②并结项+终态通知；失败→中止并指路。 */

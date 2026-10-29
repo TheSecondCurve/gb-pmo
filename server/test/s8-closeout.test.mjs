@@ -145,6 +145,54 @@ describe('S8-3 / S29 取消项目', () => {
     }
   })
 
+  it('S29-5: web 结项且项目已绑知识页——响应带 wikiCloseMark 提示（绑定行标题同步）；标记失败不阻断结项', async () => {
+    ctx = await setupApp()
+    const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
+    const { setSetting } = await import('../engine/settings.js')
+    const { bindProjectWiki } = await import('../engine/wiki.js')
+    setSetting(ctx.db, 'im.feishu', { appId: 'a', appSecret: 's' }, ctx.members.admin.id)
+    const okJson = (data) => ({ ok: true, json: async () => ({ code: 0, data }) })
+    const realFetch = globalThis.fetch
+    const stubWiki = (patchOk) => {
+      globalThis.fetch = async (rawUrl) => {
+        const url = String(rawUrl)
+        if (url.includes('tenant_access_token')) return { ok: true, json: async () => ({ code: 0, tenant_access_token: 'tok' }) }
+        if (url.includes('/wiki/v2/spaces/get_node')) return okJson({ node: { node_token: 'n295', obj_token: 'doc295', obj_type: 'docx', title: '知识页', space_id: 'sp295' } })
+        if (url.includes('/wiki/v2/spaces/sp295/nodes/n295')) return patchOk ? okJson({}) : { ok: true, json: async () => ({ code: 131006, msg: 'forbidden' }) }
+        return okJson({})
+      }
+    }
+    try {
+      // 成功路径：结项响应带「知识页标题已标记」提示，绑定行 title 同步
+      const p1 = await mkProject(ctx, cookie, '标记结项项目')
+      stubWiki(true)
+      await bindProjectWiki(ctx.db, p1.id, { wikiUrl: 'https://x.feishu.cn/wiki/n295' }, ctx.members.admin.id)
+      await markAllDone(ctx, cookie, p1.id)
+      const close1 = await authed(ctx.app, cookie, 'POST', `/api/v1/projects/${p1.id}/close`, { summary: '交付完成' })
+      expect(close1.status).toBe(200)
+      expect(close1.body.wikiCloseMark).toContain('知识页标题已标记')
+      expect(close1.body.wikiCloseMark).toContain('【已结项】')
+
+      // 失败路径：PATCH 权限不足 → 项目照常结项（终态落库），提示翻成人话
+      const p2 = await mkProject(ctx, cookie, '标记失败项目')
+      stubWiki(false)
+      await bindProjectWiki(ctx.db, p2.id, { wikiUrl: 'https://x.feishu.cn/wiki/n295' }, ctx.members.admin.id)
+      await markAllDone(ctx, cookie, p2.id)
+      const close2 = await authed(ctx.app, cookie, 'POST', `/api/v1/projects/${p2.id}/close`, { summary: '交付完成' })
+      expect(close2.status).toBe(200)
+      expect(close2.body.status).toBe('closed')
+      expect(close2.body.wikiCloseMark).toContain('知识页标题标记失败')
+      // 未绑定项目结项：wikiCloseMark 为 null，不提示
+      const p3 = await mkProject(ctx, cookie, '未绑定结项项目')
+      await markAllDone(ctx, cookie, p3.id)
+      const close3 = await authed(ctx.app, cookie, 'POST', `/api/v1/projects/${p3.id}/close`, { summary: '交付完成' })
+      expect(close3.status).toBe(200)
+      expect(close3.body.wikiCloseMark).toBeNull()
+    } finally {
+      globalThis.fetch = realFetch
+    }
+  })
+
   it('S29-3: 终态项目的未完任务退出逾期预警与个人梳理口径', async () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')

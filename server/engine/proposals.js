@@ -193,7 +193,11 @@ export async function confirmProposal(db, id, by) {
   const result = await spec.apply(db, p.payload, by)
   db.prepare('UPDATE proposals SET status = ?, decided_by = ?, decided_at = ? WHERE id = ?')
     .run('effective', by, Date.now(), p.id)
-  return { proposal: getProposal(db, id), result }
+  // S29-5（v0.87.2，K73）：提议结项生效后标记知识页标题【已结项】——尽力而为不阻断，提示随响应带出
+  const wikiCloseMark = p.kind === 'close_project'
+    ? await import('./wiki.js').then((w) => w.wikiCloseMarkNotice(db, Number(p.payload.projectId), by))
+    : null
+  return { proposal: getProposal(db, id), result, wikiCloseMark }
 }
 
 export async function rejectProposal(db, id, by) {

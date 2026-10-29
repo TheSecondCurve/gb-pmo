@@ -256,6 +256,7 @@ Docker/PaaS 容器不可 exec，配置台「运维诊断」段排障：诊断 sh
 | S29-2 | 当结项或取消时，原因文本必填（空应 400）；生效后落实际结束日、计划中里程碑转已取消、项目及任务面只读；结项可先取 AI 复盘草稿（草稿不落库、可改后提交） | `server/test/s8-closeout.test.mjs` |
 | S29-3 | 当项目已结项/已取消时，任何字段 PATCH 应 409（终态不可逆）；待确认建议批量过期；未完任务不再进入逾期预警、个人梳理、日报/晨报/路由候选与在跑项目指标 | 同上 |
 | S29-4 | 当经 Agent 提议结束项目时，`cancel_project`（原因必填）与 `close_project`（摘要必填）走牵头人/管理员确认后生效；`update_project_status` 类提议 refused（已裁撤） | `server/test/s25-proposals.test.mjs` |
+| S29-5 | 当经任一入口（web 结项端点、提议确认卡生效、机器人一条链）结项成功且项目已绑知识页时，应自动把页面标题追加「【已结项】」且**标记失败不阻断结项**：web 响应带 `wikiCloseMark` 提示、机器人终态通知播报标记结果、提议确认返回同样带提示（v0.87.2，K73） | `server/test/s8-closeout.test.mjs` `server/test/s74-bot-close-chain.test.mjs` `server/test/s25-proposals.test.mjs` |
 
 ## S30（P0）— 全员 — 项目组合页·多视图总览（v0.29）
 
@@ -638,6 +639,7 @@ extraction 调度周期尾部，把本轮各项目沉淀的 record 型 `progress
 | S61-4 | 当未绑定页面、机器人未被加进知识库（403/131006）、或页面不存在时，应返回明确中文错误指引（不静默） | `server/test/s61-wiki.test.mjs` |
 | S61-5 | 当经机器人 record_wiki/bind_wiki 操作时，bind_wiki 仅牵头人/管理员可用；record_wiki 未绑定页面回执指引文案；绑定成功回执含页面标题 | `server/test/s61-wiki.test.mjs` |
 | S61-6 | 当用户说「记到文档里」时，记录内容必须是原文（禁止 LLM 总结/浓缩/改写）；LLM 给的 summary 明显短于用户原文时用抠掉触发前缀的原文兜底，不丢信息 | `server/test/s61-wiki.test.mjs` |
+| S61-7 | 当项目结项且已绑定知识页时，应取节点当前标题追加「【已结项】」（PATCH wiki node 改标题、绑定行 title 同步、audit 留痕）；标题已带标记时幂等不重复追加；未绑定项目为无操作且不发飞书请求（v0.87.2，K73） | `server/test/s61-wiki.test.mjs` |
 
 ## S62（P0）— 全员（机器人）+ 系统（大脑·飞书知识库）+ 管理员（配置台）— 知识库默认父页面与丝滑记录（v0.67）
 

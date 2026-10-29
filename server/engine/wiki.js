@@ -7,7 +7,7 @@ import { camelizeRow } from '../db/index.mjs'
 import { audit } from './auth.js'
 import { label } from './enums.js'
 import { getSetting } from './settings.js'
-import { getWikiNode, createWikiNode, appendDocBlocks } from '../brain/connectors/feishu.js'
+import { getWikiNode, createWikiNode, renameWikiNode, appendDocBlocks } from '../brain/connectors/feishu.js'
 
 /** 从 wiki 链接解析 node_token（/wiki/<token>，容忍查询串/锚点/尾部斜杠）。 */
 export function parseWikiNodeToken(url) {
@@ -111,4 +111,45 @@ export async function recordToWiki(db, projectId, { eventType = 'progress', summ
   await appendDocBlocks(cfg, binding.objToken, blocks)
   audit(db, { memberId: by, action: 'project.wiki.record', objectType: 'project', objectId: pid, detail: { eventType, nodeToken: binding.nodeToken } })
   return { title: binding.title, section: sectionTitle(eventType), eventTypeLabel: label('eventType', eventType), url: wikiPageUrl(binding.nodeToken) }
+}
+
+// —— S61-7 / S29-5（v0.87.2，K73）：结项自动标记知识页标题【已结项】——尽力而为、幂等可重入 ——
+
+export const WIKI_CLOSED_MARK = '【已结项】'
+
+/**
+ * 结项标记：把绑定页面标题追加「【已结项】」。取节点**当前**标题（绑定行 title 是绑定时刻快照，
+ * 可能被别人改过——不回写旧值），PATCH wiki node 改树里显示名（不动 docx 内文标题块），
+ * 同步绑定行 title + audit 留痕。幂等：标题已带标记时跳过不重复追加。
+ * 抛错由调用方兜（wikiCloseMarkNotice / 各结项入口）——标记是结项的附带动作而非门槛（K73）。
+ * 返回 { marked: true, title } | { marked: false, reason: 'unbound' | 'already' | 'no-title' }。
+ */
+export async function markWikiClosed(db, projectId, by) {
+  const pid = Number(projectId)
+  const binding = getProjectWiki(db, pid)
+  if (!binding) return { marked: false, reason: 'unbound' } // 未绑定闸在飞书凭证检查之前：无绑定零请求
+  const cfg = feishuCfg(db)
+  const node = await getWikiNode(cfg, binding.nodeToken)
+  const title = String(node?.title || binding.title || '').trim()
+  if (!title) return { marked: false, reason: 'no-title' }
+  if (title.endsWith(WIKI_CLOSED_MARK)) return { marked: false, reason: 'already' }
+  const newTitle = `${title}${WIKI_CLOSED_MARK}`
+  await renameWikiNode(cfg, binding.spaceId, binding.nodeToken, newTitle)
+  db.prepare('UPDATE project_wiki_bindings SET title = ?, updated_at = ? WHERE project_id = ?').run(newTitle, Date.now(), pid)
+  audit(db, { memberId: by, action: 'project.wiki.close_mark', objectType: 'project', objectId: pid, detail: { nodeToken: binding.nodeToken, title: newTitle } })
+  return { marked: true, title: newTitle }
+}
+
+/**
+ * 结项标记结果 → 人话提示（三个结项入口共用；K73）：
+ * 未绑定/无标题/已带标记 → null（回执与响应里无需播报）；失败 → 中文提示（不抛出，结项不受阻）。
+ */
+export async function wikiCloseMarkNotice(db, projectId, by) {
+  try {
+    const r = await markWikiClosed(db, projectId, by)
+    if (r.marked) return `知识页标题已标记：${r.title}`
+    return null // unbound / already / no-title：无事可说
+  } catch (e) {
+    return `知识页标题标记失败：${e.message}（项目已结项，可稍后在飞书手动改页面标题）`
+  }
 }

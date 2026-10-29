@@ -200,4 +200,27 @@ describe('S74 机器人结项一条链', () => {
     })
     expect(out.result).toBe('card_sent')
   })
+
+  it('S29-5: 结项链终态通知播报知识页标题标记——绑页项目结项后页面标题追加【已结项】（PATCH wiki node + 绑定行同步）', async () => {
+    const p = await prime('S74标记项目', 'oc_s74_mark')
+    // 精确桩：get_node 回节点当前标题；PATCH 捕获改名载荷
+    const patches = []
+    globalThis.fetch = async (rawUrl, opts = {}) => {
+      const url = String(rawUrl)
+      if (url.includes('tenant_access_token')) return { ok: true, json: async () => ({ code: 0, tenant_access_token: 'tok' }) }
+      if (url.includes('/wiki/v2/spaces/get_node')) return okJson({ node: { node_token: 'np_s74', obj_token: 'docs74', obj_type: 'docx', title: 'S74标记项目页', space_id: 'sp1' } })
+      if (url.includes('/wiki/v2/spaces/sp1/nodes/np_s74')) {
+        patches.push({ method: opts.method, body: JSON.parse(opts.body || '{}') })
+        return okJson({})
+      }
+      return okJson({})
+    }
+    const { out, rec } = await triggerClose('oc_s74_mark', { payload: '{"skipSummary":true}', name: 'om_s74h' })
+    expect(out.result).toBe('replied')
+    expect(projRow(p.id).status).toBe('closed')
+    // 标题标记：PATCH 改名 + 绑定行同步 + 终态通知播报一行
+    expect(patches).toEqual([{ method: 'PATCH', body: { title: 'S74标记项目页【已结项】' } }])
+    expect(ctx.db.prepare('SELECT title FROM project_wiki_bindings WHERE project_id = ?').get(p.id).title).toBe('S74标记项目页【已结项】')
+    expect(sentText(rec.sent[0])).toContain('知识页标题已标记')
+  })
 })
