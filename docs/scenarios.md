@@ -727,7 +727,7 @@ web 侧边栏 `#/my` 页：跨在跑项目聚合本人未完任务（/my 斜杠�
 | # | 验收标准 | 对应测试 |
 |---|---|---|
 | S69-1 | 当立项选择「常态项目」时，项目落 `kind='routine'` 且任务实例化为常态任务（带适用星期，缺省每天；无计划起止）；交付项目缺省 `kind='delivery'` 不受影响；项目类别立项后 PATCH 400；常态项目拒绝交付日期/倒排（400）、交付项目拒绝 routine 分类（400）、常态项目内建任务强制 routine（400 work/reminder） | `server/test/s69-routine-projects.test.mjs` |
-| S69-2 | 当打开常态项目详情页时，应呈现执行视图二维表：行=常态任务、列=逐日（v0.81 窗口三档 span：周缺省/双周/月，S69-8）；缺省取项目默认再缺省周，anchor 任意日定位所在期；窗口内逐日格子（状态/备注/操作人/来源）、不适用日 `applicable=false`、行尾与表尾完成统计（本期口径）；甘特图区块不渲染 | `server/test/s69-routine-projects.test.mjs` |
+| S69-2 | 当打开常态项目详情页时，应呈现执行视图二维表：行=常态任务、列=逐日（v0.81 窗口三档 span：周缺省/双周/月，S69-8）；缺省取项目默认再缺省周，anchor 任意日定位所在期；窗口内逐日格子（状态/备注/操作人/来源）、不适用日 `applicable=false`、行尾与表尾完成统计（本期口径）；甘特图区块不渲染；适用星期弹层不被滚动容器裁切（v0.86.1：portal+fixed+近屏底上翻，遮罩/弹层层叠低于 Modal 与 toast） | `server/test/s69-routine-projects.test.mjs`；弹层 UI 锚点 `src/dailyWeekGrid.test.tsx` |
 | S69-3 | 当打卡时，完成/跳过/未做 三档互转生效（未做=删记录行）；可补过去日期、拒绝未来日期（400）；不适用星期拒绝（400）；备注 ≤200 字；每次状态变更落记录型进展事件（append-only）；结项/取消后 409 只读 | 同上 |
 | S69-4 | 当机器人收到打卡指令时，`checkin_task` 直接生效并回执：taskId 或任务名（精确/模糊命中须唯一，多义拒并列候选）；day 缺省今天；status done/skip/pending；items 批量 ≤20 逐条生效汇总回执；失败如实转告 | 同上 |
 | S69-5 | 当手动结项常态项目时，豁免「全部任务完成」校验（结项总结仍必填）；结项后周视图/任务面只读；取消口径不变 | 同上 |
@@ -796,6 +796,19 @@ S29/K25 的机器人面结项（提议卡+总结必填）修订为一条链直�
 | S74-4 | 当触发者非牵头人非管理员、或存在未完成任务、或项目已终态时拒绝——未完成任务时不触发汇总（不落 running 台账行） | `server/test/s74-bot-close-chain.test.mjs` |
 | S74-5 | 当汇总生成失败时中止结项（项目保持进行中）并提示可重试或「直接结项」；skipSummary 直接结项不落汇总台账 | `server/test/s74-bot-close-chain.test.mjs` |
 | S74-6 | 当 web 会话（无 push）发起结项时回落提议确认卡口径（summary 必填与卡片不变）；取消项目在 IM 面仍走 propose 确认卡 | `server/test/s74-bot-close-chain.test.mjs` |
+
+## S75（P0）— 成员 — 常态任务周期四档：每日 / 每周 / 每两周 / 每月几号（v0.87）
+
+S69 的「适用星期」只能表达星期几组合；本场景把常态任务周期升级为统一 `cadence` 对象四档（daily/weekly/biweekly/monthly，`tasks.cadence` JSON，migration 0038 回填老数据并删除 weekdays 列）。适用判定唯一真相源 `isApplicableDay`（engine/dailyBoard.js）；执行视图/打卡/晨报/盘点全走它。biweekly 期别复用 K65 双周纪元锚（2024-01-01 起每 14 天一期，periodIndex%2）；monthly 为 1~31 号组合，当月无该日不适用（cron 语义，不顺延）。决策见 design.md K72。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S75-1 | 当建/改常态任务给 cadence 时四档归一生效（daily 缺省；weekly/biweekly weekdays ≥1；biweekly parity ∈ {0,1} 缺省 0；monthly monthDays 1~31 ≥1）；非法 400；legacy weekdays 入参映射兼容（全周→daily、子集→weekly）；交付任务带 cadence 400 | `server/test/s75-task-cadence.test.mjs` |
+| S75-2 | 当打开执行视图时格子 applicable 按 cadence 判定：daily 全格；weekly 按星期；biweekly 仅 parity 匹配期（与 K65 窗口同锚交替）；monthly 仅日号命中格（月窗口跨月各自判定）；本期统计随 applicable 重算 | 同上 |
+| S75-3 | 当打卡时不适用日 400（monthly 2 月无 30/31 号、biweekly 隔期、weekly 未勾日）；适用日三档互转语义同 S69-3 不变 | 同上 |
+| S75-4 | 当晨报生成今日/明日待办时按 isApplicableDay 判定（monthly 当日号命中才列；biweekly 隔期不列）；空态与其余段落不变 | 同上 |
+| S75-5 | 当迁移 0038 执行时老任务回填正确（NULL/全周→daily；子集→weekly），weekdays 列删除；出参 weekdays 为 cadence 派生（daily→[1..7]） | 同上 |
+| S75-6 | 当盘点/视图行展示周期时用 cadenceLabel；bot add_task/确认卡/立项模板 weekdays 载荷兼容生效 | 同上 |
 
 ## 必测清单（engineering-standards §4）
 

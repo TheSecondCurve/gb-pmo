@@ -35,8 +35,10 @@ export interface TaskRow {
   status: string; planStartDate?: string | null; planEndDate?: string | null
   note?: string | null // S58：任务备注（≤200 字；模板默认值立项拷贝，实例独立改；提醒/预警推送自动携带）
   isOverdue: boolean
-  kind?: string // S57：任务分类 work=工作 / reminder=纯提醒（到期推送后自动完成）/ routine=常态打卡（S69，无状态/排期语义）
-  weekdays?: number[] | null // S69：适用星期（1=周一…7=周日；仅 routine 有值，全 7 天=每天）
+  kind?: string // S57：任务分类 work=工作 / reminder=纯提醒（到期一次性推送后自动完成）/ routine=常态打卡（S69，无状态/排期语义）
+  cadence?: Cadence | null // S75：周期四档（唯一真相源；仅 routine 有值）
+  cadenceLabel?: string | null // S75：周期中文标签（每天/每周一、三、五/每两周周一/每月1、15号）
+  weekdays?: number[] | null // S69 旧出参，S75 起为 cadence 派生值（daily→[1..7]；weekly/biweekly→星期集；monthly→null）
   remindedAt?: number | null // S57：提醒已送达时刻（幂等锚点；改期/重开重置）
   refCount?: number // S23：未删除参考资料条数（项目详情任务行）
 }
@@ -131,7 +133,8 @@ export interface DailyCell {
 }
 export interface DailyBoardTask {
   taskId: number; title: string; note: string | null
-  weekdays: number[]; weekdaysLabel: string
+  cadence: Cadence; cadenceLabel: string // S75：周期四档（适用判定在引擎，前端只消费）
+  weekdays: number[] | null; weekdaysLabel: string // 派生出参（daily→[1..7]；monthly→null）；label 即周期标签
   responsibleMemberId: number | null; responsibleName: string | null
   cells: DailyCell[]; periodApplicable: number; periodDone: number // 本期口径
 }
@@ -142,6 +145,24 @@ export interface DailyBoardData {
   prevAnchor: string; nextAnchor: string // 相邻期锚点（引擎下发，导航用）
   tasks: DailyBoardTask[]
   summary: { tasks: number; applicableCells: number; done: number; skip: number; pending: number; perDay: Array<{ day: string; done: number; skip: number }> }
+}
+
+// S75（v0.87，K72）：常态任务周期四档（tasks.cadence）。weekly/biweekly 的 weekdays 为 1~7 升序组合；
+// biweekly.parity=0|1 是 K65 双周纪元锚（2024-01-01 起每 14 天一期）的期别；monthly.monthDays 为 1~31 组合
+//（当月无该日不适用，cron 语义）。适用判定唯一在引擎（isApplicableDay），前端不重复实现。
+export type Cadence =
+  | { type: 'daily' }
+  | { type: 'weekly'; weekdays: number[] }
+  | { type: 'biweekly'; weekdays: number[]; parity: 0 | 1 }
+  | { type: 'monthly'; monthDays: number[] }
+export const CADENCE_TYPE_LABEL: Record<Cadence['type'], string> = { daily: '每天', weekly: '每周', biweekly: '每两周', monthly: '每月' }
+/** 周期 → 按钮短标签（触发器/选择器显示；与引擎 cadenceLabel 同文案口径）。 */
+export function cadenceShortLabel(c: Cadence | null | undefined): string {
+  const cad = c?.type ? c : { type: 'daily' } as Cadence
+  if (cad.type === 'daily') return '每天'
+  if (cad.type === 'weekly') return `每周${cad.weekdays.map((d) => '一二三四五六日'[d - 1]).join('、')}`
+  if (cad.type === 'biweekly') return `每两周周${cad.weekdays.map((d) => '一二三四五六日'[d - 1]).join('、周')}`
+  return `每月${cad.monthDays.join('、')}号`
 }
 
 export type BoardSpan = 'week' | 'biweek' | 'month'

@@ -4,7 +4,7 @@
 // v0.81（K65）：窗口三档 span（周/双周/月）+ 导航锚点服务端下发（前端零日期推算）+ Tabs 切换即持久化项目默认。
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
-import DailyWeekGrid, { WeekdayPicker } from './components/DailyWeekGrid'
+import DailyWeekGrid, { CadencePicker } from './components/DailyWeekGrid'
 import { StoreProvider } from './store'
 import { api } from './api'
 import type { DailyBoardData } from './types'
@@ -127,18 +127,101 @@ describe('S69 DailyWeekGrid 执行视图冒烟', () => {
     expect(api.patchProject).toHaveBeenLastCalledWith(1, { boardSpan: 'biweek' })
   })
 
-  it('WeekdayPicker：勾选星期与「每天」快捷，确定提交（空选禁用）', async () => {
+  it('CadencePicker（S75）：四档切换与提交——每周勾星期组合；每月勾几号；每两周选序列；空选禁用', () => {
     const onChange = vi.fn()
-    render(<WeekdayPicker value={[1, 3, 5]} onChange={onChange} />)
-    expect(screen.getByTestId('weekday-picker').textContent).toContain('每周一、三、五')
+    render(<CadencePicker value={{ type: 'weekly', weekdays: [1, 3, 5] }} onChange={onChange} />)
+    expect(screen.getByTestId('cadence-picker').textContent).toContain('每周一、三、五')
     fireEvent.click(screen.getByRole('button', { name: '每周一、三、五' }))
-    fireEvent.click(screen.getByRole('button', { name: '二' })) // 勾周二
+    // 每周：勾周二 → 确定
+    fireEvent.click(screen.getByRole('button', { name: '二' }))
     fireEvent.click(screen.getByRole('button', { name: '确定' }))
-    expect(onChange).toHaveBeenCalledWith([1, 2, 3, 5])
-    // 每天快捷
+    expect(onChange).toHaveBeenCalledWith({ type: 'weekly', weekdays: [1, 2, 3, 5] })
+    // 每月：勾 1、15 号 → 确定（value prop 未变，触发器标签仍是「每周一、三、五」）
     fireEvent.click(screen.getByRole('button', { name: '每周一、三、五' }))
+    fireEvent.click(screen.getByRole('tab', { name: '每月' }))
+    fireEvent.click(screen.getByRole('button', { name: '1', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: '15', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: '确定' }))
+    expect(onChange).toHaveBeenLastCalledWith({ type: 'monthly', monthDays: [1, 15] })
+    // 每两周：切档保留已选星期——先清空再勾周一 + 序列 B → 确定
+    fireEvent.click(screen.getByRole('button', { name: '每周一、三、五' }))
+    fireEvent.click(screen.getByRole('tab', { name: '每两周' }))
+    for (const w of ['一', '三', '五']) fireEvent.click(screen.getByRole('button', { name: w, exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: '一', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: /序列 B/ }))
+    fireEvent.click(screen.getByRole('button', { name: '确定' }))
+    expect(onChange).toHaveBeenLastCalledWith({ type: 'biweekly', weekdays: [1], parity: 1 })
+    // 空选禁用（每周：取消全部已选星期）
+    fireEvent.click(screen.getByRole('button', { name: '每周一、三、五' }))
+    fireEvent.click(screen.getByRole('tab', { name: '每周' }))
+    for (const w of ['一', '三', '五']) fireEvent.click(screen.getByRole('button', { name: w, exact: true }))
+    expect((screen.getByRole('button', { name: '确定' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  // v0.86.1（S69-2 修订）：弹层原先 absolute 定位在原地展开，被任务表格 overflow-x-auto 与页面滚动容器
+  // （app-canvas）两层裁切——新建行滚到屏底时弹层完全不可见。现 portal 到 body + fixed 定位 + 近屏底上翻。
+  it('S69-2 弹层不被滚动容器裁切：portal 到 document.body 且 fixed 定位（脱离 overflow 裁切祖先）', () => {
+    const onChange = vi.fn()
+    // 模拟任务表格包裹层：overflow-x-auto（overflow-y 随之计算为 auto → 裁切 absolute 后代）
+    const { container } = render(
+      <div style={{ overflowX: 'auto', maxHeight: 100 }}>
+        <CadencePicker value={{ type: 'daily' }} onChange={onChange} />
+      </div>,
+    )
     fireEvent.click(screen.getByRole('button', { name: '每天' }))
-    fireEvent.click(screen.getByRole('button', { name: '确定' }))
-    expect(onChange).toHaveBeenLastCalledWith([1, 2, 3, 4, 5, 6, 7])
+    const pop = document.querySelector('[data-testid="cadence-picker-pop"]')
+    expect(pop).toBeTruthy()
+    expect(container.contains(pop)).toBe(false) // 不在渲染容器（= 不在任何 overflow 裁切祖先）内
+    expect(document.body.contains(pop)).toBe(true) // portal 到 body
+    expect(pop.className).toContain('fixed') // fixed 定位：裁切祖先不再生效
+    expect(pop.className).toContain('z-30') // 层叠：弹层高于遮罩，低于 Modal z-40 / toast z-50
+    const backdrop = document.querySelector('[data-testid="cadence-picker-backdrop"]')
+    expect(backdrop?.className).toContain('z-20')
+    // 遮罩点击关闭（既有行为保留）
+    fireEvent.click(backdrop!)
+    expect(document.querySelector('[data-testid="cadence-picker-pop"]')).toBeNull()
+  })
+
+  it('S69-2 近屏底自动向上翻转 + Esc 关闭：触发器在视口底部时弹层改在上方展开', () => {
+    const onChange = vi.fn()
+    // jsdom 无布局：mock 触发器矩形为近屏底（top 800 / bottom 830，视口高 860）
+    const vh = window.innerHeight
+    window.innerHeight = 860
+    const orig = HTMLElement.prototype.getBoundingClientRect
+    HTMLElement.prototype.getBoundingClientRect = function () {
+      return { x: 100, y: 800, top: 800, bottom: 830, left: 100, right: 144, width: 44, height: 30, toJSON: () => ({}) } as DOMRect
+    }
+    try {
+      render(<CadencePicker value={{ type: 'daily' }} onChange={onChange} />)
+      fireEvent.click(screen.getByRole('button', { name: '每天' }))
+      const pop = document.querySelector('[data-testid="cadence-picker-pop"]') as HTMLElement
+      expect(pop).toBeTruthy()
+      expect(parseInt(pop.style.top, 10)).toBeLessThan(800) // 上翻：弹层顶高于触发器顶
+      expect(parseInt(pop.style.top, 10)).toBeGreaterThanOrEqual(0)
+      // Esc 关闭
+      fireEvent.keyDown(window, { key: 'Escape' })
+      expect(document.querySelector('[data-testid="cadence-picker-pop"]')).toBeNull()
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = orig
+      window.innerHeight = vh
+    }
+  })
+
+  it('S69-2 滚动跟随：触发器矩形变化后弹层贴住重算（事件 + 轮询兜底，不依赖单一机制）', async () => {
+    const onChange = vi.fn()
+    let rect = { x: 100, y: 300, top: 300, bottom: 330, left: 100, right: 144, width: 44, height: 30, toJSON: () => ({}) }
+    const orig = HTMLElement.prototype.getBoundingClientRect
+    HTMLElement.prototype.getBoundingClientRect = function () { return rect as DOMRect }
+    try {
+      render(<CadencePicker value={{ type: 'daily' }} onChange={onChange} />)
+      fireEvent.click(screen.getByRole('button', { name: '每天' }))
+      const pop = document.querySelector('[data-testid="cadence-picker-pop"]') as HTMLElement
+      expect(parseInt(pop.style.top, 10)).toBe(334) // 下方展开：bottom 330 + GAP 4
+      rect = { ...rect, y: 100, top: 100, bottom: 130 } // 触发器随页面上移（等价容器滚动）
+      await new Promise((r) => setTimeout(r, 220)) // 轮询周期 100ms，留两拍
+      expect(parseInt(pop.style.top, 10)).toBe(134) // 弹层贴住新位置
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = orig
+    }
   })
 })
