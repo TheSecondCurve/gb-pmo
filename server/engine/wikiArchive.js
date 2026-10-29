@@ -1,8 +1,10 @@
 // S63（v0.68，design.md K48）：项目群全量汇总归档知识库——
-// 人工触发（web 知识库卡「生成项目汇总」）→ 全量回读绑定专题群历史（不挪游标/不进 im_buffer/不产事件，
-// 与 S3-6 增量抽取不回灌是互补口径）→ 关键时间线（事件流 record/effective + 里程碑 + 任务完成，确定性）
-// + LLM 分块产重要内容/群内金句 + 群内图片下载→上传→image block → 写入绑定页面最后一个「项目汇总」
-// 章节（不存在则文末新建）；生成区首尾标记行包裹，重跑按锚点幂等替换。台账 wiki_archive_runs（migration 0029）。
+// 人工触发（web 知识库卡「生成项目汇总」/ S73 机器人 @触发）→ 全量回读绑定专题群历史（不挪游标/不进 im_buffer/
+// 不产事件，与 S3-6 增量抽取不回灌是互补口径）→ 关键时间线（事件流 record/effective + 里程碑 + 任务完成，确定性）
+// + LLM 分块产重要内容/群内金句 → 写入绑定页面最后一个「项目汇总」章节（不存在则文末新建）；生成区首尾标记行包裹，
+// 重跑按锚点幂等替换。台账 wiki_archive_runs（migration 0029）。
+// 图片/附件归档（v0.85.1 两段式）：生成区以「图注 + 空占位块」写入 → 占位块建 media token 直塞创建载荷是非法的
+// （1770001）——素材以块 id 为 parent 上传，再 batch_update replace_image/replace_file 换入 token。
 // 信任边界：人工明确指令触发的记录型外写，直生效不进确认卡（K25）；不改系统内业务数据。
 
 import { camelizeRow, camelizeRows } from '../db/index.mjs'
@@ -14,8 +16,8 @@ import { getProjectWiki, wikiPageUrl } from './wiki.js'
 import { getLlm, parseJsonLoose } from '../brain/llm.js'
 import { mapSpeaker } from '../brain/extract.js'
 import {
-  fetchChatHistory, listDocRootBlocks, insertDocBlocks, deleteDocChildren,
-  downloadChatImage, uploadDocImage, downloadChatFile, uploadDocFile,
+  fetchChatHistory, listDocRootBlocks, listBlockChildren, insertDocBlocks, deleteDocChildren,
+  batchUpdateDocBlocks, downloadChatImage, uploadDocImage, downloadChatFile, uploadDocFile,
 } from '../brain/connectors/feishu.js'
 
 const MAX_MESSAGES = 20000 // 量护栏：超出取最近（连接器降序分页保证）并标 truncated
@@ -48,11 +50,13 @@ const textBlock = (content) => ({ block_type: 2, text: { elements: [{ text_run: 
 const heading2 = (content) => ({ block_type: 4, heading2: { elements: [{ text_run: { content } }] } })
 const heading3 = (content) => ({ block_type: 5, heading3: { elements: [{ text_run: { content } }] } })
 const bullet = (content) => ({ block_type: 12, bullet: { elements: [{ text_run: { content } }] } })
-const imageBlock = (token) => ({ block_type: 27, image: { token } })
-// v0.85 工程防线：block_type=23 才是 file（官方枚举 18=bitable 多维表格）——gb-test run#2 实证
-// 含 file 块的分批整包被 1770001 invalid param 拒掉；载荷仍仅含 token（v0.80.1，多带 name 有 99992402
-// 严格校验风险），文件名由紧邻的图注文本块承担（collectFileBlocks 已写「日期 说话人 · 文件名」）。
-const fileBlock = (token) => ({ block_type: 23, file: { token } })
+// v0.85.1（官方口径实证，K69）：children 创建载荷**不能**携带素材 token（image:{token}/file:{token}
+// 一律 1770001 invalid param 整包拒掉）——必须先建空占位块，素材以「块 id」为 parent_node 上传，
+// 再 batch_update replace_image/replace_file 换入 token（fillMediaBlocks 两段式第二步）。
+// file 占位块创建时飞书自动包一层 view(33) 块：根级是 view、真附件块(23)是 view 的子块。
+// 文件名由紧邻的图注文本块承担（collectFileItems 写「日期 说话人 · 文件名」）。
+const imagePlaceholder = () => ({ block_type: 27, image: {} })
+const filePlaceholder = () => ({ block_type: 23, file: {} })
 
 /** 读 block 纯文本（章节标题匹配/标记行扫描共用）。 */
 function blockText(b) {
@@ -155,20 +159,24 @@ export async function executeWikiArchive(db, runId, { llm: llmOverride, onDone }
     const truncated = fetchTruncated || Boolean(summarized?.sampled)
     patch({ stage: 'images', chunk_count: summarized?.chunkCount ?? 0, quotes_count: quotes.length, truncated: truncated ? 1 : 0 })
 
-    // ③ 群内图片：下载 → 上传文档素材 → image block（单张失败跳过不阻塞，计数如实）
-    const { blocks: imgBlocks, done: imageCount } = await collectImageBlocks(db, cfg, binding.objToken, images)
-    patch({ stage: 'files', image_count: imageCount })
+    // ③ 群内图片：下载即可（单张失败跳过不阻塞）；上传与挂块在 ④ 写入后两段式完成（v0.85.1）
+    const imgItems = await collectImageItems(db, cfg, images)
+    patch({ stage: 'files' })
 
-    // ③b 群内附件：<20MB 文件 → 下载 → 上传 docx_file 素材 → file block；超限/失败跳过并记录原因
-    const { blocks: fileBlocks, done: fileCount, skipped: skippedFiles, total: fileTotal } = await collectFileBlocks(db, cfg, binding.objToken, files)
-    patch({ stage: 'write', file_count: fileCount, skipped_files: JSON.stringify(skippedFiles).slice(0, 500) })
+    // ③b 群内附件：<20MB 文件下载（超限/失败跳过并记录原因）；上传与挂块同样后置
+    const { items: fileItems, skipped: skippedFiles } = await collectFileItems(db, cfg, files)
+    patch({ stage: 'write' })
 
-    // ④ 写入：定位最后一个「项目汇总」章节末尾；无则文末新建；重跑按锚点幂等替换
+    // ④ 写入：定位最后一个「项目汇总」章节末尾；无则文末新建；重跑按锚点幂等替换。
+    // 媒体块以空占位进文档，写入完成后 fillMediaBlocks 逐项「挂块上传 + replace 换 token」。
     const marker = `${START_PREFIX} · 生成于 ${fmtMinute(Date.now())} · 回读群消息 ${lines.length} 条（自项目创建起全量）${truncated ? '（超上限已截断/抽样，仅含最近部分）' : ''}`
-    const blocks = buildArchiveBlocks({ marker, timeline, highlights, quotes, quotesNote, imgBlocks, imageTotal: images.length, fileBlocks, fileTotal, skippedFiles })
-    const firstBlockId = await writeArchiveSection(db, cfg, pid, binding.objToken, blocks)
+    const { blocks, mediaPlan } = buildArchiveBlocks({ marker, timeline, highlights, quotes, quotesNote, imgItems, imageTotal: images.length, fileItems, fileTotal: files.length, skippedFiles })
+    const created = await writeArchiveSection(db, cfg, pid, binding.objToken, blocks)
+    const { imageDone, fileDone, postSkipped } = await fillMediaBlocks(cfg, binding.objToken, created, mediaPlan)
     patch({
-      status: 'done', stage: 'done', first_block_id: firstBlockId,
+      status: 'done', stage: 'done', first_block_id: created[0]?.block_id ?? null,
+      image_count: imageDone, file_count: fileDone,
+      skipped_files: JSON.stringify([...skippedFiles, ...postSkipped]).slice(0, 500),
       page_url: wikiPageUrl(binding.nodeToken), finished_at: Date.now(),
     })
   } catch (e) {
@@ -256,50 +264,99 @@ async function summarize(db, llm, projectName, lines) {
   return { highlights, quotes, chunkCount: used.length, sampled }
 }
 
-/** 群内图片归档：逐张下载→上传→[图注 text + image block]；单张失败跳过不阻塞（权限/坏图不拖垮整体）。 */
-async function collectImageBlocks(db, cfg, documentId, images) {
-  const blocks = []
-  let done = 0
+/** 群内图片收集：只下载（≤MAX_IMAGES，单张失败跳过不阻塞——权限/坏图不拖垮整体）；上传挂块在写入后统一做。 */
+async function collectImageItems(db, cfg, images) {
+  const items = []
   for (const m of images.slice(0, MAX_IMAGES)) {
     try {
       const { bytes, contentType } = await downloadChatImage(cfg, m.imageKey)
-      const token = await uploadDocImage(cfg, documentId, { fileName: `archive-${m.id}.jpg`, bytes, contentType })
-      if (!token) throw new Error('素材上传未返回 file_token')
       const speaker = mapSpeaker(db, 'feishu', m.speakerId)?.name ?? '未识别'
-      blocks.push(textBlock(`${today(m.ts)} ${speaker}`))
-      blocks.push(imageBlock(token))
-      done++
+      items.push({ m, bytes, contentType, caption: `${today(m.ts)} ${speaker}` })
     } catch { /* 单张失败跳过不阻塞 */ }
   }
-  return { blocks, done }
+  return items
 }
 
-/** 群内附件归档：下载（<20MB 边界）→ 上传 docx_file → [图注 text + file block]；单文件失败/超限跳过不阻塞。 */
-async function collectFileBlocks(db, cfg, documentId, files) {
-  const blocks = []
+/** 群内附件收集：只下载（<20MB 边界，失败/超限记 skipped）；上传挂块在写入后统一做。 */
+async function collectFileItems(db, cfg, files) {
+  const items = []
   const skipped = []
-  let done = 0
   for (const m of files.slice(0, MAX_FILES)) {
     const name = String(m.fileName || m.fileKey)
     try {
       const { bytes, contentType } = await downloadChatFile(cfg, { messageId: m.id, fileKey: m.fileKey }, { maxBytes: MAX_ATTACHMENT_BYTES })
-      const token = await uploadDocFile(cfg, documentId, { fileName: name, bytes, contentType })
-      if (!token) throw new Error('素材上传未返回 file_token')
       const speaker = mapSpeaker(db, 'feishu', m.speakerId)?.name ?? '未识别'
-      blocks.push(textBlock(`${today(m.ts)} ${speaker} · ${name}`))
-      blocks.push(fileBlock(token))
-      done++
+      items.push({ m, bytes, contentType, name, caption: `${today(m.ts)} ${speaker} · ${name}` })
     } catch (e) {
       skipped.push({ name, reason: String(e?.message || e).slice(0, 80) })
     }
   }
   const overLimit = files.slice(MAX_FILES)
   for (const m of overLimit) skipped.push({ name: String(m.fileName || m.fileKey), reason: `附件数量超 ${MAX_FILES} 上限未归档` })
-  return { blocks, done, skipped, total: files.length }
+  return { items, skipped }
 }
 
-/** 生成区结构：首标记行 → 关键时间线 → 重要内容 → 群内金句 → 群内图片 → 群内附件 → 尾标记行。 */
-function buildArchiveBlocks({ marker, timeline, highlights, quotes, quotesNote, imgBlocks, imageTotal, fileBlocks, fileTotal, skippedFiles }) {
+/**
+ * 素材挂块两段式填充（v0.85.1，官方口径实证）：占位块已随生成区写入文档——
+ * image：素材以占位块 id 为 parent 上传（docx_image）→ batch_update replace_image 换入 token；
+ * file：占位块创建时飞书自动包 view(33)，先按 view id 拉子块拿真 file 块(23) → 素材挂 file 块上传
+ * （docx_file）→ batch_update replace_file。单项失败：尽力清理「图注+占位块」（重列根块按 id 定位、
+ * 区间删且从后往前避免索引位移），记 postSkipped 不阻塞其余。
+ */
+async function fillMediaBlocks(cfg, documentId, created, mediaPlan) {
+  let imageDone = 0
+  let fileDone = 0
+  const postSkipped = []
+  const failedPlans = []
+  for (const plan of mediaPlan) {
+    const item = plan.item
+    const name = plan.kind === 'file' ? item.name : `图片 ${today(item.m.ts)}`
+    try {
+      const holderId = created[plan.blockIdx]?.block_id
+      if (!holderId) throw new Error('占位块未返回 block_id')
+      if (plan.kind === 'image') {
+        const token = await uploadDocImage(cfg, holderId, { fileName: `archive-${item.m.id}.jpg`, bytes: item.bytes, contentType: item.contentType })
+        if (!token) throw new Error('素材上传未返回 file_token')
+        await batchUpdateDocBlocks(cfg, documentId, [{ block_id: holderId, replace_image: { token } }])
+        imageDone++
+      } else {
+        const kids = await listBlockChildren(cfg, documentId, holderId)
+        const fileBlockId = kids.find((b) => b.block_type === 23)?.block_id
+        if (!fileBlockId) throw new Error('附件占位块下未找到 file 块')
+        const token = await uploadDocFile(cfg, fileBlockId, { fileName: item.name, bytes: item.bytes, contentType: item.contentType })
+        if (!token) throw new Error('素材上传未返回 file_token')
+        await batchUpdateDocBlocks(cfg, documentId, [{ block_id: fileBlockId, replace_file: { token } }])
+        fileDone++
+      }
+    } catch (e) {
+      postSkipped.push({ name, reason: String(e?.message || e).slice(0, 80) })
+      failedPlans.push(plan)
+    }
+  }
+  if (failedPlans.length) await cleanupFailedMedia(cfg, documentId, created, failedPlans)
+  return { imageDone, fileDone, postSkipped }
+}
+
+/** 失败项清理（尽力而为）：重列根块按 block_id 定位，删「图注+占位块」连续区间；多区间从后往前删避免位移。 */
+async function cleanupFailedMedia(cfg, documentId, created, plans) {
+  try {
+    const existing = await listDocRootBlocks(cfg, documentId)
+    const idxOf = (id) => (id ? existing.findIndex((b) => b.block_id === id) : -1)
+    const ranges = plans
+      .map((p) => {
+        const ph = idxOf(created[p.blockIdx]?.block_id)
+        const cap = p.blockIdx > 0 ? idxOf(created[p.blockIdx - 1]?.block_id) : -1
+        return ph < 0 ? null : [cap >= 0 && cap === ph - 1 ? cap : ph, ph + 1] // 图注紧邻占位块才连删
+      })
+      .filter(Boolean)
+      .sort((a, b) => b[0] - a[0])
+    for (const [start, end] of ranges) await deleteDocChildren(cfg, documentId, start, end)
+  } catch { /* 尽力而为：清理失败不影响台账终态 */ }
+}
+
+/** 生成区结构：首标记行 → 关键时间线 → 重要内容 → 群内金句 → 群内图片 → 群内附件 → 尾标记行。
+ * 媒体以「图注 text + 空占位块」成对写入；mediaPlan 记录占位块在 blocks 中的下标，写入后两段式填充。 */
+function buildArchiveBlocks({ marker, timeline, highlights, quotes, quotesNote, imgItems, imageTotal, fileItems, fileTotal, skippedFiles }) {
   const blocks = [textBlock(marker), heading3('关键时间线')]
   if (timeline.length) timeline.forEach((l) => blocks.push(bullet(l)))
   else blocks.push(textBlock('（事件流暂无记录）'))
@@ -309,15 +366,27 @@ function buildArchiveBlocks({ marker, timeline, highlights, quotes, quotesNote, 
   blocks.push(heading3('群内金句'))
   if (quotes.length) quotes.forEach((q) => blocks.push(bullet(`「${q.text}」—— ${q.speaker}`)))
   else blocks.push(textBlock(quotesNote))
+  const mediaPlan = []
   blocks.push(heading3('群内图片'))
-  if (imgBlocks.length) blocks.push(...imgBlocks)
-  else blocks.push(textBlock(imageTotal ? '（图片归档失败——检查飞书应用 im:resource 与素材上传权限后重新生成）' : '（群内无图片消息）'))
+  if (imgItems.length) {
+    imgItems.forEach((item) => {
+      blocks.push(textBlock(item.caption))
+      mediaPlan.push({ kind: 'image', item, blockIdx: blocks.length })
+      blocks.push(imagePlaceholder())
+    })
+  } else blocks.push(textBlock(imageTotal ? '（图片归档失败——检查飞书应用 im:resource 与素材上传权限后重新生成）' : '（群内无图片消息）'))
   blocks.push(heading3('群内附件'))
-  if (fileBlocks.length) blocks.push(...fileBlocks)
+  if (fileItems.length) {
+    fileItems.forEach((item) => {
+      blocks.push(textBlock(item.caption))
+      mediaPlan.push({ kind: 'file', item, blockIdx: blocks.length })
+      blocks.push(filePlaceholder())
+    })
+  }
   if (skippedFiles.length) blocks.push(textBlock(`（以下附件未归档：${skippedFiles.map((f) => `${f.name}（${f.reason}）`).join('；')}）`))
-  if (!fileBlocks.length && !skippedFiles.length) blocks.push(textBlock(fileTotal ? '（附件归档失败——检查飞书应用 im:resource 与素材上传权限后重新生成）' : '（群内无附件消息）'))
+  if (!fileItems.length && !skippedFiles.length) blocks.push(textBlock(fileTotal ? '（附件归档失败——检查飞书应用 im:resource 与素材上传权限后重新生成）' : '（群内无附件消息）'))
   blocks.push(textBlock(END_MARKER))
-  return blocks
+  return { blocks, mediaPlan }
 }
 
 /** 章节定位：最后一个标题含「项目汇总」的根级标题块；章节末=下一个同级/更高级标题之前。 */
@@ -339,7 +408,8 @@ function locateChapter(blocks) {
 
 /**
  * 写入章节：① 上次生成区还在（runs 锚点 firstBlockId，丢失按首标记前缀扫描兜底）→ 删旧区原位写新版；
- * ② 否则定位最后一个「项目汇总」章节末尾插入；③ 无该章节 → 文末新建 heading2 章节再写。返回首块 blockId。
+ * ② 否则定位最后一个「项目汇总」章节末尾插入；③ 无该章节 → 文末新建 heading2 章节再写。
+ * 返回按序的全部创建结果（含 block_id；首块即幂等锚点，媒体占位块也在此列——fillMediaBlocks 按下标对应）。
  */
 async function writeArchiveSection(db, cfg, pid, documentId, blocks) {
   const existing = await listDocRootBlocks(cfg, documentId)
@@ -355,14 +425,9 @@ async function writeArchiveSection(db, cfg, pid, documentId, blocks) {
       if (existing[j].block_type === 2 && blockText(existing[j]).startsWith(END_MARKER)) { endIdx = j + 1; break }
     }
     await deleteDocChildren(cfg, documentId, startIdx, endIdx)
-    const created = await insertDocBlocks(cfg, documentId, blocks, startIdx)
-    return created[0]?.block_id ?? null
+    return insertDocBlocks(cfg, documentId, blocks, startIdx)
   }
   const chapter = locateChapter(existing)
-  if (chapter) {
-    const created = await insertDocBlocks(cfg, documentId, blocks, chapter.end)
-    return created[0]?.block_id ?? null
-  }
-  const created = await insertDocBlocks(cfg, documentId, [heading2(CHAPTER_TITLE), ...blocks])
-  return created[0]?.block_id ?? null
+  if (chapter) return insertDocBlocks(cfg, documentId, blocks, chapter.end)
+  return insertDocBlocks(cfg, documentId, [heading2(CHAPTER_TITLE), ...blocks])
 }

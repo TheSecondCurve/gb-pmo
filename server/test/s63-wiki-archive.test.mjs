@@ -48,13 +48,22 @@ function stubFetch(handlers, calls = []) {
 }
 
 /**
- * 归档阶段 fetch 桩：消息分页 pages、文档现有根块 blocks、图片下载 imageResponder。
- * 返回 calls 供断言（消息翻页、插入 index、batch_delete 区间）。
+ * 归档阶段 fetch 桩（v0.85.1 两段式）：消息分页 pages、文档现有根块 blocks、图片下载 imageResponder、
+ * 附件下载 fileResponder、素材上传 uploadResponder（缺省恒成功，返回 ft_N）。
+ * docx 行为：POST children 按请求块数返回 gen 序号 block_id（首块恒 gen1，幂等锚点语义不变）；
+ * GET 根块返回 blocks（trackCreated 时追加已建块——失败清理用例需要占位块出现在根列表里）；
+ * GET 非根块（占位块子级）返回 viewChildren(blockId)（缺省 [{fb_<id>, type 23}]——file 占位块的 view 包装）；
+ * PATCH batch_update 捕获进 onPatch；batch_delete 恒通。返回 calls 供断言。
  */
-function stubArchiveFetch({ pages = [{ items: [], has_more: false }], blocks = [], insertResult, imageResponder, fileResponder, extra = [], onUpload } = {}) {
+function stubArchiveFetch({
+  pages = [{ items: [], has_more: false }], blocks = [], insertResult, viewChildren,
+  imageResponder, fileResponder, uploadResponder, extra = [], onUpload, onPatch, trackCreated = false,
+} = {}) {
   const calls = []
   let pageIdx = 0
   let uploadSeq = 0
+  let genSeq = 0
+  const createdSoFar = [] // trackCreated：已创建块回放到根列表（cleanupFailedMedia 按 id 定位用）
   globalThis.fetch = async (rawUrl, opts = {}) => {
     const url = String(rawUrl)
     calls.push({ url, opts })
@@ -73,12 +82,28 @@ function stubArchiveFetch({ pages = [{ items: [], has_more: false }], blocks = [
     }
     if (url.includes('/drive/v1/medias/upload_all')) {
       if (onUpload) onUpload(opts)
+      if (uploadResponder) return uploadResponder(url, opts)
       return okJson({ file_token: `ft_${++uploadSeq}` })
+    }
+    if (url.includes('/blocks/batch_update')) {
+      if (onPatch) onPatch(JSON.parse(opts.body))
+      return okJson({})
     }
     if (url.includes('/children/batch_delete')) return okJson({})
     if (url.includes('/docx/v1/documents/') && url.includes('/children')) {
-      if ((opts.method ?? 'GET') === 'GET') return okJson({ items: blocks, has_more: false })
-      return okJson(insertResult ?? { children: [{ block_id: 'gen1' }] })
+      const m = url.match(/\/docx\/v1\/documents\/([^/]+)\/blocks\/([^?/]+)\//)
+      if ((opts.method ?? 'GET') === 'GET') {
+        if (m && m[2] !== m[1]) return okJson({ items: viewChildren ? viewChildren(m[2]) : [{ block_id: `fb_${m[2]}`, block_type: 23 }], has_more: false })
+        return okJson({ items: trackCreated ? [...blocks, ...createdSoFar] : blocks, has_more: false })
+      }
+      if (insertResult) return okJson(insertResult)
+      const n = JSON.parse(opts.body).children.length
+      const children = Array.from({ length: n }, () => {
+        const block = { block_id: `gen${++genSeq}`, block_type: 2 }
+        if (trackCreated) createdSoFar.push(block)
+        return block
+      })
+      return okJson({ children })
     }
     for (const [match, responder] of extra) {
       if (url.includes(match)) return responder(url, opts)
@@ -110,6 +135,21 @@ function insertedChildren(calls) {
   const c = calls.find((x) => x.url.includes('/children') && !x.url.includes('batch_delete') && x.opts.method === 'POST')
   return c ? JSON.parse(c.opts.body) : null
 }
+
+/** 素材上传调用（FormData）→ [parentType, parentNode]（两段式：parent 必须是块 id，v0.85.1）。 */
+const uploadParentsOf = (calls) => calls
+  .filter((c) => c.url.includes('/drive/v1/medias/upload_all'))
+  .map((c) => [c.opts.body.get('parent_type'), c.opts.body.get('parent_node')])
+
+/** batch_update 调用 → requests 数组（两段式第二步 replace_image/replace_file）。 */
+const patchRequestsOf = (calls) => calls
+  .filter((c) => c.url.includes('/blocks/batch_update') && (c.opts.method ?? 'GET') === 'PATCH')
+  .flatMap((c) => JSON.parse(c.opts.body).requests)
+
+/** 根级 batch_delete 调用 → [start, end) 区间数组。 */
+const deleteRangesOf = (calls) => calls
+  .filter((c) => c.url.includes('/children/batch_delete'))
+  .map((c) => [JSON.parse(c.opts.body).start_index, JSON.parse(c.opts.body).end_index])
 
 describe('S63 项目群全量汇总归档知识库', () => {
   it('S63-1: 触发校验——未绑定知识库 400 / 未绑定专题群 400 / 运行中重复触发 409 / 非牵头人管理员 403', async () => {
@@ -332,7 +372,7 @@ describe('S63 项目群全量汇总归档知识库', () => {
     await app.close()
   })
 
-  it('S63-8: 群内图片归档——下载 image_key → 上传素材 → image block，单张失败跳过不阻塞，计数如实', async () => {
+  it('S63-8: 群内图片两段式归档——下载→空占位块进生成区→素材挂块上传→replace_image；单张失败跳过，计数如实', async () => {
     const p = fresh()
     await bindWiki(p)
     const createdSec = createdSecOf(p.id)
@@ -353,7 +393,16 @@ describe('S63 项目群全量汇总归档知识库', () => {
     const body = insertedChildren(calls)
     const images = body.children.filter((b) => b.block_type === 27)
     expect(images.length).toBe(2)
-    expect(images.map((b) => b.image.token)).toEqual(['ft_1', 'ft_2']) // 按时间序上传
+    // v0.85.1：创建载荷是空占位（token 直塞会被 1770001 整包拒——gb-test run#2/#3 实证）
+    expect(images.every((b) => Object.keys(b.image).length === 0)).toBe(true)
+    // 素材挂在各自占位块上（parent_node=块 id），再 replace_image 换入 token
+    const parents = uploadParentsOf(calls).map(([, node]) => node)
+    expect(parents.length).toBe(2)
+    expect(new Set(parents).size).toBe(2) // 两张图各自占位块
+    expect(parents.every((id) => /^gen\d+$/.test(id))).toBe(true) // parent 是块 id 而非文档 id
+    const repl = patchRequestsOf(calls).filter((r) => r.replace_image)
+    expect(repl.map((r) => r.replace_image.token)).toEqual(['ft_1', 'ft_2']) // 按时间序上传
+    expect(repl.map((r) => r.block_id)).toEqual(parents) // replace 的正是各自占位块
     const captions = body.children.filter((b) => b.block_type === 2).map((b) => b.text.elements[0].text_run.content)
     expect(captions.some((t) => t.includes('李四'))).toBe(true) // 图注带说话人
     expect(captions.some((t) => t.includes('张三'))).toBe(true)
@@ -386,11 +435,10 @@ describe('S63 项目群全量汇总归档知识库', () => {
     expect(text).not.toContain('fk_1')
   })
 
-  it('S65-2: <20MB 附件经消息资源下载→docx_file 上传→file block，命名/图注/上限计数如实', async () => {
+  it('S65-2: <20MB 附件两段式——资源下载→空 file 占位块→view 子块定位→挂块上传 docx_file→replace_file，命名/图注/计数如实', async () => {
     const p = fresh()
     await bindWiki(p)
     const createdSec = createdSecOf(p.id)
-    const uploadParentTypes = []
     const items = [
       msg('t1', createdSec + 100, 'fs_zhang', '文件发你'),
       msg('f1', createdSec + 200, 'fs_li', '', { msgType: 'file', fileKey: 'fk_a', fileName: '报价单.pdf' }),
@@ -399,7 +447,6 @@ describe('S63 项目群全量汇总归档知识库', () => {
     const calls = stubArchiveFetch({
       pages: [{ items, has_more: false }],
       fileResponder: (_url) => ({ ok: true, status: 200, headers: { get: () => 'application/pdf' }, body: (async function* () { yield Uint8Array.from([9, 9]) })() }),
-      onUpload: (opts) => { const fd = opts.body; if (fd?.get) uploadParentTypes.push(fd.get('parent_type')) },
     })
     const run = await startWikiArchive(db, p.id, members.admin.id, { defer: false })
     expect(run.status).toBe('done')
@@ -409,16 +456,20 @@ describe('S63 项目群全量汇总归档知识库', () => {
     const resUrls = resCalls.map((c) => c.url).sort()
     expect(resUrls[0]).toContain(`messages/f1/resources/fk_a?type=file`)
     expect(resUrls[1]).toContain(`messages/f2/resources/fk_b?type=file`)
-    const uploads = calls.filter((c) => c.url.includes('/drive/v1/medias/upload_all'))
-    expect(uploads.length).toBe(2)
-    expect(uploadParentTypes).toEqual(['docx_file', 'docx_file'])
+    // 素材挂块：parent_type=docx_file 且 parent_node=真 file 块 id（view 包装下钻，非文档 id）
+    const parents = uploadParentsOf(calls)
+    expect(parents.length).toBe(2)
+    expect(parents.map(([type]) => type)).toEqual(['docx_file', 'docx_file'])
+    expect(parents.every(([, node]) => /^fb_gen\d+$/.test(node))).toBe(true)
+    const repl = patchRequestsOf(calls).filter((r) => r.replace_file)
+    expect(repl.map((r) => r.replace_file.token)).toEqual(['ft_1', 'ft_2'])
+    expect(repl.map((r) => r.block_id)).toEqual(parents.map(([, node]) => node)) // replace 的正是挂块上传的 file 块
     const body = insertedChildren(calls)
     const files = body.children.filter((b) => b.block_type === 23)
     expect(files.length).toBe(2)
-    // v0.80.1 工程防线：file 块载荷按官方 schema 仅含 token（多带 name 有 99992402 严格校验风险）；
-    // v0.85：块类型 23=file（18=bitable，gb-test run#2 实证 1770001）——文件名在图注里
-    expect(files[0].file).toEqual({ token: 'ft_1' })
-    expect(files[1].file).toEqual({ token: 'ft_2' })
+    // v0.85.1：创建载荷是空占位 {file:{}}——token/name 都不进（token 直塞被 1770001 拒，v0.80.1 的 99992402 面收敛于此）
+    expect(files.every((b) => Object.keys(b.file).length === 0)).toBe(true)
+    expect(JSON.stringify(body.children)).not.toContain('ft_') // 素材 token 不出现在创建载荷里
     const captions = body.children.filter((b) => b.block_type === 2).map((b) => b.text.elements[0].text_run.content)
     expect(captions.some((t) => t.includes('李四') && t.includes('报价单.pdf'))).toBe(true)
     // 附件消息原文不混入汇总文本行；有效文本（t1）在无 LLM 时进 lines 供分块——这里只断言写入的生成区不含 file_key
@@ -497,25 +548,72 @@ describe('【工程防线】S63 写块分批与 file 块 schema（99992402/17700
     expect(run.firstBlockId).toBe('gen1') // 幂等锚点=首批首块（分批后仍取首批返回）
   })
 
-  it('file 块载荷仅含 token（官方 schema）：block_type=23（18=bitable），name 不进块结构，文件名由图注承担', async () => {
+  it('媒体两段式防线：创建载荷零 token（1770001 实证），素材挂块 + replace_image/replace_file 换入', async () => {
     const p = fresh()
     await bindWiki(p)
     const createdSec = createdSecOf(p.id)
     const calls = stubArchiveFetch({
-      pages: [{ items: [msg('mf', createdSec + 3600, 'fs_li', '', { msgType: 'file', fileKey: 'fk1', fileName: '验收报告.pdf' })], has_more: false }],
-      fileResponder: (_url) => ({ ok: true, status: 200, headers: { get: () => 'application/pdf' }, body: (async function* () { yield Uint8Array.from([1, 2, 3]) })() }),
+      pages: [{ items: [
+        msg('mi', createdSec + 3600, 'fs_li', '', { msgType: 'image', imageKey: 'ik1' }),
+        msg('mf', createdSec + 3700, 'fs_zhang', '', { msgType: 'file', fileKey: 'fk1', fileName: '验收报告.pdf' }),
+      ], has_more: false }],
+      imageResponder: () => ({ ok: true, status: 200, headers: { get: () => 'image/png' }, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer }),
+      fileResponder: () => ({ ok: true, status: 200, headers: { get: () => 'application/pdf' }, body: (async function* () { yield Uint8Array.from([1, 2, 3]) })() }),
     })
     const run = await startWikiArchive(db, p.id, members.admin.id, { defer: false })
     expect(run.status).toBe('done')
+    expect(run.imageCount).toBe(1)
     expect(run.fileCount).toBe(1)
     const blocks = allInsertBodies(calls).flatMap((b) => b.children)
-    const fileBlocks = blocks.filter((b) => b.block_type === 23)
-    expect(fileBlocks.length).toBe(1)
-    expect(blocks.some((b) => b.block_type === 18)).toBe(false) // 18=bitable（gb-test 1770001 实证）
-    expect(Object.keys(fileBlocks[0].file)).toEqual(['token']) // 多字段会被严格校验拒（99992402 风险面）
-    expect(fileBlocks[0].file.token).toBe('ft_1')
+    const imgPh = blocks.filter((b) => b.block_type === 27)
+    const filePh = blocks.filter((b) => b.block_type === 23)
+    expect(imgPh.length).toBe(1)
+    expect(filePh.length).toBe(1)
+    expect(imgPh[0].image).toEqual({}) // 空占位——token/name 都不进创建载荷
+    expect(filePh[0].file).toEqual({})
+    expect(blocks.some((b) => b.block_type === 18)).toBe(false) // 18=bitable（v0.85 首修面，勿回退）
+    expect(JSON.stringify(blocks)).not.toMatch(/"token"/)
+    // 两段式第二步：image replace 到占位块；file 先下钻 view 子块再挂块上传 + replace_file
+    const parents = uploadParentsOf(calls)
+    expect(parents[0][0]).toBe('docx_image')
+    expect(/^gen\d+$/.test(parents[0][1])).toBe(true)
+    expect(parents[1][0]).toBe('docx_file')
+    expect(/^fb_gen\d+$/.test(parents[1][1])).toBe(true)
+    const repl = patchRequestsOf(calls)
+    expect(repl.find((r) => r.replace_image)?.block_id).toBe(parents[0][1])
+    expect(repl.find((r) => r.replace_file)?.block_id).toBe(parents[1][1])
     const texts = blocks.filter((b) => b.block_type === 2).map((b) => b.text.elements[0].text_run.content)
     expect(texts.some((t) => t.includes('验收报告.pdf'))).toBe(true) // 文件名在图注里可见
+  })
+
+  it('挂块失败跳过并清理占位：postSkipped 入台账，图注+占位块按 id 定位区间删（从后往前）', async () => {
+    const p = fresh()
+    await bindWiki(p)
+    const createdSec = createdSecOf(p.id)
+    const imageResponder = () => ({ ok: true, status: 200, headers: { get: () => 'image/jpeg' }, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer })
+    const calls = stubArchiveFetch({
+      pages: [{ items: [
+        msg('ia', createdSec + 100, 'fs_li', '', { msgType: 'image', imageKey: 'ik_ok' }),
+        msg('ib', createdSec + 200, 'fs_zhang', '', { msgType: 'image', imageKey: 'ik_fail' }),
+      ], has_more: false }],
+      imageResponder,
+      uploadResponder: (_url, opts) => (opts.body.get('file_name') === 'archive-ib.jpg'
+        ? { ok: false, status: 502, json: async () => ({ code: 9999, msg: 'upload boom' }) }
+        : okJson({ file_token: 'ft_ok' })),
+      trackCreated: true,
+    })
+    const run = await startWikiArchive(db, p.id, members.admin.id, { defer: false })
+    expect(run.status).toBe('done')
+    expect(run.imageCount).toBe(1) // 成功一张
+    const skipped = JSON.parse(run.skippedFiles || '[]')
+    expect(skipped).toEqual([{ name: expect.stringContaining('图片'), reason: expect.stringContaining('upload boom') }])
+    // 失败项清理：重列根块按 block_id 定位「图注+占位块」，区间删除且区间覆盖两个连续块
+    const ranges = deleteRangesOf(calls)
+    expect(ranges.length).toBe(1)
+    const [start, end] = ranges[0]
+    expect(end - start).toBe(2) // 图注 + 占位块
+    // replace 只发生了一次（成功那张）
+    expect(patchRequestsOf(calls).length).toBe(1)
   })
 
   it('insertDocBlocks 指定 index 时随批递增：120 块 → 3 次 POST（50/50/20），index = 7/57/107', async () => {
