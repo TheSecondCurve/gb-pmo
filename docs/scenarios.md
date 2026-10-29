@@ -784,6 +784,19 @@ S63「不做机器人入口」修订（用户 2026-10-29 拍板）：机器人�
 | S73-4 | 当前置不满足时，startWikiArchive 的 400/409 中文文案原样透传为 refused 回执（含 S72 常态守卫、未绑知识页/专题群、已有运行中），不落台账 | `server/test/s73-bot-wiki-archive.test.mjs` |
 | S73-5 | 当无 push 能力的会话（web AI 助手）调用该写动作时拒绝并指引走项目详情页「生成项目汇总」按钮（与 init_assign 同口径） | `server/test/s73-bot-wiki-archive.test.mjs` |
 
+## S74（P0）— 牵头人/管理员（机器人）— 群内 @机器人结项一条链：免理由 + 自动补汇总 + 步骤播报（v0.86）
+
+S29/K25 的机器人面结项（提议卡+总结必填）修订为一条链直效：权限（牵头人/管理员）+ S8 前置 + 绑页未归档先自动补汇总（步骤播报）→ 自动结项（总结自动组装）→ 终态通知（含可解散本群与祝福）。取消项目仍走确认卡；web 聊天维持提议口径。决策见 design.md K71。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S74-1 | 当牵头人在专题群 @机器人要「结项」（绑页+群、无成功归档、任务全完成）时，立即回执步骤①，汇总完成后播报并自动结项，终态通知含页面链接、「可以解散本群」与祝福 | `server/test/s74-bot-close-chain.test.mjs` |
+| S74-2 | 当已生成过汇总（或口述「直接结项」）时跳过①直接结项，终态消息含既有汇总链接；closeout_summary 无口述时自动组装（汇总链接优先） | `server/test/s74-bot-close-chain.test.mjs` |
+| S74-3 | 当常态项目/未绑知识页/未绑专题群时跳过汇总直接结项（常态豁免任务完成检查 S69）；终态消息如实 | `server/test/s74-bot-close-chain.test.mjs` |
+| S74-4 | 当触发者非牵头人非管理员、或存在未完成任务、或项目已终态时拒绝——未完成任务时不触发汇总（不落 running 台账行） | `server/test/s74-bot-close-chain.test.mjs` |
+| S74-5 | 当汇总生成失败时中止结项（项目保持进行中）并提示可重试或「直接结项」；skipSummary 直接结项不落汇总台账 | `server/test/s74-bot-close-chain.test.mjs` |
+| S74-6 | 当 web 会话（无 push）发起结项时回落提议确认卡口径（summary 必填与卡片不变）；取消项目在 IM 面仍走 propose 确认卡 | `server/test/s74-bot-close-chain.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |
