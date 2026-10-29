@@ -146,7 +146,7 @@ client.sh action generate_person_digest '{}'
 | kind | TEXT |  |
 | reminded_at | INTEGER |  |
 | note | TEXT |  |
-| weekdays | TEXT |  |
+| cadence | TEXT |  |
 
 ### milestones
 
@@ -494,6 +494,7 @@ client.sh action generate_person_digest '{}'
 - **taskStatus**: todo=未开始、doing=进行中、done=完成
 - **taskKind**: work=工作、reminder=纯提醒、routine=常态打卡
 - **dayStatus**: pending=未做、done=完成、skip=跳过
+- **cadenceType**: daily=每日、weekly=每周、biweekly=每两周、monthly=每月
 - **taskSource**: template=模板、manual=手动、extraction=抽取、suggestion=建议采纳
 - **milestoneStatus**: planned=计划中、met=已达成、missed=已延误、cancelled=已取消
 - **channelPlatform**: feishu=飞书、wecom=企业微信

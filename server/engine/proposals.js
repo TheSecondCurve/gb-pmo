@@ -84,7 +84,8 @@ export const PROPOSAL_KINDS = {
       return tasks.createTask(db, {
         projectId: Number(payload.projectId), title: payload.title,
         ...(payload.taskKind ? { kind: payload.taskKind } : {}), // S57：任务分类（bot 协议字段名 taskKind，避开提议判别符 kind）；S69：routine=常态（软校验对常态项目自动置）
-        ...(payload.weekdays ? { weekdays: payload.weekdays } : {}), // S69：适用星期（仅常态任务）
+        ...(payload.weekdays ? { weekdays: payload.weekdays } : {}), // S69：适用星期（legacy 入参，S75 起 createTask 内映射 cadence）
+        ...(payload.cadence ? { cadence: payload.cadence } : {}), // S75：周期四档对象（与 weekdays 二选一）
         ...(payload.note ? { note: payload.note } : {}), // S58：任务备注（记录型字段直生效，K25）
         ...(payload.responsibleMemberId != null ? { responsibleMemberId: Number(payload.responsibleMemberId) } : {}),
         ...(payload.planStartDate ? { planStartDate: payload.planStartDate } : {}),

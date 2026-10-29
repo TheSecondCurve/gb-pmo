@@ -6,12 +6,12 @@ import { useStore } from '../store'
 import { Badge, Btn, Card, Empty, Field, InlineSelect, InlineText, Modal, Spinner, inputCls } from '../components/ui'
 import { PageMasthead, SectionHeading } from '../components/editorial'
 import ProgressSchedule from '../components/ProgressSchedule'
-import DailyWeekGrid, { WeekdayPicker } from '../components/DailyWeekGrid'
+import DailyWeekGrid, { CadencePicker } from '../components/DailyWeekGrid'
 import { TASK_ROW_CLS, taskVisual } from '../progress'
 import {
   EVENT_PINNED_COLS, EVENT_STATUS_LABEL, EVENT_TYPE_LABEL, MILESTONE_STATUS_LABEL, MILESTONE_STATUS_TONE,
   PRIORITY_LABEL, PROJECT_STATUS_LABEL, TASK_STATUS_LABEL, TASK_STATUS_TONE,
-  type ChannelRow, type EventRow, type InitAssignmentRow, type Member, type ProjectDetail, type TaskRecordRow, type TaskRefRow, type WikiArchiveRun, type WikiBinding,
+  type Cadence, type ChannelRow, type EventRow, type InitAssignmentRow, type Member, type ProjectDetail, type TaskRecordRow, type TaskRefRow, type WikiArchiveRun, type WikiBinding,
 } from '../types'
 
 /** S63（v0.68）：汇总归档运行阶段中文标签（wiki_archive_runs.stage）；S65：files=归档附件中。 */
@@ -197,13 +197,13 @@ export default function ProjectDetail({ id }: { id: number }) {
           <Btn small onClick={() => void 0} title="底部添加行">在下方添加</Btn>
         </div>
       ) : undefined}>
-        {p.tasks.length === 0 ? <Empty hint={routine ? '暂无常态任务（每行一条，选适用星期，按周打卡）' : '暂无任务（自由创建项目可手工添加）'} /> : (
+        {p.tasks.length === 0 ? <Empty hint={routine ? '暂无常态任务（每行一条，选周期：每天/每周/每两周/每月几号，按周打卡）' : '暂无任务（自由创建项目可手工添加）'} /> : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[44rem] text-[13px]">
               <thead className="text-left text-[10px] font-medium tracking-[0.07em] text-[var(--color-ink-soft)]">
                 <tr className="border-b border-[var(--color-line)] [&>th]:whitespace-nowrap [&>th]:px-3 [&>th]:py-3">
-                  {routine
-                    ? <>任务<th>责任人（唯一）</th><th>适用星期</th><th>备注</th><th>标记</th><th></th></>
+                    {routine
+                    ? <>任务<th>责任人（唯一）</th><th>周期</th><th>备注</th><th>标记</th><th></th></>
                     : <>任务<th>责任人（唯一）</th><th>状态</th><th>计划开始</th><th>计划结束</th><th>备注</th><th>标记</th><th></th></>}
                 </tr>
               </thead>
@@ -232,12 +232,12 @@ export default function ProjectDetail({ id }: { id: number }) {
                     </td>
                     {routine ? (
                       <>
-                        {/* S69：适用星期（勾选改，≥1 天；行=模板，每日执行走周视图打卡） */}
+                        {/* S75：周期四档（每天/每周/每两周/每月几号；缺省每天） */}
                         <td>
-                          {readonly ? (t.weekdays?.length === 7 || !t.weekdays ? '每天' : `每周${t.weekdays.map((d) => '一二三四五六日'[d - 1]).join('、')}`) : (
-                            <WeekdayPicker
-                              value={t.weekdays?.length ? t.weekdays : [1, 2, 3, 4, 5, 6, 7]}
-                              onChange={async (v) => { try { await api.patchTask(t.id, { weekdays: v }); toast('适用星期已更新'); await refresh() } catch (e) { toast((e as Error).message, 'bad') } }} />
+                          {readonly ? (t.cadenceLabel ?? '每天') : (
+                            <CadencePicker
+                              value={t.cadence ?? { type: 'daily' }}
+                              onChange={async (v) => { try { await api.patchTask(t.id, { cadence: v }); toast('周期已更新'); await refresh() } catch (e) { toast((e as Error).message, 'bad') } }} />
                           )}
                         </td>
                         <td className="max-w-[10rem]">
@@ -598,13 +598,13 @@ function AddTask({ projectId, members, routine, onDone }: { projectId: number; m
   const [owner, setOwner] = useState('') // S38：新建默认未指派（责任人与项目牵头人解耦，K20）
   const [kind, setKind] = useState('work') // S57：work=工作 / reminder=纯提醒（到期推送后自动完成）
   const [date, setDate] = useState('') // S57：纯提醒的提醒日（=planEndDate，必填）
-  const [weekdays, setWeekdays] = useState<number[]>([1, 2, 3, 4, 5, 6, 7]) // S69：常态任务适用星期（缺省每天）
+  const [cadence, setCadence] = useState<Cadence>({ type: 'daily' }) // S75：周期四档（缺省每天）
   const submit = async () => {
     if (!title.trim()) return
     if (kind === 'reminder' && !date) return
     await api.createTask({
       projectId, title, kind: routine ? 'routine' : kind,
-      ...(routine ? { weekdays } : {}),
+      ...(routine ? { cadence } : {}),
       ...(kind === 'reminder' && !routine ? { planEndDate: date } : {}),
       ...(note.trim() ? { note: note.trim() } : {}),
       ...(owner ? { responsibleMemberId: Number(owner) } : {}),
@@ -622,12 +622,12 @@ function AddTask({ projectId, members, routine, onDone }: { projectId: number; m
         </select>
       )}
       {routine && (
-        <span className="flex items-center gap-1.5" aria-label="适用星期">
-          <WeekdayPicker value={weekdays} onChange={setWeekdays} />
+        <span className="flex items-center gap-1.5" aria-label="周期">
+          <CadencePicker value={cadence} onChange={setCadence} />
         </span>
       )}
       <input className="cell-input min-w-[12rem] flex-1"
-        placeholder={routine ? '新增常态任务标题（选适用星期，按周打卡，Enter 保存）' : reminder ? '新增提醒标题（提醒日推责任人+项目群后自动完成）' : '新增任务标题（默认未指派，Enter 保存）'}
+        placeholder={routine ? '新增常态任务标题（选周期，按周打卡，Enter 保存）' : reminder ? '新增提醒标题（提醒日推责任人+项目群后自动完成）' : '新增任务标题（默认未指派，Enter 保存）'}
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') void submit() }} />

@@ -5,7 +5,7 @@ import { addEvent } from './events.js'
 import { audit } from './auth.js'
 import { memberName } from './members.js'
 import { resolveTypeForCreate, typeTaskItems, normalizeTypeTasks, normalizePromptText } from './projectTypes.js'
-import { parseWeekdays } from './dailyBoard.js'
+import { parseCadence, cadenceLabel, cadenceWeekdays, weekdaysToCadence } from './dailyBoard.js'
 
 const OPEN_STATUSES = ['active'] // S29（v0.28）三态：进行中→已结项/已取消
 const TERMINAL_STATUSES = ['closed', 'cancelled']
@@ -97,16 +97,16 @@ export function createProject(db, input, by) {
     items.forEach((item, i) => {
       const win = schedule?.[i]
       // S58：默认备注随任务拷贝（模板路径来自类型清单；自定义路径 normalizeTypeTasks 归一，未给为 NULL）
-      // S69：常态项目任务一律 kind=routine（带适用星期，缺省每天；无计划起止）
-      const taskWeekdays = isRoutine ? (item.weekdays ?? [1, 2, 3, 4, 5, 6, 7]) : null
+      // S69：常态项目任务一律 kind=routine（按周期每日执行，无计划起止）；S75：weekdays 映射 cadence（缺省 daily）
+      const taskCadence = isRoutine ? weekdaysToCadence(item.weekdays) : null
       const taskInfo = db.prepare(
-        `INSERT INTO tasks (project_id, title, note, responsible_member_id, status, plan_start_date, plan_end_date, kind, weekdays, source, created_at, updated_at)
+        `INSERT INTO tasks (project_id, title, note, responsible_member_id, status, plan_start_date, plan_end_date, kind, cadence, source, created_at, updated_at)
          VALUES (?, ?, ?, NULL, 'todo', ?, ?, ?, ?, ?, ?, ?)`
       ).run(projectId, item.title, item.note ?? null,
         isRoutine ? null : (win ? win.planStartDate : (planStartDate || today())),
         isRoutine ? null : (win ? win.planEndDate : null),
         isRoutine ? 'routine' : 'work',
-        taskWeekdays ? taskWeekdays.join(',') : null,
+        taskCadence ? JSON.stringify(taskCadence) : null,
         source, now, now)
       // S33：模板/自定义任务的参考随标题拷贝进 task_refs（创建人=立项人；落表即被 S23 全套能力接管）
       item.refs.forEach((ref) => refStmt.run(Number(taskInfo.lastInsertRowid), ref.title, ref.url, ref.note, by ?? null, now))
@@ -218,11 +218,17 @@ export function getProjectDetail(db, id) {
        WHERE t.project_id = ? AND t.deleted_at IS NULL ORDER BY t.id`
     )
     .all(id)
-  const taskRows = tasks.map((t) => ({
-    ...camelizeRow(t),
-    weekdays: parseWeekdays(t.weekdays),
-    isOverdue: Boolean(t.plan_end_date && t.plan_end_date < today() && t.status !== 'done'),
-  }))
+  const taskRows = tasks.map((t) => {
+    // S75：周期唯一真相源 cadence；weekdays 为派生出参（兼容既有消费方）
+    const cadence = parseCadence(t.cadence)
+    return {
+      ...camelizeRow(t),
+      cadence,
+      cadenceLabel: cadence ? cadenceLabel(cadence) : null,
+      weekdays: cadence ? cadenceWeekdays(cadence) : null,
+      isOverdue: Boolean(t.plan_end_date && t.plan_end_date < today() && t.status !== 'done'),
+    }
+  })
   return {
     ...camelizeRow(p),
     daysToDelivery: daysToDelivery(p),

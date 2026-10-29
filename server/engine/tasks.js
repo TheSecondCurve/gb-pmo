@@ -3,10 +3,10 @@ import { today, isCalendarDay } from '../db/time.js'
 import { assertValue, label } from './enums.js'
 import { getProject } from './projects.js'
 import { memberName } from './members.js'
-import { HTTP_URL, normalizeTaskNote, normalizeWeekdays } from './projectTypes.js'
+import { HTTP_URL, normalizeTaskNote } from './projectTypes.js'
 import { addEvent } from './events.js'
 import { audit } from './auth.js'
-import { parseWeekdays, weekdaysLabel } from './dailyBoard.js'
+import { parseCadence, normalizeCadence, weekdaysToCadence, cadenceLabel, cadenceWeekdays } from './dailyBoard.js'
 
 // v0.80（S69）：isCalendarDay 移入 db/time.js（日期纯函数归位），此处 re-export 维持既有导入方（initAssign 等）
 export { isCalendarDay } from '../db/time.js'
@@ -14,11 +14,17 @@ export { isCalendarDay } from '../db/time.js'
 const TASK_COLS = `t.*, m.name AS responsible_name, p.name AS project_name, p.status AS project_status`
 
 function decorate(rows) {
-  return rows.map((r) => ({
-    ...camelizeRow(r),
-    weekdays: parseWeekdays(r.weekdays),
-    isOverdue: Boolean(r.plan_end_date && r.plan_end_date < today() && r.status !== 'done'),
-  }))
+  return rows.map((r) => {
+    // S75（v0.87，K72）：周期唯一真相源 cadence；weekdays 为派生出参（兼容既有消费方）
+    const cadence = parseCadence(r.cadence)
+    return {
+      ...camelizeRow(r),
+      cadence,
+      cadenceLabel: cadence ? cadenceLabel(cadence) : null,
+      weekdays: cadence ? cadenceWeekdays(cadence) : null,
+      isOverdue: Boolean(r.plan_end_date && r.plan_end_date < today() && r.status !== 'done'),
+    }
+  })
 }
 
 export function getTask(db, id) {
@@ -70,16 +76,16 @@ export function tasksInventory(db, { projectId } = {}) {
   if (projectId) {
     const project = db.prepare('SELECT id, name, kind FROM projects WHERE id = ?').get(projectId)
     if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
-    // S69（v0.80）：常态项目按「常态清单」呈现——行=模板（带适用星期/责任人），无「未完」框架与排期
+    // S69（v0.80）：常态项目按「常态清单」呈现——行=模板（带周期/责任人），无「未完」框架与排期
     if (project.kind === 'routine') {
       const rows = db.prepare(
-        `SELECT t.id, t.title, t.kind, t.status, t.weekdays, m.name AS responsible_name
+        `SELECT t.id, t.title, t.kind, t.status, t.cadence, m.name AS responsible_name
          FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
          WHERE t.project_id = ? AND t.deleted_at IS NULL ORDER BY t.id`
       ).all(projectId)
       const lines = [`项目「${project.name}」常态任务清单：${rows.length} 条（周视图按天打卡管理，S69）`, '']
       lines.push(...rows.slice(0, INV_MAX_PER_PROJECT).map((t) =>
-        `· #${t.id} ${t.title}（${weekdaysLabel(parseWeekdays(t.weekdays))}${t.responsible_name ? `，${t.responsible_name}` : ''}）`))
+        `· #${t.id} ${t.title}（${cadenceLabel(parseCadence(t.cadence))}${t.responsible_name ? `，${t.responsible_name}` : ''}）`))
       if (rows.length > INV_MAX_PER_PROJECT) lines.push(`（其余 ${rows.length - INV_MAX_PER_PROJECT} 条略）`)
       if (!rows.length) lines.push('（暂无常态任务，可在详情页或群里让我添加）')
       return {
@@ -204,11 +210,11 @@ export function createTask(db, input, by) {
     throw Object.assign(new Error('项目已结项/取消，任务面只读'), { statusCode: 409 })
   }
   // S57（v0.62，K40）：任务分类——work=工作（缺省）/ reminder=纯提醒（到期一次性推送后自动完成）
-  // S69（v0.80，K64）：routine=常态打卡（常态项目缺省；无状态/排期语义，带适用星期，缺省每天）
+  // S69（v0.80，K64）：routine=常态打卡（常态项目缺省；无状态/排期语义，按周期每日执行走周视图打卡）
   const kind = input.kind == null || input.kind === ''
     ? (project.kind === 'routine' ? 'routine' : 'work')
     : assertValue('taskKind', input.kind)
-  let weekdays = null
+  let cadence = null
   if (project.kind === 'routine') {
     if (kind !== 'routine') {
       throw Object.assign(new Error('常态项目的任务一律为常态任务（kind=routine）——无交付排期/提醒语义，每日执行走周视图打卡（S69）'), { statusCode: 400 })
@@ -216,9 +222,16 @@ export function createTask(db, input, by) {
     if (planStartDate || planEndDate) {
       throw Object.assign(new Error('常态任务无计划起止（每日执行走周视图打卡，S69）'), { statusCode: 400 })
     }
-    weekdays = (normalizeWeekdays(input.weekdays) ?? [1, 2, 3, 4, 5, 6, 7]).join(',')
+    // S75（v0.87，K72）：周期四档 cadence（缺省 daily）；legacy weekdays 兼容映射（全周→daily、子集→weekly）
+    if (input.cadence != null && input.weekdays != null) {
+      throw Object.assign(new Error('cadence 与 weekdays 二选一（weekdays 为 legacy 兼容入参，S75）'), { statusCode: 400 })
+    }
+    cadence = input.cadence != null ? normalizeCadence(input.cadence) : weekdaysToCadence(input.weekdays)
+    if (!cadence) cadence = { type: 'daily' } // normalizeCadence(null) 的未给语义
   } else if (kind === 'routine') {
     throw Object.assign(new Error('常态任务只能建在常态项目（projects.kind=routine，S69）'), { statusCode: 400 })
+  } else if (input.cadence != null) {
+    throw Object.assign(new Error('周期仅常态任务可配置（cadence，S75）'), { statusCode: 400 })
   }
   // S58（v0.64，K42）：任务备注（≤200 字，记录型字段）
   const note = normalizeTaskNote(input.note) ?? null
@@ -226,18 +239,18 @@ export function createTask(db, input, by) {
   const owner = responsibleMemberId == null || responsibleMemberId === '' ? null : assertActiveMember(db, responsibleMemberId)
   const now = Date.now()
   const info = db.prepare(
-    `INSERT INTO tasks (project_id, title, note, responsible_member_id, status, plan_start_date, plan_end_date, kind, weekdays, source, created_at, updated_at)
+    `INSERT INTO tasks (project_id, title, note, responsible_member_id, status, plan_start_date, plan_end_date, kind, cadence, source, created_at, updated_at)
      VALUES (?, ?, ?, ?, 'todo', ?, ?, ?, ?, 'manual', ?, ?)`
   ).run(projectId, title, note, owner,
     kind === 'routine' ? null : (planStartDate || null),
     kind === 'routine' ? null : (planEndDate || null),
-    kind, weekdays, now, now)
-  audit(db, { memberId: by, action: 'task.create', objectType: 'task', objectId: info.lastInsertRowid, detail: { kind, weekdays, hasNote: Boolean(note) } })
+    kind, cadence ? JSON.stringify(cadence) : null, now, now)
+  audit(db, { memberId: by, action: 'task.create', objectType: 'task', objectId: info.lastInsertRowid, detail: { kind, cadence, hasNote: Boolean(note) } })
   // S59（v0.65，K43）：任务新增落进展——record 型 progress 事件进讨论面进展列（即时生效，append-only）
   addEvent(db, {
     projectId, eventType: 'progress', nature: 'record', sourcePlatform: 'web', generatedBy: 'web',
     summary: kind === 'routine'
-      ? `🆕 新增常态任务「${title}」（${weekdaysLabel(parseWeekdays(weekdays))}）`
+      ? `🆕 新增常态任务「${title}」（${cadenceLabel(cadence)}）`
       : `🆕 新增任务「${title}」`,
     speakerMemberId: by,
   })
@@ -262,14 +275,21 @@ export function updateTask(db, id, patch, by) {
   }
   const fields = {}
   if ('title' in patch) fields.title = patch.title
-  // S69：适用星期（仅常态任务；≥1 天，1=周一…7=周日）
+  // S75（v0.87，K72）：周期四档整档替换（仅常态任务；legacy weekdays 入参兼容映射）
+  if ('cadence' in patch) {
+    if (cur.kind !== 'routine') {
+      throw Object.assign(new Error('周期仅常态任务可配置（cadence，S75）'), { statusCode: 400 })
+    }
+    const c = normalizeCadence(patch.cadence)
+    if (!c) throw Object.assign(new Error('周期至少给一档（daily/weekly/biweekly/monthly，S75）'), { statusCode: 400 })
+    fields.cadence = JSON.stringify(c)
+  }
   if ('weekdays' in patch) {
     if (cur.kind !== 'routine') {
       throw Object.assign(new Error('适用星期仅常态任务可配置（S69）'), { statusCode: 400 })
     }
-    const days = normalizeWeekdays(patch.weekdays)
-    if (!days) throw Object.assign(new Error('适用星期至少勾选 1 天'), { statusCode: 400 })
-    fields.weekdays = days.join(',')
+    const c = weekdaysToCadence(patch.weekdays) // 空集/越界沿用 S69 的 400 文案
+    fields.cadence = JSON.stringify(c)
   }
   if ('responsibleMemberId' in patch) {
     // S38-3：清空（''）→ NULL 未指派；非空须为在职成员
