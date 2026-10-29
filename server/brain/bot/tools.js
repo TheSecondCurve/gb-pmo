@@ -15,8 +15,8 @@ import { mapSpeaker } from '../extract.js'
 import { upsertChannel, canManageChannel } from '../../engine/tasks.js'
 import { createProposal, PROPOSAL_KINDS } from '../../engine/proposals.js'
 import { normalizeTypeTasks, normalizeWeekdays } from '../../engine/projectTypes.js'
-import { planTypeTasks, createProject } from '../../engine/projects.js'
-import { bindProjectWiki, recordToWiki, getDefaultParentToken, wikiPageUrl } from '../../engine/wiki.js'
+import { planTypeTasks, createProject, closeProject } from '../../engine/projects.js'
+import { bindProjectWiki, recordToWiki, getDefaultParentToken, getProjectWiki, wikiPageUrl } from '../../engine/wiki.js'
 import { getSetting } from '../../engine/settings.js'
 import { camelizeRow } from '../../db/index.mjs'
 import { today } from '../../db/time.js'
@@ -128,7 +128,8 @@ export async function runWriteTool(db, { kind, payload = {} }, ctx) {
     if (kind === 'propose') return await writePropose(db, payload, ctx)
     if (kind === 'init_assign') return await writeInitAssign(db, payload, ctx)
     if (kind === 'wiki_archive') return await writeWikiArchive(db, payload, ctx) // S73：项目汇总归档（异步回执）
-    return refused(`不支持的写类型: ${kind}（可用 record_event/record_wiki/bind_wiki/suggest_event/checkin_task/bind_channel/trigger/propose/init_assign/wiki_archive）`)
+    if (kind === 'close_project') return await writeCloseProject(db, payload, ctx) // S74：结项一条链（web 回落提议）
+    return refused(`不支持的写类型: ${kind}（可用 record_event/record_wiki/bind_wiki/suggest_event/checkin_task/bind_channel/trigger/propose/init_assign/wiki_archive/close_project）`)
   } catch (e) {
     if (e.statusCode === 403) return refused(`权限不足：${e.message}`, 'refused_permission')
     return refused(`操作被拒绝：${e.message}`)
@@ -933,4 +934,112 @@ async function writeWikiArchive(db, payload, ctx) {
     return refused(e.message) // 400/409 前置校验中文文案原样透传（常态守卫/未绑页面/未绑群/运行中），不落台账
   }
   return { type: 'receipt', text: `项目「${project.name}」汇总生成中（任务 #${run.id}，全量回读本群历史，约需几分钟）——完成后我把结果发到这里。` }
+}
+
+// —— S74（v0.86，K71）：机器人结项一条链——免理由 + 自动补项目汇总 + 群内步骤播报 ——
+
+/** 终态通知文案：任务盘子 + 汇总链接（若有）+ 可解散本群提示与祝福。 */
+function closeChainFinalText(db, project, pageUrl, messageCount) {
+  const n = db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND deleted_at IS NULL').get(project.id).n
+  return [
+    `🎉 项目「${project.name}」已结项 ✓`,
+    `· ${project.kind === 'routine' ? `常态项目 ${n} 项任务收尾归档` : `全部 ${n} 项任务已完成`}`,
+    ...(pageUrl ? [`· 项目汇总已归档：📄 ${pageUrl}${messageCount != null ? `（回读群消息 ${messageCount} 条）` : ''}`] : []),
+    '本群使命完成，可以解散了——祝大家下次项目依然顺利！',
+  ].join('\n')
+}
+
+/**
+ * 结项收口：总结自动组装（口述 > 汇总链接 > 兜底文案）→ closeProject → 终态通知文案。
+ * 引擎 closeProject 契约不变（web 面仍必填总结；本链总给得出非空文本）。
+ */
+async function finalizeClose(db, { project, payload, ctx, pageUrl, messageCount }) {
+  const oral = String(payload.summary || '').trim().slice(0, 200)
+  const summary = oral
+    || (pageUrl ? `项目群全量汇总已归档：${pageUrl}` : `项目结项（群内 @机器人 结项，${today()}，未附总结）`)
+  await closeProject(db, project.id, { summary }, ctx.member.id)
+  return closeChainFinalText(db, project, pageUrl, messageCount)
+}
+
+/** 汇总完成后的续链（onDone 回调，尽力而为不抛出）：成功→播报②并结项+终态通知；失败→中止并指路。 */
+async function closeAfterArchive(db, run, { project, payload, ctx, pushText }) {
+  try {
+    if (run.status === 'done') {
+      await pushText(`① 项目汇总已生成 ✓（回读群消息 ${run.messageCount} 条）\n📄 ${run.pageUrl}\n→ ② 正在结项…`)
+      const finalText = await finalizeClose(db, { project, payload, ctx, pageUrl: run.pageUrl, messageCount: run.messageCount })
+      await pushText(`② 结项完成 ✓\n${finalText}`)
+    } else {
+      await pushText(`① 项目汇总生成失败：${run.error}\n已中止结项（项目保持进行中）。可稍后重试，或对我说「直接结项」跳过汇总立即结项。`)
+    }
+  } catch (e) {
+    try { await pushText(`结项链执行失败：${e.message}——项目状态未变，可重试`) } catch { /* 尽力而为 */ }
+  }
+}
+
+/**
+ * S74 机器人结项一条链：权限（仅牵头人/管理员）→ 终态/S8 前置校验（不白跑汇总）→
+ * 绑页未归档的交付项目先自动补「生成项目汇总」（S73 onDone 链，群内播报步骤）→ 自动结项
+ * （总结免填自动组装）→ 终态通知（可解散本群+祝福）。常态项目/未绑页/未绑群/已归档/skipSummary
+ * 跳过①直接结项。web 会话（无 push）回落既有 propose 确认卡口径（S25/S29 不变）。
+ */
+async function writeCloseProject(db, payload, ctx) {
+  if (typeof ctx.push !== 'function') {
+    return writePropose(db, { ...payload, kind: 'close_project' }, ctx)
+  }
+  const projectId = Number(payload.projectId) || scopedProjectId(db, ctx.evt)
+  const project = projectId ? db.prepare('SELECT id, name, status, kind FROM projects WHERE id = ?').get(projectId) : null
+  if (!project) {
+    return refused('结项需要明确项目：请给 projectId，或在项目专题群里 @我 触发（专题群默认落到本群项目）')
+  }
+  if (!canManageChannel(db, ctx.member, { channelType: 'dedicated', projectId: project.id })) {
+    return refused('仅系统管理员或项目牵头人可结项，请 TA 来 @我 触发', 'refused_permission')
+  }
+  if (project.status !== 'active') {
+    return refused(`项目已是终态（${label('projectStatus', project.status)}），不可再结项（S29 终态不可逆）`)
+  }
+  // S8 前置：交付项目须全部任务完成（常态项目 S69 豁免）——提前拦，不白跑几分钟汇总
+  if (project.kind !== 'routine') {
+    const open = db.prepare(`SELECT title FROM tasks WHERE project_id = ? AND status != 'done' AND deleted_at IS NULL LIMIT 1`).get(project.id)
+    if (open) {
+      const total = db.prepare(`SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND status != 'done' AND deleted_at IS NULL`).get(project.id).n
+      return refused(`还有 ${total} 个未完成任务（如「${open.title}」），全部完成后方可结项（S8）——可让我逐项改完成后 结项，或先处理遗留项`)
+    }
+  }
+  const chatId = ctx.evt?.chatId
+  const pushText = async (text) => {
+    const sent = await ctx.push({ chatId, text })
+    recordBotReply(db, sent?.messageId, chatId, text, 'write:close_project')
+  }
+  // ①是否补汇总：绑定知识页 + 绑定专题群 + 从未成功归档 + 交付项目 + 未口述跳过
+  const wantSummary = !payload.skipSummary && project.kind !== 'routine'
+    && getProjectWiki(db, project.id)
+    && db.prepare("SELECT 1 FROM channels WHERE project_id = ? AND platform = 'feishu' AND channel_type = 'dedicated' LIMIT 1").get(project.id)
+    && !db.prepare("SELECT 1 FROM wiki_archive_runs WHERE project_id = ? AND status = 'done' LIMIT 1").get(project.id)
+  if (wantSummary) {
+    if (db.prepare("SELECT 1 FROM wiki_archive_runs WHERE project_id = ? AND status = 'running' LIMIT 1").get(project.id)) {
+      return refused('项目已有正在运行的汇总任务，等它完成后再结项，或对我说「直接结项」跳过汇总立即结项')
+    }
+    let run
+    try {
+      const { startWikiArchive } = await import('../../engine/wikiArchive.js')
+      run = await startWikiArchive(db, project.id, ctx.member.id, {
+        llm: ctx.llm ?? undefined,
+        onDone: (done) => { void closeAfterArchive(db, done, { project, payload, ctx, pushText }) },
+      })
+    } catch (e) {
+      return refused(e.message) // 前置校验中文文案透传
+    }
+    return {
+      type: 'receipt',
+      text: `收到结项指令 ✓ 按步骤执行：\n① 生成项目汇总（全量回读本群历史，任务 #${run.id}，约几分钟）\n② 结项 → ③ 完成通知\n正在 ①——每步完成我都会在群里播报。`,
+    }
+  }
+  // 无需①（已归档/未绑页或群/常态/直接结项）→ 同步直接结项，回执即终态通知
+  try {
+    const pageUrl = db.prepare("SELECT page_url FROM wiki_archive_runs WHERE project_id = ? AND status = 'done' ORDER BY id DESC LIMIT 1").get(project.id)?.page_url || null
+    const finalText = await finalizeClose(db, { project, payload, ctx, pageUrl })
+    return { type: 'receipt', text: finalText }
+  } catch (e) {
+    return refused(`结项失败：${e.message}`)
+  }
 }
