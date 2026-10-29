@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { fmtDate, fmtDateTime, bjToday, dateRangeForm, fmtDateRange } from './fmt'
+import { fmtDate, fmtDateTime, bjDay, bjToday, dateRangeForm, fmtDateRange } from './fmt'
 
 // PRD S19-4：epoch 时间戳展示显式按 Asia/Shanghai，不随浏览器/测试机时区漂移。
 // 2026-09-30T17:00:00Z = 北京 2026-10-01 01:00
@@ -38,5 +38,10 @@ describe('S30 日期文案四式（松散排期语言）', () => {
 
   it('S30-4: bjToday 为北京日历日 YYYY-MM-DD（与后端 BJ_TODAY 同口径）', () => {
     expect(bjToday()).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
+  it('S30-4: bjDay epoch → 北京日历日 YYYY-MM-DD（项目列表「创建日期」列；跨 UTC 日不回退一天）', () => {
+    expect(bjDay(AFTER_BJ_MIDNIGHT)).toBe('2026-10-01')
+    expect(bjDay(Date.UTC(2026, 8, 30, 2))).toBe('2026-09-30')
   })
 })

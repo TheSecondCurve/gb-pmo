@@ -39,6 +39,7 @@ describe('S30 项目组合页数据契约', () => {
 
     const closed = all.body.projects.find((p) => p.name === '结项乙')
     expect(closed.status).toBe('closed')
+    expect(closed.createdAt).toBeTypeOf('number') // 列表行带创建时刻（epoch 毫秒；组合页「创建日期」列消费）
     expect(closed.planStartDate).toBe('2026-08-01')
     expect(closed.planEndDate).toBe('2026-08-31')
     expect(closed.actualStartDate).toBeTruthy() // S29 启动日自动落
