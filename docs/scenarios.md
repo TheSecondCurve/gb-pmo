@@ -772,6 +772,18 @@ S63 汇总归档对常态项目语义与成本双重不匹配（20000 条护栏�
 | S72-2 | 当交付项目触发时，S63 原流程不受影响（正常落 running 台账）；守卫只挡新触发，存量 running 与已生成内容不受影响 | `server/test/s72-routine-archive-guard.test.mjs` + `server/test/s63-wiki-archive.test.mjs` |
 | S72-3 | 当打开常态项目详情页时，知识库卡不渲染「生成项目汇总」按钮；交付项目详情页按钮原样 | `src/smoke.test.tsx` |
 
+## S73（P0）— 牵头人/管理员（机器人）— 项目群 @机器人触发「生成项目汇总」全量归档（v0.85）
+
+S63「不做机器人入口」修订（用户 2026-10-29 拍板）：机器人写动作 kind=wiki_archive，专题群自动定域（scopedProjectId 同 init_assign 口径，可显式 projectId），权限与 web 路由同口径（canManageChannel），复用 startWikiArchive（S72 常态守卫/前置校验/幂等替换不变）；立即回执「生成中」，完成后 done（页面链接+消息数）/failed（台账中文错误）推回本会话（S64 异步回执模式，尽力而为）。决策见 design.md K69。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S73-1 | 当牵头人/管理员在专题群 @机器人要「生成项目汇总」时，应立即回执「生成中」，wiki_archive_runs 落 running 行，完成后终态推送回本会话 | `server/test/s73-bot-wiki-archive.test.mjs` |
+| S73-2 | 当终态推送时：done 带页面 URL 与回读消息数；failed 带台账 error 中文错误——推送失败不影响台账终态（尽力而为） | `server/test/s73-bot-wiki-archive.test.mjs` |
+| S73-3 | 当触发者非项目牵头人且非系统管理员时拒绝；未定域项目（无 projectId 且非专题群）给引导文案（指明去专题群或 web 按钮） | `server/test/s73-bot-wiki-archive.test.mjs` |
+| S73-4 | 当前置不满足时，startWikiArchive 的 400/409 中文文案原样透传为 refused 回执（含 S72 常态守卫、未绑知识页/专题群、已有运行中），不落台账 | `server/test/s73-bot-wiki-archive.test.mjs` |
+| S73-5 | 当无 push 能力的会话（web AI 助手）调用该写动作时拒绝并指引走项目详情页「生成项目汇总」按钮（与 init_assign 同口径） | `server/test/s73-bot-wiki-archive.test.mjs` |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

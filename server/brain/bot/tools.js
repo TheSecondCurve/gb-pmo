@@ -12,7 +12,7 @@ import { projectBrief } from '../../engine/brief.js'
 import { addEvent, confirmEvent } from '../../engine/events.js'
 import { assertValue, label } from '../../engine/enums.js'
 import { mapSpeaker } from '../extract.js'
-import { upsertChannel } from '../../engine/tasks.js'
+import { upsertChannel, canManageChannel } from '../../engine/tasks.js'
 import { createProposal, PROPOSAL_KINDS } from '../../engine/proposals.js'
 import { normalizeTypeTasks, normalizeWeekdays } from '../../engine/projectTypes.js'
 import { planTypeTasks, createProject } from '../../engine/projects.js'
@@ -127,7 +127,8 @@ export async function runWriteTool(db, { kind, payload = {} }, ctx) {
     if (kind === 'trigger') return await runTrigger(db, payload, ctx)
     if (kind === 'propose') return await writePropose(db, payload, ctx)
     if (kind === 'init_assign') return await writeInitAssign(db, payload, ctx)
-    return refused(`不支持的写类型: ${kind}（可用 record_event/record_wiki/bind_wiki/suggest_event/checkin_task/bind_channel/trigger/propose/init_assign）`)
+    if (kind === 'wiki_archive') return await writeWikiArchive(db, payload, ctx) // S73：项目汇总归档（异步回执）
+    return refused(`不支持的写类型: ${kind}（可用 record_event/record_wiki/bind_wiki/suggest_event/checkin_task/bind_channel/trigger/propose/init_assign/wiki_archive）`)
   } catch (e) {
     if (e.statusCode === 403) return refused(`权限不足：${e.message}`, 'refused_permission')
     return refused(`操作被拒绝：${e.message}`)
@@ -887,4 +888,49 @@ async function pushInitAssignResult(db, job, { project, chatId, memberId, push, 
   } catch (e) {
     try { await pushText(`初始分配草案推送失败：${e.message}`) } catch { /* 尽力而为 */ }
   }
+}
+
+// —— S73（v0.85，K69）：机器人触发「生成项目汇总」——S64 异步回执模式复用 ——
+
+/** 终态推送（onDone 回调，尽力而为不抛出）：done 带页面链接与回读消息数；failed 带台账中文错误。 */
+async function pushWikiArchiveResult(db, run, { project, chatId, push }) {
+  try {
+    const text = run.status === 'done'
+      ? `项目「${project.name}」汇总已生成 ✓（回读群消息 ${run.messageCount} 条${run.truncated ? '，超上限已截断/抽样，仅含最近部分' : ''}）\n📄 ${run.pageUrl}`
+      : `项目「${project.name}」汇总生成失败：${run.error}——可稍后重试（重跑会原位替换上次生成区，不会叠加）。`
+    const sent = await push({ chatId, text })
+    recordBotReply(db, sent?.messageId, chatId, text, 'write:wiki_archive')
+  } catch { /* 尽力而为：推送失败不影响台账终态（S73-2） */ }
+}
+
+/**
+ * S73 机器人触发项目汇总归档：专题群自动定域（scopedProjectId 同 init_assign）+ 权限与 web
+ * 路由同口径（canManageChannel：仅系统管理员或项目牵头人）+ 复用 startWikiArchive（S72 常态守卫/
+ * 前置校验/幂等替换全不变，400/409 中文文案原样透传）；立即回执「生成中」，完成后终态推送回本会话。
+ * web AI 助手无 push 能力 → 指引项目详情页按钮（与 init_assign 同口径）。
+ */
+async function writeWikiArchive(db, payload, ctx) {
+  if (typeof ctx.push !== 'function') {
+    return refused('生成项目汇总仅 IM 会话可用——web 请用项目详情页知识库卡的「生成项目汇总」按钮')
+  }
+  const projectId = Number(payload.projectId) || scopedProjectId(db, ctx.evt)
+  const project = projectId ? db.prepare('SELECT id, name, status FROM projects WHERE id = ?').get(projectId) : null
+  if (!project) {
+    return refused('生成项目汇总需要明确项目：请给 projectId，或在项目专题群里 @我 触发（专题群默认落到本群项目）；也可在 web 项目详情页点「生成项目汇总」')
+  }
+  if (!canManageChannel(db, ctx.member, { channelType: 'dedicated', projectId: project.id })) {
+    return refused('仅系统管理员或项目牵头人可生成项目汇总，请 TA 来 @我 触发', 'refused_permission')
+  }
+  const chatId = ctx.evt?.chatId
+  let run
+  try {
+    const { startWikiArchive } = await import('../../engine/wikiArchive.js')
+    run = await startWikiArchive(db, project.id, ctx.member.id, {
+      llm: ctx.llm ?? undefined,
+      onDone: (done) => { void pushWikiArchiveResult(db, done, { project, chatId, push: ctx.push }) },
+    })
+  } catch (e) {
+    return refused(e.message) // 400/409 前置校验中文文案原样透传（常态守卫/未绑页面/未绑群/运行中），不落台账
+  }
+  return { type: 'receipt', text: `项目「${project.name}」汇总生成中（任务 #${run.id}，全量回读本群历史，约需几分钟）——完成后我把结果发到这里。` }
 }

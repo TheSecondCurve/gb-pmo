@@ -43,15 +43,16 @@ function fmtMsg(ms) {
   return `${s.slice(4, 6)}-${s.slice(6, 8)} ${s.slice(9, 11)}:${s.slice(11, 13)}`
 }
 
-// —— docx block 构造（block_type：2 text / 4 heading2 / 5 heading3 / 12 bullet / 27 image）——
+// —— docx block 构造（block_type：2 text / 4 heading2 / 5 heading3 / 12 bullet / 23 file / 27 image）——
 const textBlock = (content) => ({ block_type: 2, text: { elements: [{ text_run: { content } }] } })
 const heading2 = (content) => ({ block_type: 4, heading2: { elements: [{ text_run: { content } }] } })
 const heading3 = (content) => ({ block_type: 5, heading3: { elements: [{ text_run: { content } }] } })
 const bullet = (content) => ({ block_type: 12, bullet: { elements: [{ text_run: { content } }] } })
 const imageBlock = (token) => ({ block_type: 27, image: { token } })
-// v0.80.1 工程防线：file 块创建载荷按官方 schema 仅含 token——多带 name 有 99992402 严格校验风险；
-// 文件名由紧邻的图注文本块承担（collectFileBlocks 已写「日期 说话人 · 文件名」）。
-const fileBlock = (token) => ({ block_type: 18, file: { token } })
+// v0.85 工程防线：block_type=23 才是 file（官方枚举 18=bitable 多维表格）——gb-test run#2 实证
+// 含 file 块的分批整包被 1770001 invalid param 拒掉；载荷仍仅含 token（v0.80.1，多带 name 有 99992402
+// 严格校验风险），文件名由紧邻的图注文本块承担（collectFileBlocks 已写「日期 说话人 · 文件名」）。
+const fileBlock = (token) => ({ block_type: 23, file: { token } })
 
 /** 读 block 纯文本（章节标题匹配/标记行扫描共用）。 */
 function blockText(b) {
@@ -70,8 +71,10 @@ export function getLatestWikiArchiveRun(db, projectId) {
 /**
  * 触发一次汇总归档：前置校验（绑定页面/专题群/无运行中）→ 落 running 台账 → 异步执行。
  * defer=false 时同步执行完再返回（测试与内部调用用）；路由默认异步，POST 立即返回 running。
+ * onDone(run)（S73，v0.85）：终态（done|failed）后台账行回调（机器人入口推终态回执用），尽力而为——
+ * 回调抛错不影响台账终态，也不重试。
  */
-export async function startWikiArchive(db, projectId, by, { llm, defer = true } = {}) {
+export async function startWikiArchive(db, projectId, by, { llm, defer = true, onDone } = {}) {
   const pid = Number(projectId)
   const project = db.prepare('SELECT id, name, status, kind FROM projects WHERE id = ?').get(pid)
   if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
@@ -94,15 +97,15 @@ export async function startWikiArchive(db, projectId, by, { llm, defer = true } 
   const runId = Number(info.lastInsertRowid)
   audit(db, { memberId: by, action: 'project.wiki.archive', objectType: 'project', objectId: pid, detail: { runId } })
   if (defer) {
-    setImmediate(() => { void executeWikiArchive(db, runId, { llm }) }) // 失败在 execute 内部落 failed，不抛未捕获
+    setImmediate(() => { void executeWikiArchive(db, runId, { llm, onDone }) }) // 失败在 execute 内部落 failed，不抛未捕获
   } else {
-    await executeWikiArchive(db, runId, { llm })
+    await executeWikiArchive(db, runId, { llm, onDone })
   }
   return getRun(db, runId)
 }
 
 /** 执行一次汇总：回读 → 汇总 → 图片 → 写入；任何失败落 failed + 中文错误（不外抛）。 */
-export async function executeWikiArchive(db, runId, { llm: llmOverride } = {}) {
+export async function executeWikiArchive(db, runId, { llm: llmOverride, onDone } = {}) {
   const run = getRun(db, runId)
   if (!run) throw Object.assign(new Error('汇总任务不存在'), { statusCode: 404 })
   const pid = run.projectId
@@ -171,7 +174,11 @@ export async function executeWikiArchive(db, runId, { llm: llmOverride } = {}) {
   } catch (e) {
     patch({ status: 'failed', error: String(e?.message || e).slice(0, 500), finished_at: Date.now() })
   }
-  return getRun(db, runId)
+  const finalRun = getRun(db, runId)
+  if (typeof onDone === 'function') {
+    try { onDone(finalRun) } catch { /* 尽力而为：回调失败不影响台账终态 */ }
+  }
+  return finalRun
 }
 
 /** 关键时间线：事件流（record/effective）+ 里程碑 + 任务完成，按日升序（确定性，LLM 缺席也完整）。 */
