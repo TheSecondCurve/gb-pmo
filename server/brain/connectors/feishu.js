@@ -390,7 +390,10 @@ export async function fetchChatHistory(cfg, groupKey, { startSec = 0, maxMessage
     const data = await res.json()
     if (data.code !== 0) throw Object.assign(new Error(`飞书消息失败(${data.code}): ${data.msg}`), { statusCode: 502 })
     for (const item of data.data?.items || []) {
-      const sec = Number(item.create_time)
+      // create_time 口径不一致（gb-test 实证）：file/图片消息返回毫秒（13 位）、文本消息返回秒（10 位）——
+      // 统一归一到秒，否则 ts×1000 溢出成天文数字（图注日期 '+058774-01'、排序被污染）
+      const raw = Number(item.create_time)
+      const sec = raw > 1e11 ? Math.floor(raw / 1000) : raw
       const msgType = item.msg_type
       let imageKey = null
       let fileKey = null
