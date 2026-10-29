@@ -84,6 +84,7 @@ export interface ProjectDetail extends ProjectRow {
   milestones: MilestoneRow[]
   channels: ChannelRow[]
   closeoutSummary?: string | null
+  wikiCloseMark?: string | null // S29-5（v0.87.2，K73）：结项时知识页标题标记结果提示（null=未绑定/无事可说）
 }
 export interface MetricQuery { metric: { id: string; name: string; definition: string }; columns: string[]; rows: Record<string, unknown>[] }
 export interface MetricCard { id: string; name: string; domain: string; definition: string; dims: string[]; freq: string }

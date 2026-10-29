@@ -354,6 +354,12 @@ export async function createWikiNode(cfg, spaceId, { parentNodeToken, title } = 
   return normalizeWikiNode(data.node)
 }
 
+/** 改 wiki 节点标题（知识库树里的显示名，不动 docx 内文标题块；K73 结项标记用）。 */
+export async function renameWikiNode(cfg, spaceId, nodeToken, title) {
+  const data = await feishuApi(cfg, `/wiki/v2/spaces/${spaceId}/nodes/${nodeToken}`, { method: 'PATCH', body: { title } })
+  return normalizeWikiNode(data.node)
+}
+
 /** 往 docx 文档根追加一组 block（heading/text 等）；document_id 即 wiki 节点的 obj_token。 */
 export async function appendDocBlocks(cfg, documentId, blocks) {
   return feishuApi(cfg, `/docx/v1/documents/${documentId}/blocks/${documentId}/children`, {
