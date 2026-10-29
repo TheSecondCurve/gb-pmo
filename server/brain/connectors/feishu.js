@@ -425,18 +425,30 @@ export async function fetchChatHistory(cfg, groupKey, { startSec = 0, maxMessage
   return { messages: capped, truncated: truncated || items.length > maxMessages }
 }
 
-/** 列文档根级子块（分页拉完）：S63 章节定位与幂等替换用。 */
+/** 列文档根级子块（分页拉完）：S63 章节定位与幂等替换用（blockId 缺省=文档根块）。 */
 export async function listDocRootBlocks(cfg, documentId) {
+  return listBlockChildren(cfg, documentId, documentId)
+}
+
+/** 列任意块的子块（分页拉完）。v0.85.1：file 占位块自动包一层 view(33)，真附件块(23)是 view 子块——按块拉取用。 */
+export async function listBlockChildren(cfg, documentId, blockId) {
   const items = []
   let pageToken = ''
   do {
-    const data = await feishuApi(cfg, `/docx/v1/documents/${documentId}/blocks/${documentId}/children`, {
+    const data = await feishuApi(cfg, `/docx/v1/documents/${documentId}/blocks/${blockId}/children`, {
       query: { page_size: '500', ...(pageToken ? { page_token: pageToken } : {}) },
     })
     items.push(...(data.items || []))
     pageToken = data.has_more ? data.page_token : ''
   } while (pageToken)
   return items
+}
+
+/** 批量更新块（docx batch_update）：v0.85.1 素材挂块两段式的第二步——replace_image/replace_file 换入 token。 */
+export async function batchUpdateDocBlocks(cfg, documentId, requests) {
+  return feishuApi(cfg, `/docx/v1/documents/${documentId}/blocks/batch_update`, {
+    method: 'PATCH', body: { requests },
+  })
 }
 
 /** 飞书 docx 批量建块单次 children 硬上限：超限整包被拒——99992402 field validation failed
@@ -481,13 +493,17 @@ export async function downloadChatImage(cfg, imageKey) {
   return { bytes: Buffer.from(await res.arrayBuffer()), contentType }
 }
 
-/** 上传 docx 素材的公共实现：parent_type=docx_image|docx_file（docx_file 单文件上限 20MB，超限由下载侧边界截断）；返回 fileToken。 */
-async function uploadDocMedia(cfg, documentId, { parentType, fileName, bytes, contentType }) {
+/**
+ * 上传 docx 素材的公共实现：parent_type=docx_image|docx_file（docx_file 单文件上限 20MB，超限由下载侧边界截断）；
+ * 返回 fileToken。v0.85.1（官方口径实证）：parent_node 必须传**目标块的 block_id**——素材挂在块上，
+ * 挂 document 的 token 无法用于块内容（children 创建载荷携带 token 会被 1770001 invalid param 整包拒掉）。
+ */
+async function uploadDocMedia(cfg, parentId, { parentType, fileName, bytes, contentType }) {
   const token = await tenantToken(cfg)
   const form = new FormData()
   form.append('file_name', fileName)
   form.append('parent_type', parentType)
-  form.append('parent_node', documentId)
+  form.append('parent_node', parentId)
   form.append('size', String(bytes.length))
   form.append('file', new Blob([bytes], { type: contentType || 'application/octet-stream' }), fileName)
   const res = await fetch('https://open.feishu.cn/open-apis/drive/v1/medias/upload_all', {
@@ -502,9 +518,9 @@ async function uploadDocMedia(cfg, documentId, { parentType, fileName, bytes, co
   return data.data?.file_token || null
 }
 
-/** 上传图片为文档素材（drive/v1/medias/upload_all，parent_type=docx_image），返回 fileToken。 */
-export async function uploadDocImage(cfg, documentId, { fileName, bytes, contentType }) {
-  return uploadDocMedia(cfg, documentId, { parentType: 'docx_image', fileName, bytes, contentType })
+/** 上传图片为文档素材（drive/v1/medias/upload_all，parent_type=docx_image），parent=目标 image 块 id；返回 fileToken。 */
+export async function uploadDocImage(cfg, imageBlockId, { fileName, bytes, contentType }) {
+  return uploadDocMedia(cfg, imageBlockId, { parentType: 'docx_image', fileName, bytes, contentType })
 }
 
 /**
@@ -540,7 +556,7 @@ export async function downloadChatFile(cfg, { messageId, fileKey }, { maxBytes =
   return { bytes, contentType: res.headers?.get?.('content-type') || 'application/octet-stream' }
 }
 
-/** 上传附件为文档文件素材（drive/v1/medias/upload_all，parent_type=docx_file），返回 fileToken。 */
-export async function uploadDocFile(cfg, documentId, { fileName, bytes, contentType }) {
-  return uploadDocMedia(cfg, documentId, { parentType: 'docx_file', fileName, bytes, contentType })
+/** 上传附件为文档文件素材（drive/v1/medias/upload_all，parent_type=docx_file），parent=目标 file 块 id；返回 fileToken。 */
+export async function uploadDocFile(cfg, fileBlockId, { fileName, bytes, contentType }) {
+  return uploadDocMedia(cfg, fileBlockId, { parentType: 'docx_file', fileName, bytes, contentType })
 }
