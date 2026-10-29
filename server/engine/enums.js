@@ -19,6 +19,9 @@ export const ENUMS = {
   taskKind: { work: '工作', reminder: '纯提醒', routine: '常态打卡' },
   // S69（v0.80，K64）：常态任务每日执行状态——未做=无记录行（不落库），done/skip 落 task_day_records，pending=重置（删行）
   dayStatus: { pending: '未做', done: '完成', skip: '跳过' },
+  // S75（v0.87，K72）：常态任务周期四档（tasks.cadence.type）——daily 每日缺省 / weekly 每周星期组合 /
+  // biweekly 每两周（K65 纪元锚期别）/ monthly 每月几号（当月无该日不适用）
+  cadenceType: { daily: '每日', weekly: '每周', biweekly: '每两周', monthly: '每月' },
   taskSource: { template: '模板', manual: '手动', extraction: '抽取', suggestion: '建议采纳' },
   milestoneStatus: { planned: '计划中', met: '已达成', missed: '已延误', cancelled: '已取消' },
   channelPlatform: { feishu: '飞书', wecom: '企业微信' },

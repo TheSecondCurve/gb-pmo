@@ -66,6 +66,103 @@ export function parseWeekdays(csv) {
   return String(csv).split(',').map(Number).filter((d) => Number.isInteger(d) && d >= 1 && d <= 7)
 }
 
+// —— S75（v0.87，K72）：常态任务周期四档（tasks.cadence JSON）——
+// daily=每日（缺省）/ weekly=每周星期组合（S69 语义原样）/ biweekly=每两周（星期组合+期别 parity，
+// 复用 K65 双周纪元锚：periodIndex=floor(dayDiff(纪元锚, day)/14)，parity=periodIndex%2）/
+// monthly=每月几号组合（当月无该日不适用，cron 语义，不顺延）。
+// 适用判定唯一真相源 isApplicableDay——执行视图 applicable、打卡 400 拒绝、晨报今日/明日待办全走它。
+
+/** 周期 JSON 文本 → 对象（NULL/坏 JSON → null；防御读取，写入侧归一在 normalizeCadence）。 */
+export function parseCadence(text) {
+  if (!text) return null
+  try {
+    const obj = JSON.parse(text)
+    return obj && typeof obj === 'object' && typeof obj.type === 'string' ? obj : null
+  } catch {
+    return null
+  }
+}
+
+/** legacy weekdays（数组/'1,3' CSV）→ cadence：全周/未给 → daily；子集 → weekly。
+ *  bot add_task / 提议 / 立项模板路径的兼容映射（入参兼容，单一真相源仍是 cadence）。 */
+export function weekdaysToCadence(value) {
+  const days = normalizeWeekdays(value) // undefined → daily；空集/越界沿用 S69 的 400 文案
+  if (!days || days.length === 7) return { type: 'daily' }
+  return { type: 'weekly', weekdays: days }
+}
+
+/** cadence 载荷归一（S75-1）：undefined/null → undefined（未给，建任务缺省 daily 由调用方落）；
+ *  四档参数校验非法抛 400；返回规范化对象（weekdays/monthDays 升序去重、parity 缺省 0）。 */
+export function normalizeCadence(value) {
+  if (value === undefined || value === null) return undefined
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw Object.assign(new Error('cadence 须为周期对象：{type:"daily"} / {type:"weekly",weekdays:[1,3,5]} / {type:"biweekly",weekdays:[1],parity:0|1} / {type:"monthly",monthDays:[1,15]}'), { statusCode: 400 })
+  }
+  const type = assertValue('cadenceType', value.type)
+  if (type === 'daily') {
+    if (value.weekdays != null || value.monthDays != null) {
+      throw Object.assign(new Error('daily 档无参数（周期参数只随 weekly/biweekly/monthly）'), { statusCode: 400 })
+    }
+    return { type: 'daily' }
+  }
+  if (type === 'monthly') {
+    if (!Array.isArray(value.monthDays) || !value.monthDays.length) {
+      throw Object.assign(new Error('monthly 档须带 monthDays（1~31 的整数，至少 1 天）'), { statusCode: 400 })
+    }
+    const days = [...new Set(value.monthDays.map(Number))]
+    if (days.some((d) => !Number.isInteger(d) || d < 1 || d > 31)) {
+      throw Object.assign(new Error('monthDays 须为 1~31 的整数'), { statusCode: 400 })
+    }
+    return { type: 'monthly', monthDays: days.sort((a, b) => a - b) }
+  }
+  // weekly / biweekly 共用星期校验
+  let weekdays
+  try {
+    weekdays = normalizeWeekdays(value.weekdays)
+  } catch (e) {
+    throw Object.assign(new Error(`周期 weekdays 非法：${e.message}`), { statusCode: 400 })
+  }
+  if (!weekdays) {
+    throw Object.assign(new Error(`${type} 档须带 weekdays（1~7 的整数，至少 1 天）`), { statusCode: 400 })
+  }
+  if (type === 'weekly') return { type: 'weekly', weekdays }
+  const parity = value.parity ?? 0
+  if (parity !== 0 && parity !== 1) {
+    throw Object.assign(new Error('biweekly 档 parity 须为 0 或 1（K65 纪元锚期别）'), { statusCode: 400 })
+  }
+  return { type: 'biweekly', weekdays, parity }
+}
+
+/** 周期中文标签：每天 / 每周一、三、五 / 每两周周一、三 / 每月1、15、31号。 */
+export function cadenceLabel(cadence) {
+  const c = cadence && cadence.type ? cadence : { type: 'daily' }
+  if (c.type === 'daily') return '每天'
+  if (c.type === 'weekly') return weekdaysLabel(c.weekdays)
+  if (c.type === 'biweekly') return `每两周${(c.weekdays || []).map((d) => `周${WEEKDAY_CHARS[d] || d}`).join('、')}`
+  return `每月${(c.monthDays || []).join('、')}号`
+}
+
+/** cadence → 派生 weekdays 出参（兼容既有消费方）：daily→[1..7]；weekly/biweekly→其星期集；monthly/无→null。 */
+export function cadenceWeekdays(cadence) {
+  if (!cadence) return null
+  if (cadence.type === 'daily') return ALL_WEEK
+  if (cadence.type === 'weekly' || cadence.type === 'biweekly') return cadence.weekdays ?? null
+  return null
+}
+
+/** 某北京日历日是否适用（S75 唯一真相源）：monthly 取日号（当月无该日自然不适用）；biweekly 星期命中且期别匹配。 */
+export function isApplicableDay(cadence, day) {
+  const c = cadence && cadence.type ? cadence : { type: 'daily' }
+  const wd = weekdayOf(day)
+  if (c.type === 'daily') return true
+  if (c.type === 'weekly') return (c.weekdays || []).includes(wd)
+  if (c.type === 'biweekly') {
+    if (!(c.weekdays || []).includes(wd)) return false
+    return Math.floor(dayDiff(BIWEEK_EPOCH, day) / 14) % 2 === (c.parity ?? 0)
+  }
+  return (c.monthDays || []).includes(Number(day.slice(8, 10)))
+}
+
 function assertRoutineProject(db, projectId) {
   const project = db.prepare('SELECT id, name, kind, status, board_span FROM projects WHERE id = ?').get(Number(projectId))
   if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
@@ -100,7 +197,7 @@ export function getDailyBoard(db, projectId, { anchor, span, now = Date.now() } 
   const end = days[days.length - 1]
 
   const tasks = db.prepare(
-    `SELECT t.id AS task_id, t.title, t.note, t.weekdays, t.responsible_member_id, m.name AS responsible_name
+    `SELECT t.id AS task_id, t.title, t.note, t.cadence, t.responsible_member_id, m.name AS responsible_name
      FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
      WHERE t.project_id = ? AND t.kind = 'routine' AND t.deleted_at IS NULL ORDER BY t.id`
   ).all(project.id)
@@ -116,13 +213,13 @@ export function getDailyBoard(db, projectId, { anchor, span, now = Date.now() } 
   }
 
   const rows = tasks.map((t) => {
-    const weekdays = parseWeekdays(t.weekdays) ?? ALL_WEEK
-    const applicable = new Set(weekdays)
+    // S75：适用判定按周期对象（兼容 NULL → daily 缺省）；weekdays/weekdaysLabel 为派生出参
+    const cadence = parseCadence(t.cadence) ?? { type: 'daily' }
     const cells = days.map((day) => {
       const r = records.get(`${t.task_id}|${day}`) || null
       return {
         day,
-        applicable: applicable.has(weekdayOf(day)),
+        applicable: isApplicableDay(cadence, day),
         status: r ? r.status : 'pending',
         note: r ? (r.note || null) : null,
         operatorMemberId: r ? r.operator_member_id : null,
@@ -135,7 +232,8 @@ export function getDailyBoard(db, projectId, { anchor, span, now = Date.now() } 
     const periodDone = cells.filter((c) => c.applicable && c.status === 'done').length
     return {
       taskId: t.task_id, title: t.title, note: t.note ?? null,
-      weekdays, weekdaysLabel: weekdaysLabel(weekdays),
+      cadence, cadenceLabel: cadenceLabel(cadence),
+      weekdays: cadenceWeekdays(cadence), weekdaysLabel: cadenceLabel(cadence),
       responsibleMemberId: t.responsible_member_id ?? null, responsibleName: t.responsible_name ?? null,
       cells, periodApplicable, periodDone,
     }
@@ -165,16 +263,18 @@ export function getDailyBoard(db, projectId, { anchor, span, now = Date.now() } 
 
 /**
  * S69-3 每日打卡：status done/skip 惰性 upsert、pending=重置（删行）；单事务落 记录行 + record 型
- * progress 事件 + 审计。可补过去日期、拒绝未来日期（北京日）；不适用星期 400；终态项目 409 只读。
+ * progress 事件 + 审计。可补过去日期、拒绝未来日期（北京日）；不适用日 400（S75 起按 cadence 判定）；
+ * 备注 ≤200 字；终态项目 409 只读。
  * origin：web（页面格子）| bot（机器人 checkin_task，事件归因 sourcePlatform/generatedBy 随通道）。
+ * now：时钟注入（getDailyBoard 同款；缺省真实时刻）。
  */
-export function setDayStatus(db, { projectId, taskId, day, status, note }, by, { origin = 'web', sourcePlatform } = {}) {
+export function setDayStatus(db, { projectId, taskId, day, status, note }, by, { origin = 'web', sourcePlatform, now = Date.now() } = {}) {
   const project = assertRoutineProject(db, projectId)
   if (project.status === 'closed' || project.status === 'cancelled') {
     throw Object.assign(new Error('项目已结项/取消，周视图只读（S29 终态不可逆）'), { statusCode: 409 })
   }
   const task = db.prepare(
-    `SELECT t.id, t.title, t.kind, t.weekdays, t.project_id FROM tasks t WHERE t.id = ? AND t.deleted_at IS NULL`
+    `SELECT t.id, t.title, t.kind, t.cadence, t.project_id FROM tasks t WHERE t.id = ? AND t.deleted_at IS NULL`
   ).get(Number(taskId))
   if (!task || task.project_id !== project.id) {
     throw Object.assign(new Error('任务不存在或不属于该项目'), { statusCode: 400 })
@@ -186,12 +286,12 @@ export function setDayStatus(db, { projectId, taskId, day, status, note }, by, {
   if (!isCalendarDay(dayStr)) {
     throw Object.assign(new Error('day 须为真实日历日 YYYY-MM-DD（北京日，S19）'), { statusCode: 400 })
   }
-  if (dayStr > today()) {
+  if (dayStr > today(now)) {
     throw Object.assign(new Error('不能给未来日期打卡（可补过去日期）'), { statusCode: 400 })
   }
-  const weekdays = parseWeekdays(task.weekdays) ?? ALL_WEEK
-  if (!weekdays.includes(weekdayOf(dayStr))) {
-    throw Object.assign(new Error(`该任务在 ${dayStr} 不适用（适用：${weekdaysLabel(weekdays)}）`), { statusCode: 400 })
+  const cadence = parseCadence(task.cadence) ?? { type: 'daily' }
+  if (!isApplicableDay(cadence, dayStr)) {
+    throw Object.assign(new Error(`该任务在 ${dayStr} 不适用（周期：${cadenceLabel(cadence)}）`), { statusCode: 400 })
   }
   const nextStatus = assertValue('dayStatus', String(status))
   const cleanNote = normalizeTaskNote(note) ?? null
@@ -199,7 +299,6 @@ export function setDayStatus(db, { projectId, taskId, day, status, note }, by, {
     throw Object.assign(new Error('未做状态不带备注（备注随完成/跳过记录保留）'), { statusCode: 400 })
   }
 
-  const now = Date.now()
   const tx = db.transaction(() => {
     const cur = db.prepare('SELECT * FROM task_day_records WHERE task_id = ? AND day = ?').get(task.id, dayStr)
     // 变更判定：pending 重置仅在已有记录行时算变更（幂等重置无行不产事件）；done/skip 按状态或备注变化判定
@@ -265,7 +364,7 @@ export function findRoutineTaskByHint(db, projectId, hint) {
   const text = String(hint || '').trim()
   if (!text) throw new Error('taskId 或 taskTitle 至少给一个（先 query 查常态任务清单）')
   const rows = db.prepare(
-    `SELECT id, title, weekdays FROM tasks
+    `SELECT id, title, cadence FROM tasks
      WHERE project_id = ? AND kind = 'routine' AND deleted_at IS NULL ORDER BY id`
   ).all(Number(projectId))
   if (!rows.length) throw new Error('该项目没有常态任务（周视图按天打卡只管理 kind=routine 任务）')

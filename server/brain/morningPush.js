@@ -12,7 +12,7 @@
 
 import { today, bjDayStartMs, addDays, weekdayOf, DAY_MS } from '../db/time.js'
 import { morningReport } from '../engine/morning.js'
-import { parseWeekdays, ALL_WEEK } from '../engine/dailyBoard.js'
+import { parseCadence, isApplicableDay } from '../engine/dailyBoard.js'
 import { label } from '../engine/enums.js'
 import { getLlm } from './llm.js'
 import { notifyProjectChannel } from './push.js'
@@ -98,11 +98,12 @@ const WEEKDAY_CN = '日一二三四五六'
 const ROUTINE_STATUS_LABEL = { pending: '未做', skip: '⤴ 跳过', done: '✓ 已完成' }
 const ROUTINE_SORT = { pending: 0, skip: 1, done: 2 }
 
-/** 某日的常态待办清单：适用星期判定当日适用；withStatus 时读当日打卡记录（明日纯预览不查——未来打卡本就被 S69 拒）。 */
+/** 某日的常态待办清单：S75 起按周期对象判定当日适用（isApplicableDay——daily/weekly/biweekly/monthly）；
+ *  withStatus 时读当日打卡记录（明日纯预览不查——未来打卡本就被 S69 拒）。 */
 function routineTodos(db, projectId, day, { withStatus = false } = {}) {
   const wd = weekdayOf(day)
   const rows = db.prepare(
-    `SELECT t.id, t.title, t.weekdays, m.name AS responsible FROM tasks t
+    `SELECT t.id, t.title, t.cadence, m.name AS responsible FROM tasks t
      LEFT JOIN members m ON m.id = t.responsible_member_id
      WHERE t.project_id = ? AND t.kind = 'routine' AND t.deleted_at IS NULL ORDER BY t.id`
   ).all(projectId)
@@ -110,7 +111,7 @@ function routineTodos(db, projectId, day, { withStatus = false } = {}) {
     ? db.prepare('SELECT status FROM task_day_records WHERE task_id = ? AND day = ?')
     : null
   const items = rows
-    .filter((t) => (parseWeekdays(t.weekdays) ?? ALL_WEEK).includes(wd))
+    .filter((t) => isApplicableDay(parseCadence(t.cadence), day))
     .map((t) => ({
       title: t.title,
       responsible: t.responsible,

@@ -293,7 +293,8 @@ describe('S69 常态项目与每周执行周视图', () => {
     const t = live.tasks[0]
 
     updateTask(db, t.id, { weekdays: [2, 4, 6] }, members.admin.id)
-    expect(db.prepare('SELECT weekdays FROM tasks WHERE id = ?').get(t.id).weekdays).toBe('2,4,6')
+    // S75（v0.87，K72）：weekdays 列已由 cadence 取代（legacy 入参映射 weekly，存储 JSON）
+    expect(db.prepare('SELECT cadence FROM tasks WHERE id = ?').get(t.id).cadence).toBe('{"type":"weekly","weekdays":[2,4,6]}')
     expect(() => updateTask(db, t.id, { weekdays: [] }, members.admin.id)).toThrow(/至少/)
     expect(() => updateTask(db, t.id, { weekdays: [0] }, members.admin.id)).toThrow(/1~7/)
     expect(() => updateTask(db, t.id, { status: 'done' }, members.admin.id)).toThrow(/常态任务/)
