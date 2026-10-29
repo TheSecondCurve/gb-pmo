@@ -36,7 +36,7 @@ const board = (over: Partial<DailyBoardData> = {}): DailyBoardData => {
     nextAnchor: addDays(start, 7),
     tasks: [
       {
-        taskId: 11, title: '看资讯', note: null, weekdays: [1, 2, 3, 4, 5, 6, 7], weekdaysLabel: '每天',
+        taskId: 11, title: '看资讯', note: null, cadence: { type: 'daily' }, cadenceLabel: '每天', weekdays: [1, 2, 3, 4, 5, 6, 7], weekdaysLabel: '每天',
         responsibleMemberId: 2, responsibleName: '李四',
         cells: days.map((day) => ({
           day, applicable: true, status: 'pending', note: null, operatorMemberId: null, operatorName: null, source: null, updatedAt: null,
@@ -45,7 +45,7 @@ const board = (over: Partial<DailyBoardData> = {}): DailyBoardData => {
         ...over.tasks?.[0],
       },
       {
-        taskId: 12, title: '周报整理', note: null, weekdays: [1, 3, 5], weekdaysLabel: '每周一、三、五',
+        taskId: 12, title: '周报整理', note: null, cadence: { type: 'weekly', weekdays: [1, 3, 5] }, cadenceLabel: '每周一、三、五', weekdays: [1, 3, 5], weekdaysLabel: '每周一、三、五',
         responsibleMemberId: null, responsibleName: null,
         cells: [
           { day: '2026-10-26', applicable: true, status: 'done', note: '初稿', operatorMemberId: 1, operatorName: '甲', source: 'web', updatedAt: 1 },
@@ -139,22 +139,22 @@ describe('S69 DailyWeekGrid 执行视图冒烟', () => {
     // 每月：勾 1、15 号 → 确定（value prop 未变，触发器标签仍是「每周一、三、五」）
     fireEvent.click(screen.getByRole('button', { name: '每周一、三、五' }))
     fireEvent.click(screen.getByRole('tab', { name: '每月' }))
-    fireEvent.click(screen.getByRole('button', { name: '1', exact: true }))
-    fireEvent.click(screen.getByRole('button', { name: '15', exact: true }))
+    fireEvent.click(screen.getByRole('button', { name: /^1$/ }))
+    fireEvent.click(screen.getByRole('button', { name: /^15$/ }))
     fireEvent.click(screen.getByRole('button', { name: '确定' }))
     expect(onChange).toHaveBeenLastCalledWith({ type: 'monthly', monthDays: [1, 15] })
     // 每两周：切档保留已选星期——先清空再勾周一 + 序列 B → 确定
     fireEvent.click(screen.getByRole('button', { name: '每周一、三、五' }))
     fireEvent.click(screen.getByRole('tab', { name: '每两周' }))
-    for (const w of ['一', '三', '五']) fireEvent.click(screen.getByRole('button', { name: w, exact: true }))
-    fireEvent.click(screen.getByRole('button', { name: '一', exact: true }))
+    for (const w of ['一', '三', '五']) fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${w}$`) }))
+    fireEvent.click(screen.getByRole('button', { name: /^一$/ }))
     fireEvent.click(screen.getByRole('button', { name: /序列 B/ }))
     fireEvent.click(screen.getByRole('button', { name: '确定' }))
     expect(onChange).toHaveBeenLastCalledWith({ type: 'biweekly', weekdays: [1], parity: 1 })
     // 空选禁用（每周：取消全部已选星期）
     fireEvent.click(screen.getByRole('button', { name: '每周一、三、五' }))
     fireEvent.click(screen.getByRole('tab', { name: '每周' }))
-    for (const w of ['一', '三', '五']) fireEvent.click(screen.getByRole('button', { name: w, exact: true }))
+    for (const w of ['一', '三', '五']) fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${w}$`) }))
     expect((screen.getByRole('button', { name: '确定' }) as HTMLButtonElement).disabled).toBe(true)
   })
 
@@ -169,7 +169,7 @@ describe('S69 DailyWeekGrid 执行视图冒烟', () => {
       </div>,
     )
     fireEvent.click(screen.getByRole('button', { name: '每天' }))
-    const pop = document.querySelector('[data-testid="cadence-picker-pop"]')
+    const pop = document.querySelector('[data-testid="cadence-picker-pop"]') as HTMLElement
     expect(pop).toBeTruthy()
     expect(container.contains(pop)).toBe(false) // 不在渲染容器（= 不在任何 overflow 裁切祖先）内
     expect(document.body.contains(pop)).toBe(true) // portal 到 body
