@@ -2,8 +2,11 @@ import { describe, it, expect, afterAll } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { projectDigest, personDigest } from '../brain/digest.js'
 import { addEvent, confirmEvent } from '../engine/events.js'
+import { today, addDays } from '../db/time.js'
 
 // PRD S15 / S16 — by 项目梳理（双来源+依据+建议确认）与 by 员工梳理（跨项目聚合+冲突+超时置顶）
+// 日期口径（K16）：建议目标日用 today()/addDays() 动态推——模板任务 plan_start=建库当日（projects.js 缺省
+// today()），硬编码日期（原 2026-10-31/2026-11-30）过了当晚会撞「开始日不得晚于结束日」守卫，时间炸弹。
 
 let ctx
 afterAll(() => ctx?.db.close())
@@ -29,7 +32,7 @@ describe('S15 by 项目梳理', () => {
     const llm = fakeLlm(() =>
       JSON.stringify({
         narrative: '预热文案进度落后（任务#' + target.id + '），需求侧已确认范围（事件#1）。',
-        suggestions: [{ summary: '预热文案顺延 3 天', targetTaskId: target.id, targetField: 'plan_end_date', targetValue: '2026-11-30' }],
+        suggestions: [{ summary: '预热文案顺延 3 天', targetTaskId: target.id, targetField: 'plan_end_date', targetValue: addDays(today(), 30) }],
       })
     )
     const out = await projectDigest(ctx.db, p.id, { llm })
@@ -44,14 +47,15 @@ describe('S15 by 项目梳理', () => {
   it('S15-2: 排期调整建议以建议型事件呈现，人确认后才变更并留痕', async () => {
     const p = await mkProject('客户K系统', ctx.members.lead.id)
     const target = p.tasks.find((t) => t.title.includes('推流'))
+    const postponeTo = addDays(today(), 30) // 动态未来日：恒晚于模板任务的 plan_start（=建库当日）
     const evt = addEvent(ctx.db, {
-      projectId: p.id, nature: 'suggestion', eventType: 'suggestion', summary: '[梳理建议] 推流报备延至月底',
-      targetTaskId: target.id, targetField: 'plan_end_date', targetValue: '2026-10-31', generatedBy: 'digest',
+      projectId: p.id, nature: 'suggestion', eventType: 'suggestion', summary: '[梳理建议] 推流报备延后一个月',
+      targetTaskId: target.id, targetField: 'plan_end_date', targetValue: postponeTo, generatedBy: 'digest',
     })
     expect(evt.status).toBe('pending')
     expect(ctx.db.prepare('SELECT plan_end_date FROM tasks WHERE id = ?').get(target.id).plan_end_date).toBeNull()
     confirmEvent(ctx.db, evt.id, ctx.members.lead.id)
-    expect(ctx.db.prepare('SELECT plan_end_date FROM tasks WHERE id = ?').get(target.id).plan_end_date).toBe('2026-10-31')
+    expect(ctx.db.prepare('SELECT plan_end_date FROM tasks WHERE id = ?').get(target.id).plan_end_date).toBe(postponeTo)
     const row = ctx.db.prepare('SELECT status, decided_by FROM project_events WHERE id = ?').get(evt.id)
     expect(row.status).toBe('effective')
     expect(row.decided_by).toBe(ctx.members.lead.id)
