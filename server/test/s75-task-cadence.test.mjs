@@ -16,10 +16,12 @@ describe('S75 周期纯函数', () => {
     expect(isApplicableDay({ type: 'daily' }, '2026-02-01')).toBe(true)
     expect(isApplicableDay({ type: 'weekly', weekdays: [3] }, '2026-11-04')).toBe(true)
     expect(isApplicableDay({ type: 'weekly', weekdays: [3] }, '2026-11-03')).toBe(false)
-    // biweekly parity 0：2026-11-02（periodIndex 74）适用；隔期 2026-11-16（75）不适用
+    // biweekly parity 0（序列 A，周序号偶）：2026-11-02 所在周（148）适用；隔周 11-09（149）不适用；再下一周 11-16（150）又适用
     expect(isApplicableDay({ type: 'biweekly', weekdays: [1], parity: 0 }, '2026-11-02')).toBe(true)
-    expect(isApplicableDay({ type: 'biweekly', weekdays: [1], parity: 0 }, '2026-11-16')).toBe(false)
-    expect(isApplicableDay({ type: 'biweekly', weekdays: [1], parity: 1 }, '2026-11-16')).toBe(true)
+    expect(isApplicableDay({ type: 'biweekly', weekdays: [1], parity: 0 }, '2026-11-09')).toBe(false)
+    expect(isApplicableDay({ type: 'biweekly', weekdays: [1], parity: 0 }, '2026-11-16')).toBe(true)
+    expect(isApplicableDay({ type: 'biweekly', weekdays: [1], parity: 1 }, '2026-11-09')).toBe(true)
+    expect(isApplicableDay({ type: 'biweekly', weekdays: [1], parity: 1 }, '2026-11-16')).toBe(false)
     // monthly：日号命中；2027-02 无 30/31 号 → 不适用（cron 语义，不顺延）
     expect(isApplicableDay({ type: 'monthly', monthDays: [15, 31] }, '2026-12-31')).toBe(true)
     expect(isApplicableDay({ type: 'monthly', monthDays: [31] }, '2027-02-28')).toBe(false)
@@ -29,9 +31,10 @@ describe('S75 周期纯函数', () => {
 })
 
 // PRD S75（v0.87，K72）— 常态任务周期四档：tasks.cadence 统一对象（daily/weekly/biweekly/monthly），
-// 适用判定唯一真相源 isApplicableDay；biweekly 复用 K65 双周纪元锚；monthly 当月无该日不适用（cron 语义）。
-// 参考日（纪元锚 2024-01-01 起每 14 天一期）：2026-11-02（周一）periodIndex 74 → parity 0，
-// 同期周一 2026-11-09；periodIndex 75（2026-11-16 起）→ parity 1，周一 2026-11-16 / 11-23。
+// 适用判定唯一真相源 isApplicableDay；biweekly 复用 K65 纪元锚；monthly 当月无该日不适用（cron 语义）。
+// 参考周（v0.87.3 修订：周序号 = floor(dayDiff(2024-01-01, day)/7)，parity = 周序号 % 2；纪元锚恰为周一）：
+// 2026-11-02 所在周序号 148（parity 0=序列 A）、11-09 所在周 149（parity 1=序列 B）、
+// 11-16 所在周 150（A）、11-23 所在周 151（B）——隔周严格交替。
 
 let db
 let members
@@ -115,12 +118,14 @@ describe('S75 常态任务周期四档', () => {
     expect(applicableDays(getDailyBoard(db, routine.id, { anchor: '2026-11-01', span: 'month' }), monthly)).toEqual(['2026-11-01', '2026-11-15'])
     expect(applicableDays(getDailyBoard(db, routine.id, { anchor: '2026-12-01', span: 'month' }), monthly)).toEqual(['2026-12-01', '2026-12-15', '2026-12-31'])
 
-    // biweekly parity 0：周窗口 parity 期只有周一格亮，隔期周一全灰
+    // biweekly parity 0：周窗口本序列周周一亮，隔周（序列 B 周）全灰
     expect(applicableDays(getDailyBoard(db, routine.id, { anchor: '2026-11-02', span: 'week' }), biweek0)).toEqual(['2026-11-02'])
-    expect(applicableDays(getDailyBoard(db, routine.id, { anchor: '2026-11-16', span: 'week' }), biweek0)).toEqual([])
-    // 双周窗口与周期同锚（K65）：本期（parity 0）两个周一亮，下一期不亮
-    expect(applicableDays(getDailyBoard(db, routine.id, { anchor: '2026-11-02', span: 'biweek' }), biweek0)).toEqual(['2026-11-02', '2026-11-09'])
-    expect(applicableDays(getDailyBoard(db, routine.id, { anchor: '2026-11-16', span: 'biweek' }), biweek0)).toEqual([])
+    expect(applicableDays(getDailyBoard(db, routine.id, { anchor: '2026-11-16', span: 'week' }), biweek0)).toEqual(['2026-11-16'])
+    // 双周窗口（K65 同锚）：窗内两序列交替可见——A 亮第一周周一、B 亮第二周周一（用户 2026-11-01 实证场景）
+    const biweek1 = createTask(db, { projectId: routine.id, title: '每两周周一B', cadence: { type: 'biweekly', weekdays: [1], parity: 1 } }, members.admin.id).id
+    expect(applicableDays(getDailyBoard(db, routine.id, { anchor: '2026-11-02', span: 'biweek' }), biweek0)).toEqual(['2026-11-02'])
+    expect(applicableDays(getDailyBoard(db, routine.id, { anchor: '2026-11-02', span: 'biweek' }), biweek1)).toEqual(['2026-11-09'])
+    expect(applicableDays(getDailyBoard(db, routine.id, { anchor: '2026-11-16', span: 'biweek' }), biweek0)).toEqual(['2026-11-16'])
 
     // daily：周窗口 7 格全亮
     const daily = createTask(db, { projectId: routine.id, title: '每天的事', cadence: { type: 'daily' } }, members.admin.id).id
@@ -143,8 +148,8 @@ describe('S75 常态任务周期四档', () => {
     // 三档互转（重置=删行）语义不变
     expect(setDayStatus(db, { projectId: routine.id, taskId: weekly.id, day: '2026-11-04', status: 'pending' }, members.admin.id, { now }).status).toBe('pending')
 
-    // 不适用日拒绝（取过去日，避开未来日期守卫先行）：monthly 在 11-02 / biweekly parity0 在隔期周一
-    // 2026-10-26（periodIndex 73 → parity 1）/ weekly 在周二 11-03
+    // 不适用日拒绝（取过去日，避开未来日期守卫先行）：monthly 在 11-02 / biweekly parity0 在序列 B 周
+    // 2026-10-26（周序号 147 → parity 1）/ weekly 在周二 11-03
     expect(() => setDayStatus(db, { projectId: routine.id, taskId: monthly.id, day: '2026-11-02', status: 'done' }, members.admin.id, { now })).toThrow(/不适用/)
     expect(() => setDayStatus(db, { projectId: routine.id, taskId: biweek0.id, day: '2026-10-26', status: 'done' }, members.admin.id, { now })).toThrow(/不适用/)
     expect(() => setDayStatus(db, { projectId: routine.id, taskId: weekly.id, day: '2026-11-03', status: 'done' }, members.admin.id, { now })).toThrow(/不适用/)
@@ -161,21 +166,29 @@ describe('S75 常态任务周期四档', () => {
 
     const sent = []
     await dailyProjectMorningPush(db, { now: () => bjNov(15), send: async (m) => { sent.push(m); return { messageId: 'om_1' } } }) // 2026-11-15 周日
-    const day1 = (sent.at(-1).post ? (sent.at(-1).post.zh_cn?.content || []).flat().map((r) => r?.text || '').join('\n') : sent.at(-1).text)
+    const day1Full = (sent.at(-1).post ? (sent.at(-1).post.zh_cn?.content || []).flat().map((r) => r?.text || '').join('\n') : sent.at(-1).text)
+    const [day1, day1Tomorrow] = day1Full.split('【明日待办】') // 段落拆开：今日/明日分别断言（明日预览会带出命中任务）
     expect(day1).toContain('月度结算单') // monthly 命中 15 号
     expect(day1).toContain('每日巡检D') // daily
     expect(day1).not.toContain('双周对账A') // 周日不适用（biweekly 只认周一）
     expect(day1).not.toContain('周三例会C') // 周日不适用（weekly 只认周三）
+    expect(day1Tomorrow).toContain('双周对账A') // 明日 11-16 周一命中序列 A 周（v0.87.3 隔周，明日预览如实带出）
 
     const sent2 = []
-    await dailyProjectMorningPush(db, { now: () => bjNov(16), send: async (m) => { sent2.push(m); return { messageId: 'om_2' } } }) // 2026-11-16 周一（parity 1 期）
+    await dailyProjectMorningPush(db, { now: () => bjNov(9), send: async (m) => { sent2.push(m); return { messageId: 'om_2' } } }) // 2026-11-09 周一（周序号 149 → 序列 B 周）
     const day2 = (sent2.at(-1).post ? (sent2.at(-1).post.zh_cn?.content || []).flat().map((r) => r?.text || '').join('\n') : sent2.at(-1).text)
-    expect(day2).not.toContain('月度结算单') // 16 号非 15 号
-    expect(day2).not.toContain('双周对账A') // 周一但 parity 1（隔期）——S75 核心口径
+    expect(day2).not.toContain('月度结算单') // 9 号非 15 号
+    expect(day2).not.toContain('双周对账A') // 周一但序列 B 周（周序号 149 奇）——S75 核心口径（v0.87.3 隔周）
     expect(day2).not.toContain('周三例会C') // 周一非周三
     expect(day2).toContain('每日巡检D')
-    // 明日预览（11-17 周二）：仅 daily
+    // 明日预览（11-10 周二）：仅 daily
     expect(day2).not.toContain('双周对账A')
+
+    const sent3 = []
+    await dailyProjectMorningPush(db, { now: () => bjNov(16), send: async (m) => { sent3.push(m); return { messageId: 'om_3' } } }) // 2026-11-16 周一（周序号 150 → 序列 A 周，隔周回归）
+    const day3 = (sent3.at(-1).post ? (sent3.at(-1).post.zh_cn?.content || []).flat().map((r) => r?.text || '').join('\n') : sent3.at(-1).text)
+    expect(day3).toContain('双周对账A') // 周一且序列 A 周命中——隔周严格交替（v0.87.3）
+    expect(day3).toContain('每日巡检D')
   })
 
   it('S75-5: 迁移 0038 回填——weekdays 全周/NULL→daily、子集→weekly；weekdays 列删除；出参 weekdays 为派生', () => {

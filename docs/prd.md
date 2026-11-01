@@ -1,5 +1,7 @@
 # 需求初稿（PRD）— 企业项目大脑（Project Brain）
 
+> **v0.87.3**（2026-11-01）：**每两周隔周序列判定修复（S75 修订，design.md K72 修订）**——v0.87 的 biweekly 期别直接复用 K65 双周窗口的「14 天一期」期序号（`periodIndex%2`），但一个 14 天期内同一星期几出现两次，两个周一同期同 parity——「每两周周一」实际成 28 天节奏「连开两周、连停两周」，而非隔周一次（用户 2026-11-01 线上实证：双周窗口 2026-11-02~11-15 里序列 A 的 11-02 与 11-09 都亮、序列 B 全灰）。修复：期别改按**周序号**判定（`floor(dayDiff(纪元锚, day)/7) % 2`，纪元锚 2024-01-01 仍为周一、锚与 parity 取值域不变），序列 A/B 真正隔周交替（A：11-02、11-16、11-30…；B：11-09、11-23…）；任一双周窗口内 A 亮第一周星期、B 亮第二周星期，两序列同窗交替可见（正合 S75-2 验收原文）。改动唯一真相源 `isApplicableDay` 一处（`engine/dailyBoard.js`），执行视图/打卡 400/晨报全链生效；存量任务无需迁移（想换周的用户改 parity 一档即可），已落打卡记录按 (task_id, day) 事实留痕不回改。
+
 > **v0.87.2**（2026-10-29）：**结项自动标记知识页标题【已结项】（S29/S61 随行，design.md K73）**——项目结项后在知识库树里看不出它已结束（用户 2026-10-29 需求）。三个结项入口（web 详情页结项、提议确认卡生效、机器人一条链）在结项成功后，若项目已绑定知识页则把**页面标题追加「【已结项】」**：取节点当前标题（绑定行的 title 可能过期）→ `PATCH /wiki/v2/spaces/:space_id/nodes/:node_token` 改节点标题 → 同步绑定行 title + audit 留痕。**尽力而为、不阻断结项**：标记失败（权限/网络/凭证）只翻成人话提示（web 响应 `wikiCloseMark` 字段 + 机器人终态通知播报一行），项目状态不受影响；幂等可重入——标题已带【已结项】不重复追加。只标记结项（closed），取消（cancelled）不标记。
 
 > **v0.87.1**（2026-10-29）：**项目组合表格「创建日期」列（S30-2 随行）**——项目列表页（`#/projects` 表格视图）原先只有计划排期日期，看不出项目何时立项（用户 2026-10-29 需求）。表格在「类型」列后新增**创建日期**列：epoch `created_at` 按北京日历日 `YYYY-MM-DD` 渲染（S19 口径；`fmt.ts` 新增 `bjDay`，`bjToday` 改由其派生，与「交付周期」列连字符日期风格一致）；缺失显示 `—` 不虚构（松散语言惯例）；「未排期」分组行 colSpan 同步加宽。服务端零改动——`queryProjects` 本就 `SELECT p.*` 带出 `created_at`（NOT NULL），前端 `ProjectRow` 补 `createdAt` 契约字段。
@@ -1122,15 +1124,15 @@
 
 > **场景 S75（P0）— 成员 — 常态任务周期四档：每日 / 每周 / 每两周 / 每月几号（v0.87，K72）**
 > - 触发角色/时机：常态项目里新建/编辑常态任务时选择周期（web 任务面行内与新建行；bot/提议/立项通道用 legacy weekdays 兼容映射）。
-> - 操作内容：`cadence` 对象四档——`daily`（缺省）；`weekly` `weekdays` 星期组合（S69 语义原样）；`biweekly` `weekdays` + `parity`（0/1，K65 纪元锚 2024-01-01 起每 14 天一期，periodIndex%2）；`monthly` `monthDays`（1~31 组合，当月无该日则不适用，cron 语义）。适用判定唯一真相源 `isApplicableDay`（engine/dailyBoard.js）。
+> - 操作内容：`cadence` 对象四档——`daily`（缺省）；`weekly` `weekdays` 星期组合（S69 语义原样）；`biweekly` `weekdays` + `parity`（0/1，K65 纪元锚 2024-01-01 起按**周序号**隔周交替，v0.87.3 修订，design.md K72 修订）；`monthly` `monthDays`（1~31 组合，当月无该日则不适用，cron 语义）。适用判定唯一真相源 `isApplicableDay`（engine/dailyBoard.js）。
 > - 产生/变更的记录：tasks.cadence（migration 0038 回填并删 weekdays 列）；执行视图 applicable/打卡拒绝（400）/晨报今日明日待办/任务盘点标签全按 cadence。
-> - 完成标志：四档任务在周/双周/月窗口里格子适用性正确（monthly 只在几号格亮、biweekly 只在 parity 期的星期格亮）；打卡不适用日 400；晨报只列当日适用；老任务（weekdays）行为不变。
+> - 完成标志：四档任务在周/双周/月窗口里格子适用性正确（monthly 只在几号格亮、biweekly 只在 parity 匹配的隔周星期格亮）；打卡不适用日 400；晨报只列当日适用；老任务（weekdays）行为不变。
 > - 审批/协作：无（记录型配置，各通道直生效，K25）。
 > - 验收标准：
 >   - S75-1 当建/改常态任务给 `cadence` 时四档归一生效（daily 无参缺省；weekly/biweekly weekdays ≥1 天合法值；biweekly parity ∈ {0,1} 缺省 0；monthly monthDays 1~31 ≥1 个）；非法 type/越界/空集 400；legacy `weekdays` 入参映射兼容（全周→daily、子集→weekly）；交付任务带 cadence 400（同 S69 适用星期口径）。
->   - S75-2 当打开执行视图时格子 `applicable` 按 cadence 判定：daily 全格；weekly 按星期；**biweekly 按星期且仅 parity 匹配期**（双周窗口内两条隔周序列交替可见，与 K65 窗口同锚）；monthly 仅当月日号在 monthDays 的格子（月窗口跨月各自判定）；行统计「本期」随 applicable 重算。
->   - S75-3 当打卡时不适用日 400（monthly 在 2 月无 30/31 号、biweekly 隔期周一、weekly 未勾星期、daily 无不适用）；适用日 done/skip/pending 三档互转与 S69-3 全部语义不变。
->   - S75-4 当晨报（S71）生成今日/明日待办时按 isApplicableDay 判定（monthly 今日 15 号→每月15号任务列入；biweekly 隔期日不列）；空态与其余段落不变。
+>   - S75-2 当打开执行视图时格子 `applicable` 按 cadence 判定：daily 全格；weekly 按星期；**biweekly 按星期且仅 parity 匹配的隔周**（同一双周窗口内序列 A 亮第一周星期、序列 B 亮第二周星期，两序列同窗交替可见，与 K65 窗口同锚；v0.87.3 修订）；monthly 仅当月日号在 monthDays 的格子（月窗口跨月各自判定）；行统计「本期」随 applicable 重算。
+>   - S75-3 当打卡时不适用日 400（monthly 在 2 月无 30/31 号、biweekly 非本序列周的周一、weekly 未勾星期、daily 无不适用）；适用日 done/skip/pending 三档互转与 S69-3 全部语义不变。
+>   - S75-4 当晨报（S71）生成今日/明日待办时按 isApplicableDay 判定（monthly 今日 15 号→每月15号任务列入；biweekly 本序列周周一列入、隔周周一不列）；空态与其余段落不变。
 >   - S75-5 当迁移 0038 执行时老任务回填正确：weekdays NULL/全周 → daily；子集 → weekly（含组合）；**weekdays 列删除**，引擎/接口不再读写该列（出参 weekdays 为 cadence 派生）。
 >   - S75-6 当任务盘点（S45）与执行视图行展示周期标签时用 cadenceLabel（每天/每周一、三、五/每两周周一/每月1、15号）；bot add_task/确认卡/立项模板的 weekdays 载荷继续兼容生效。
 

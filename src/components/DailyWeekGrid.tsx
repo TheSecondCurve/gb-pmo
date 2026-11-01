@@ -177,7 +177,7 @@ export default function DailyWeekGrid({ projectId, defaultSpan = 'week', readonl
  *  弹层沿用 v0.86.1 修复：portal 到 document.body + fixed 定位——不被任务表格 overflow-x-auto 与页面滚动
  *  容器（app-canvas）裁切；按触发器实测矩形定位，近屏底自动向上翻转、横向收进视口；滚动/缩放跟随重算；Esc 关闭。
  *  层叠（root 上下文）：遮罩 z-20 / 弹层 z-30——高于页面内容，低于 Modal z-40 与 toast z-50。
- *  双周序列（parity）说明：双周任务分两条隔周序列（自纪元锚 2024-01-01 起每 14 天一期交替）；
+ *  双周序列（parity）说明：双周任务分两条隔周序列（自纪元锚 2024-01-01 所在周起按周序号隔周交替，v0.87.3）；
  *  序列 A/B 保存后以双周执行视图亮灯格子为准，不对就换一档（适用判定唯一在引擎，前端不重复实现）。 */
 const POPUP_W = 272 // 每月档 31 枚 chip 阵列所需宽度
 const POPUP_EST_H = 220 // 弹层预估高度（保守值：jsdom 无布局量不出真实高度，宁可早翻不裁切）
@@ -308,7 +308,7 @@ export function CadencePicker({ value, onChange, disabled }: {
             )}
             {draft.type === 'biweekly' && (
               <>
-                <div className="mb-1.5 text-[10px] font-medium tracking-[0.04em] text-[var(--color-ink-soft)]">隔周序列（两条交替，自纪元锚 2024-01-01 起每 14 天一期）</div>
+                <div className="mb-1.5 text-[10px] font-medium tracking-[0.04em] text-[var(--color-ink-soft)]">隔周序列（两条交替，自纪元锚 2024-01-01 所在周起隔周轮换）</div>
                 <div className="mb-2 flex gap-1.5">
                   {([0, 1] as const).map((p) => (
                     <button
@@ -317,7 +317,7 @@ export function CadencePicker({ value, onChange, disabled }: {
                         draft.parity === p ? 'border-[var(--color-brand)] bg-[var(--color-brand-soft)] font-medium text-[var(--color-brand)]' : 'border-[var(--color-line-strong)] text-[var(--color-ink-soft)]'
                       }`}
                       onClick={() => setDraft((cur) => ({ ...cur, parity: p }))}>
-                      {p === 0 ? '序列 A（含 2024-01-01 的一期）' : '序列 B（隔期）'}
+                      {p === 0 ? '序列 A（含 2024-01-01 所在周）' : '序列 B（隔周）'}
                     </button>
                   ))}
                 </div>

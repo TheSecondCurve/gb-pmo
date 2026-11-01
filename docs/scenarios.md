@@ -801,14 +801,14 @@ S29/K25 的机器人面结项（提议卡+总结必填）修订为一条链直�
 
 ## S75（P0）— 成员 — 常态任务周期四档：每日 / 每周 / 每两周 / 每月几号（v0.87）
 
-S69 的「适用星期」只能表达星期几组合；本场景把常态任务周期升级为统一 `cadence` 对象四档（daily/weekly/biweekly/monthly，`tasks.cadence` JSON，migration 0038 回填老数据并删除 weekdays 列）。适用判定唯一真相源 `isApplicableDay`（engine/dailyBoard.js）；执行视图/打卡/晨报/盘点全走它。biweekly 期别复用 K65 双周纪元锚（2024-01-01 起每 14 天一期，periodIndex%2）；monthly 为 1~31 号组合，当月无该日不适用（cron 语义，不顺延）。决策见 design.md K72。
+S69 的「适用星期」只能表达星期几组合；本场景把常态任务周期升级为统一 `cadence` 对象四档（daily/weekly/biweekly/monthly，`tasks.cadence` JSON，migration 0038 回填老数据并删除 weekdays 列）。适用判定唯一真相源 `isApplicableDay`（engine/dailyBoard.js）；执行视图/打卡/晨报/盘点全走它。biweekly 期别复用 K65 纪元锚 2024-01-01 按**周序号**隔周交替（周序号%2，v0.87.3 修订——原 14 天期序号会同期两个周一同亮）；monthly 为 1~31 号组合，当月无该日不适用（cron 语义，不顺延）。决策见 design.md K72（含 v0.87.3 修订）。
 
 | # | 验收标准 | 对应测试 |
 |---|---|---|
 | S75-1 | 当建/改常态任务给 cadence 时四档归一生效（daily 缺省；weekly/biweekly weekdays ≥1；biweekly parity ∈ {0,1} 缺省 0；monthly monthDays 1~31 ≥1）；非法 400；legacy weekdays 入参映射兼容（全周→daily、子集→weekly）；交付任务带 cadence 400 | `server/test/s75-task-cadence.test.mjs` |
-| S75-2 | 当打开执行视图时格子 applicable 按 cadence 判定：daily 全格；weekly 按星期；biweekly 仅 parity 匹配期（与 K65 窗口同锚交替）；monthly 仅日号命中格（月窗口跨月各自判定）；本期统计随 applicable 重算 | 同上 |
-| S75-3 | 当打卡时不适用日 400（monthly 2 月无 30/31 号、biweekly 隔期、weekly 未勾日）；适用日三档互转语义同 S69-3 不变 | 同上 |
-| S75-4 | 当晨报生成今日/明日待办时按 isApplicableDay 判定（monthly 当日号命中才列；biweekly 隔期不列）；空态与其余段落不变 | 同上 |
+| S75-2 | 当打开执行视图时格子 applicable 按 cadence 判定：daily 全格；weekly 按星期；biweekly 仅 parity 匹配的隔周（同一双周窗口内 A 亮第一周星期、B 亮第二周星期，与 K65 窗口同锚交替，v0.87.3）；monthly 仅日号命中格（月窗口跨月各自判定）；本期统计随 applicable 重算 | 同上 |
+| S75-3 | 当打卡时不适用日 400（monthly 2 月无 30/31 号、biweekly 非本序列周、weekly 未勾日）；适用日三档互转语义同 S69-3 不变 | 同上 |
+| S75-4 | 当晨报生成今日/明日待办时按 isApplicableDay 判定（monthly 当日号命中才列；biweekly 本序列周列入、隔周不列）；空态与其余段落不变 | 同上 |
 | S75-5 | 当迁移 0038 执行时老任务回填正确（NULL/全周→daily；子集→weekly），weekdays 列删除；出参 weekdays 为 cadence 派生（daily→[1..7]） | 同上 |
 | S75-6 | 当盘点/视图行展示周期时用 cadenceLabel；bot add_task/确认卡/立项模板 weekdays 载荷兼容生效 | 同上 |
 
