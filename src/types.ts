@@ -150,8 +150,8 @@ export interface DailyBoardData {
 }
 
 // S75（v0.87，K72）：常态任务周期四档（tasks.cadence）。weekly/biweekly 的 weekdays 为 1~7 升序组合；
-// biweekly.parity=0|1 是 K65 双周纪元锚（2024-01-01 起每 14 天一期）的期别；monthly.monthDays 为 1~31 组合
-//（当月无该日不适用，cron 语义）。适用判定唯一在引擎（isApplicableDay），前端不重复实现。
+// biweekly.parity=0|1 是 K65 纪元锚（2024-01-01 所在周起）的隔周序列——周序号%2，v0.87.3 修订；
+// monthly.monthDays 为 1~31 组合（当月无该日不适用，cron 语义）。适用判定唯一在引擎（isApplicableDay），前端不重复实现。
 export type Cadence =
   | { type: 'daily' }
   | { type: 'weekly'; weekdays: number[] }

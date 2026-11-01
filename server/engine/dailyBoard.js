@@ -68,7 +68,8 @@ export function parseWeekdays(csv) {
 
 // —— S75（v0.87，K72）：常态任务周期四档（tasks.cadence JSON）——
 // daily=每日（缺省）/ weekly=每周星期组合（S69 语义原样）/ biweekly=每两周（星期组合+期别 parity，
-// 复用 K65 双周纪元锚：periodIndex=floor(dayDiff(纪元锚, day)/14)，parity=periodIndex%2）/
+// 复用 K65 纪元锚按周序号隔周：parity=floor(dayDiff(纪元锚, day)/7)%2，v0.87.3 修订——14 天期内同一
+// 星期出现两次，按期序号判会「两周连开两周连停」，design.md K72 修订）/
 // monthly=每月几号组合（当月无该日不适用，cron 语义，不顺延）。
 // 适用判定唯一真相源 isApplicableDay——执行视图 applicable、打卡 400 拒绝、晨报今日/明日待办全走它。
 
@@ -150,7 +151,8 @@ export function cadenceWeekdays(cadence) {
   return null
 }
 
-/** 某北京日历日是否适用（S75 唯一真相源）：monthly 取日号（当月无该日自然不适用）；biweekly 星期命中且期别匹配。 */
+/** 某北京日历日是否适用（S75 唯一真相源）：monthly 取日号（当月无该日自然不适用）；
+ *  biweekly 星期命中且隔周序列匹配（纪元锚 2024-01-01 恰为周一，周序号=floor(dayDiff/7)，v0.87.3）。 */
 export function isApplicableDay(cadence, day) {
   const c = cadence && cadence.type ? cadence : { type: 'daily' }
   const wd = weekdayOf(day)
@@ -158,7 +160,7 @@ export function isApplicableDay(cadence, day) {
   if (c.type === 'weekly') return (c.weekdays || []).includes(wd)
   if (c.type === 'biweekly') {
     if (!(c.weekdays || []).includes(wd)) return false
-    return Math.floor(dayDiff(BIWEEK_EPOCH, day) / 14) % 2 === (c.parity ?? 0)
+    return Math.floor(dayDiff(BIWEEK_EPOCH, day) / 7) % 2 === (c.parity ?? 0)
   }
   return (c.monthDays || []).includes(Number(day.slice(8, 10)))
 }
