@@ -604,7 +604,7 @@ function TaskRefsModal({ taskId, taskTitle, readonly, onClose }: { taskId: numbe
  *  填哪列算哪列、留空即留缺省（责任人未指派/状态未开始）；Enter 或行尾「+ 添加」提交，成功后清
  *  标题/备注/日期（分类/责任人/周期保留——同批同类同人连录不重选）并回焦标题框，不停顿连续录入。 */
 function TaskNewRow({ projectId, members, routine, onDone, titleRef }: {
-  projectId: number; members: Member[]; routine?: boolean; onDone: () => Promise<void>; titleRef: RefObject<HTMLInputElement | null>
+  projectId: number; members: Member[]; routine?: boolean; onDone: () => Promise<void>; titleRef: RefObject<HTMLInputElement>
 }) {
   const { toast } = useStore()
   const [title, setTitle] = useState('')
