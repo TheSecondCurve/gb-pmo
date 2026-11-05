@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from 'react'
 import { Sparkles } from 'lucide-react'
 import { fmtDateTime } from '../fmt'
 import { api } from '../api'
@@ -34,6 +34,7 @@ export default function ProjectDetail({ id }: { id: number }) {
   const [bindingWiki, setBindingWiki] = useState(false)
   const [archiveRun, setArchiveRun] = useState<WikiArchiveRun | null>(null) // S63 汇总归档台账
   const [hiddenEventTypes, setHiddenEventTypes] = useState<string[]>([]) // S4-8 其他栏筛选：被隐藏的类型（默认空=全显）
+  const newRowTitleRef = useRef<HTMLInputElement>(null) // S2-6：新增行标题框——头部「在下方添加」聚焦锚点
 
   const refresh = useCallback(async () => {
     const [d, e, m, c, w, wa] = await Promise.all([
@@ -194,10 +195,11 @@ export default function ProjectDetail({ id }: { id: number }) {
           {!routine && p.tasks.some((t) => t.status !== 'done') && (
             <Btn small onClick={() => setInitAssigning(true)} title="按类型初始化提示词批量分配责任人与计划起止（草案可改，应用后生效）"><Sparkles aria-hidden="true" size={13} />AI 初始分配</Btn>
           )}
-          <Btn small onClick={() => void 0} title="底部添加行">在下方添加</Btn>
+          {/* S2-6（v0.88，K75）：聚焦尾部新增行（原为空操作桩） */}
+          <Btn small onClick={() => { newRowTitleRef.current?.scrollIntoView({ block: 'nearest' }); newRowTitleRef.current?.focus() }} title="聚焦底部新增行，逐行录入任务">在下方添加</Btn>
         </div>
       ) : undefined}>
-        {p.tasks.length === 0 ? <Empty hint={routine ? '暂无常态任务（每行一条，选周期：每天/每周/每两周/每月几号，按周打卡）' : '暂无任务（自由创建项目可手工添加）'} /> : (
+        {p.tasks.length === 0 && readonly ? <Empty hint={routine ? '暂无常态任务（每行一条，选周期：每天/每周/每两周/每月几号，按周打卡）' : '暂无任务（自由创建项目可手工添加）'} /> : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[44rem] text-[13px]">
               <thead className="text-left text-[10px] font-medium tracking-[0.07em] text-[var(--color-ink-soft)]">
@@ -208,6 +210,11 @@ export default function ProjectDetail({ id }: { id: number }) {
                 </tr>
               </thead>
               <tbody>
+                {p.tasks.length === 0 && (
+                  <tr><td colSpan={routine ? 6 : 8} className="px-3 py-6 text-center text-[12px] text-[var(--color-ink-soft)]">
+                    {routine ? '暂无常态任务——在下行选周期直接录入，按周打卡' : '暂无任务——在下行输入标题，Enter 或「+ 添加」逐行录入'}
+                  </td></tr>
+                )}
                 {p.tasks.map((t) => {
                   // S41/K23：整行浅底色按视觉桶区分（逾期红优先于状态色），data-visual 为冒烟锚点
                   const visual = taskVisual(t)
@@ -293,11 +300,12 @@ export default function ProjectDetail({ id }: { id: number }) {
                   </tr>
                   )
                 })}
+                {/* S2-6（v0.88，K75）：新增行常驻表格尾行——列与任务列对齐，Excel 式逐行录入 */}
+                {!readonly && <TaskNewRow projectId={id} members={activeMembers} routine={routine} onDone={refresh} titleRef={newRowTitleRef} />}
               </tbody>
             </table>
           </div>
         )}
-        {!readonly && <AddTask projectId={id} members={activeMembers} routine={routine} onDone={refresh} />}
       </Card>
 
       <section>
@@ -592,58 +600,120 @@ function TaskRefsModal({ taskId, taskTitle, readonly, onClose }: { taskId: numbe
   )
 }
 
-function AddTask({ projectId, members, routine, onDone }: { projectId: number; members: Member[]; routine?: boolean; onDone: () => Promise<void> }) {
+/** S2-6（v0.88，K75）任务面新增行——常驻表格尾行，列与任务列对齐（Excel 式逐行录入）：
+ *  填哪列算哪列、留空即留缺省（责任人未指派/状态未开始）；Enter 或行尾「+ 添加」提交，成功后清
+ *  标题/备注/日期（分类/责任人/周期保留——同批同类同人连录不重选）并回焦标题框，不停顿连续录入。 */
+function TaskNewRow({ projectId, members, routine, onDone, titleRef }: {
+  projectId: number; members: Member[]; routine?: boolean; onDone: () => Promise<void>; titleRef: RefObject<HTMLInputElement | null>
+}) {
+  const { toast } = useStore()
   const [title, setTitle] = useState('')
   const [note, setNote] = useState('') // S58：任务备注（可选，≤200 字；提醒/预警推送自动携带）
-  const [owner, setOwner] = useState('') // S38：新建默认未指派（责任人与项目牵头人解耦，K20）
+  const [owner, setOwner] = useState('') // S38：新建默认未指派（责任人与项目牵头人解耦，K20）——连续录入保留上次选择
   const [kind, setKind] = useState('work') // S57：work=工作 / reminder=纯提醒（到期推送后自动完成）
-  const [date, setDate] = useState('') // S57：纯提醒的提醒日（=planEndDate，必填）
+  const [start, setStart] = useState('')
+  const [end, setEnd] = useState('') // 提醒时=提醒日（planEndDate，必填）
   const [cadence, setCadence] = useState<Cadence>({ type: 'daily' }) // S75：周期四档（缺省每天）
-  const submit = async () => {
-    if (!title.trim()) return
-    if (kind === 'reminder' && !date) return
-    await api.createTask({
-      projectId, title, kind: routine ? 'routine' : kind,
-      ...(routine ? { cadence } : {}),
-      ...(kind === 'reminder' && !routine ? { planEndDate: date } : {}),
-      ...(note.trim() ? { note: note.trim() } : {}),
-      ...(owner ? { responsibleMemberId: Number(owner) } : {}),
-    })
-    setTitle(''); setNote(''); setOwner(''); setDate(''); await onDone()
-  }
+  const [busy, setBusy] = useState(false)
   const reminder = !routine && kind === 'reminder'
+  const canSubmit = Boolean(title.trim()) && !busy && (!reminder || Boolean(end))
+  const submit = async () => {
+    if (!canSubmit) return
+    setBusy(true)
+    try {
+      await api.createTask({
+        projectId, title: title.trim(), kind: routine ? 'routine' : kind,
+        ...(routine ? { cadence } : {}),
+        ...(start && !reminder ? { planStartDate: start } : {}),
+        ...(end && !routine ? { planEndDate: end } : {}),
+        ...(note.trim() ? { note: note.trim() } : {}),
+        ...(owner ? { responsibleMemberId: Number(owner) } : {}),
+      })
+      // 清行继续录入：标题/备注/日期清空，分类/责任人/周期保留
+      setTitle(''); setNote(''); setStart(''); setEnd('')
+      await onDone()
+      titleRef.current?.focus()
+    } catch (e) {
+      toast((e as Error).message, 'bad') // 失败保留已填内容，改后重提
+    } finally {
+      setBusy(false)
+    }
+  }
+  // S2-6 修订：Excel 式单元格导航——Enter 在非末格跳到下一格（链=行内 input/select 的 DOM 序），
+  // 末格（备注）Enter、任意格 ⌘/Ctrl+Enter、或「+ 添加」按钮提交；Tab 保持浏览器原生跳格。
+  const onEnter = (e: ReactKeyboardEvent<HTMLInputElement | HTMLSelectElement>) => {
+    if (e.key !== 'Enter') return
+    if (e.metaKey || e.ctrlKey) return void submit()
+    const cells = (e.target as HTMLElement).closest('tr')?.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select')
+    if (cells && cells.length > 1) {
+      const idx = Array.from(cells).indexOf(e.target as HTMLInputElement | HTMLSelectElement)
+      if (idx >= 0 && idx < cells.length - 1) {
+        e.preventDefault()
+        cells[idx + 1].focus()
+        return
+      }
+    }
+    void submit()
+  }
+  const addBtn = (
+    <Btn small kind="primary" disabled={!canSubmit} onClick={() => void submit()} title={reminder ? '纯提醒：填标题与提醒日后添加' : '末列 Enter、⌘/Ctrl+Enter 或点此添加；行清空后可继续录入'}>+ 添加</Btn>
+  )
+  if (routine) {
+    return (
+      <tr data-testid="task-new-row" className="border-t border-dashed border-[var(--color-line)] [&>td]:px-3 [&>td]:py-2.5">
+        <td><input className="cell-input w-full min-w-[12rem]" ref={titleRef}
+          placeholder="新增任务标题（选周期，按周打卡；⌘Enter 或行尾按钮添加）" value={title}
+          onChange={(e) => setTitle(e.target.value)} onKeyDown={onEnter} /></td>
+        <td>
+          <select className="cell-input w-full" aria-label="新任务责任人（默认未指派）" value={owner} onChange={(e) => setOwner(e.target.value)}>
+            <option value="">（未指派）</option>
+            {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </td>
+        <td><CadencePicker value={cadence} onChange={setCadence} /></td>
+        <td><input className="cell-input w-full min-w-[8rem]" aria-label="新任务备注（可选）" placeholder="备注（可选）"
+          maxLength={200} value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={onEnter} /></td>
+        <td></td>
+        <td>{addBtn}</td>
+      </tr>
+    )
+  }
   return (
-    <div className="mt-3 flex flex-wrap gap-2">
-      {!routine && (
-        <select className="cell-input w-full sm:w-28" aria-label="新任务分类" value={kind}
-          onChange={(e) => setKind(e.target.value)}>
-          <option value="work">工作</option>
-          <option value="reminder">⏰ 纯提醒</option>
+    <tr data-testid="task-new-row" className="border-t border-dashed border-[var(--color-line)] [&>td]:px-3 [&>td]:py-2.5">
+      <td>
+        <div className="flex items-center gap-2">
+          <select className="cell-input w-24 shrink-0" aria-label="新任务分类" value={kind} onChange={(e) => setKind(e.target.value)}>
+            <option value="work">工作</option>
+            <option value="reminder">⏰ 纯提醒</option>
+          </select>
+          <input className="cell-input min-w-[10rem] flex-1" ref={titleRef}
+            placeholder={reminder ? '新增提醒标题（提醒日推责任人+项目群后自动完成）' : '新增任务标题（默认未指派；⌘Enter 或行尾按钮添加）'}
+            value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={onEnter} />
+        </div>
+      </td>
+      <td>
+        <select className="cell-input w-full" aria-label="新任务责任人（默认未指派）" value={owner} onChange={(e) => setOwner(e.target.value)}>
+          <option value="">（未指派）</option>
+          {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
         </select>
-      )}
-      {routine && (
-        <span className="flex items-center gap-1.5" aria-label="周期">
-          <CadencePicker value={cadence} onChange={setCadence} />
-        </span>
-      )}
-      <input className="cell-input min-w-[12rem] flex-1"
-        placeholder={routine ? '新增常态任务标题（选周期，按周打卡，Enter 保存）' : reminder ? '新增提醒标题（提醒日推责任人+项目群后自动完成）' : '新增任务标题（默认未指派，Enter 保存）'}
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') void submit() }} />
-      {reminder && (
-        <input type="date" className="cell-input w-full sm:w-40" aria-label="提醒日（必填）" value={date}
-          onChange={(e) => setDate(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void submit() }} />
-      )}
-      <input className="cell-input w-full sm:w-44" aria-label="新任务备注（可选）" placeholder="备注：怎么干（可选）"
-        maxLength={200} value={note} onChange={(e) => setNote(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') void submit() }} />
-      <select className="cell-input w-full sm:w-32" aria-label="新任务责任人（默认未指派）" value={owner} onChange={(e) => setOwner(e.target.value)}>
-        <option value="">（未指派）</option>
-        {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-      </select>
-    </div>
+      </td>
+      <td><span className="text-[12px] text-[var(--color-ink-soft)]">未开始</span></td>
+      <td className="num">
+        {reminder ? <span className="text-[12px] text-[var(--color-ink-soft)]">—</span> : (
+          <input type="date" className="cell-input num w-full" aria-label="新任务计划开始（可选）" value={start}
+            onChange={(e) => setStart(e.target.value)} onKeyDown={onEnter} />
+        )}
+      </td>
+      <td className="num">
+        <input type="date" className={`cell-input num w-full ${reminder && !end ? 'border-[var(--color-bad)]' : ''}`}
+          aria-label={reminder ? '提醒日（必填）' : '新任务计划结束（可选）'} value={end}
+          onChange={(e) => setEnd(e.target.value)} onKeyDown={onEnter} />
+      </td>
+      <td><input className="cell-input w-full min-w-[8rem]" aria-label="新任务备注（可选）" placeholder="备注（可选）"
+        maxLength={200} value={note} onChange={(e) => setNote(e.target.value)} onKeyDown={onEnter} /></td>
+      <td></td>
+      <td>{addBtn}</td>
+    </tr>
   )
 }
 

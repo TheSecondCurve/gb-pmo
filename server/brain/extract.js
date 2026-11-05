@@ -377,9 +377,16 @@ export async function extractEvents(llm, db, projectId, messages) {
         role: 'system',
         content: `你是企业项目大脑的抽取器。从群聊消息中抽取项目事件，输出 JSON {"events":[...]}。
 每条事件：{"nature":"record"|"suggestion","eventType":"progress|risk|decision|blocker|finance|schedule_change|status_change|owner_change","summary":"一句中文摘要","confidence":0~1,
-"suggestion 时必填":"targetObject=task|milestone、targetTaskId=所选对象清单里的#id、targetName=原话指称的任务/里程碑名称、targetField、targetValue"}。
+"suggestion 时必填":"targetObject=task|milestone、targetTaskId=所选对象清单里的#id、targetName=对象名称、targetField、targetValue"}。
 字段与值：任务支持 status=todo|doing|done、plan_start_date/plan_end_date=YYYY-MM-DD、responsible_member_id=成员id；里程碑支持 status=planned|met|missed|cancelled、plan_date=YYYY-MM-DD。
-规则：纯进展/风险/决策/财务事实描述 → record（财务类消息如回款/开票/费用沟通 eventType=finance，仅记录、不含金额字段）；消息明确在说某条任务的进展/情况时 record 事件也可带 targetTaskId（摘要会同步归档到该任务的更新记录，S56）；明确的任务/里程碑完成或日期变化信号 → suggestion（任务完成 status=done，里程碑达成 status=met，推迟到X按对象写对应计划日期）；与项目无关的寒暄不要产出。targetName 必须保留原话中的对象名称，代码会同时在任务与里程碑中消歧；同名或没有把握不要硬猜，给较低 confidence，不得编造 id。${multi ? '每条事件附 "msgIndex"（消息编号 [i] 的 i，0 基）指明来源消息；更新候选尤其要准确归因，无法确定时省略并降低 confidence。' : ''}只输出 JSON。`,
+判定规则——群聊绝大多数围绕任务展开，每条消息先找状态/日期/责任人变更信号，找不到才按纯记录处理：
+① 完成或结束信号（完成了、搞定了、做完了、弄完了、上线了、交付了、验收通过了、评审过了、收尾了、这块结了、可以验收了等口语变体）→ 必须产 suggestion（eventType=status_change）：任务 status=done、里程碑 status=met；不得只产 record——record 归档不能替代状态变更。消息同时含过程细节时可另产一条 record（eventType=progress，可带 targetTaskId 归档任务时间线）摘要过程，两件事并存。「基本完成、差不多了、快了、还剩 X」是进行中不是完成，按 record 处理。
+② 开始或推进信号（开工了、开始做了、排上了、在做了）→ suggestion（eventType=status_change）：任务 status=doing。
+③ 日期信号（推迟/提前/改到 X 号/定在 X 号）→ suggestion（eventType=schedule_change）：对应对象的计划日期字段。
+④ 责任人信号（交给 X、转给 X、X 来负责）→ suggestion（eventType=owner_change）：responsible_member_id。
+⑤ 以上信号都没有的纯进展/风险/决策/阻塞/财务事实 → record（财务类消息如回款/开票/费用沟通 eventType=finance，仅记录、不含金额字段）；record 明确指向清单内某任务时可带 targetTaskId（摘要归档到该任务的更新记录）。
+对象定位：targetName 用清单中该对象的完整标题（原话用了简称也回写成完整标题，系统按标题消歧）；消息未点名对象时，结合清单与上下文推断最可能对应的任务（发言人名下任务优先），有把握就照常产出、confidence 按推断把握如实给，推不出具体任务才产项目级 record。同名或没有把握不要硬猜，给较低 confidence，不得编造 id。${multi ? '每条事件附 "msgIndex"（消息编号 [i] 的 i，0 基）指明来源消息；更新候选尤其要准确归因，无法确定时省略并降低 confidence。' : ''}
+与项目无关的寒暄不要产出。只输出 JSON。`,
       },
       {
         role: 'user',
