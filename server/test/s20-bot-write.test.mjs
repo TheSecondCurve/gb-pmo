@@ -5,7 +5,7 @@ import { BOT_SECRET as SECRET, scriptedLlm, makeRecorder, makeMsgFactory, mkProj
 import { upsertChannel, updateTask } from '../engine/tasks.js'
 import { closeProject } from '../engine/projects.js'
 import { ingestMessages } from '../brain/extract.js'
-import { handleBotEvent, handleCardAction } from '../brain/bot/command.js'
+import { handleBotEvent, handleCardAction, buildSystemPrompt } from '../brain/bot/command.js'
 import { runReadOnlyQuery } from '../agent/sqlGuard.js'
 import { runWriteTool } from '../brain/bot/tools.js'
 import { runAgentLoop } from '../brain/bot/agent.js'
@@ -356,5 +356,19 @@ describe('S20-2/S20-3 写路径分支（工具层：日期/责任人建议直改
     const ro = await runWriteTool(ctx.db, { kind: 'suggest_event', payload: { targetTaskId: taskId, targetField: 'status', targetValue: 'doing' } }, { member, evt })
     expect(ro.type).toBe('refused')
     expect(ro.text).toContain('只读')
+  })
+
+  // S20-22（v0.88，K74）：对话面先判变更再判登记——系统提示须指引完成/开始/改期/换人走 suggest_event 直效，
+  // 不得只 record_event 登记了事（与抽取面 S3-7 同一判定优先级；LLM 行为不进 CI，契约测试钉提示词指令）。
+  it('S20-22: 系统提示先判变更再判登记——完成类表述指引 suggest_event 直效，不得只 record_event', async () => {
+    const p = await mkProject(ctx, '客户S20V系统', ctx.members.lead.id)
+    const sys = buildSystemPrompt(ctx.db, {
+      member: ctx.members.lead, channel: { channel_type: 'dedicated', project_id: p.id }, chatType: 'group', surface: 'im',
+    })
+    expect(sys).toMatch(/先判变更再判登记/)
+    expect(sys).toMatch(/不得只 record_event|不得只?仅? record_event/)
+    expect(sys).toMatch(/搞定了|完成了/)
+    // 显式登记口吻仍走 record_event 的边界保留
+    expect(sys).toMatch(/登记/)
   })
 })

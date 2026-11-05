@@ -1,7 +1,7 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { upsertChannel, createMilestone } from '../engine/tasks.js'
-import { ingestMessages, runExtraction, mapSpeaker } from '../brain/extract.js'
+import { ingestMessages, runExtraction, mapSpeaker, extractEvents } from '../brain/extract.js'
 import { addEvent, confirmEvent } from '../engine/events.js'
 import { getSetting } from '../engine/settings.js'
 import { today } from '../db/time.js'
@@ -202,5 +202,53 @@ describe('S3 IM 抽取与分拣', () => {
     expect(updated.status).toBe(201)
     expect(updated.body.projectId).toBe(b.id)
     expect(Number(updated.body.cursor)).toBe(Number(created.body.cursor))
+  })
+
+  // S3-7（v0.88，K74）：抽取提示词任务状态信号优先——完成类必须产 suggestion、record 不替代变更、
+  // 未点名对象推断归挂。提示词是分类行为唯一真相源（代码无关键词兜底、LLM 行为不进 CI），用契约测试钉住关键指令。
+  it('S3-7: 抽取系统提示任务状态信号优先——完成同义词枚举、不得只产 record、未点名对象推断归挂、targetName 回写清单标题', async () => {
+    ctx = await setupApp()
+    const a = await mkProject('客户I系统', ctx.members.lead.id)
+    let sys = ''
+    const llm = fakeLlm((messages) => {
+      sys = messages[0].content
+      return JSON.stringify({ events: [] })
+    })
+    await extractEvents(llm, ctx.db, a.id, [{ speakerName: '张三', text: '设备预检完成了' }])
+    expect(sys).toContain('抽取器')
+    // ① 状态信号优先于纯记录判定
+    expect(sys).toMatch(/先[^。]*?(状态|变更)信号|状态信号优先/)
+    // ② 完成口语同义词枚举（线上误判主因：口语完成被判「不够明确」）
+    expect(sys).toContain('搞定了')
+    expect(sys).toContain('上线了')
+    // ③ 完成必须产 suggestion，record 归档不得替代状态变更
+    expect(sys).toMatch(/不得只产 record/)
+    // ④ 「基本完成/还剩」防误报护栏
+    expect(sys).toMatch(/基本完成|差不多了/)
+    // ⑤ 未点名对象结合清单与发言人名下任务推断归挂（群聊大多围绕任务）
+    expect(sys).toMatch(/未点名|没有点名/)
+    expect(sys).toContain('推断')
+    // ⑥ targetName 回写清单完整标题（消歧器按标题匹配，原话简称照抄天然错位）
+    expect(sys).toMatch(/完整标题/)
+  })
+
+  it('S3-7: 完成消息 record+suggestion 并存——过程摘要归档任务时间线且状态自动生效（两件事并存契约）', async () => {
+    const a = await mkProject('客户I2系统', ctx.members.lead.id)
+    const ch = upsertChannel(ctx.db, { platform: 'feishu', groupKey: 'oc_i2', channelType: 'dedicated', projectId: a.id })
+    const target = a.tasks.find((t) => t.title.includes('设备预检'))
+    const sourceTs = Date.now() - 2 * 86400000
+    ctx.db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(sourceTs - 1000, target.id)
+    const llm = fakeLlm(() => JSON.stringify({
+      events: [
+        { nature: 'record', eventType: 'progress', summary: '设备预检收尾，全部检查项通过', targetTaskId: target.id, confidence: 0.9 },
+        { nature: 'suggestion', eventType: 'status_change', summary: '设备预检已完成', targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'status', targetValue: 'done', confidence: 0.92 },
+      ],
+    }))
+    const stats = await ingestMessages(ctx.db, ch, [{ id: 'om_i2', speakerId: 'fs_zhang', text: `${target.title}完成了，都检查过了`, ts: sourceTs }], { llm })
+    // 状态变更自动生效（S3-4 闸门口径），任务落 done
+    expect(stats.autoApplied).toBe(1)
+    expect(ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(target.id).status).toBe('done')
+    // 过程 record 同步归档任务时间线（S56），两件事并存互不替代
+    expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM task_records WHERE task_id = ? AND content LIKE '%全部检查项通过%'`).get(target.id).n).toBe(1)
   })
 })
