@@ -560,6 +560,95 @@ describe('S38/S39 任务责任人与 AI 初始分配（v0.42）', () => {
   })
 })
 
+// PRD S2-6（v0.88，K75）冒烟：任务面表格化逐行录入——新增行常驻表格尾行、列与任务列对齐、
+// Enter 与可见「+ 添加」按钮双提交（旧形态无任何提交按钮）、成功后清行回焦连续录入、
+// 留空即缺省、头部「在下方添加」聚焦新增行（原为空操作桩）。
+describe('S2-6 任务面表格化逐行录入（v0.88）', () => {
+  const json = (data: unknown) => new Response(JSON.stringify(data), { status: 200 })
+  const baseTask = { id: 11, projectId: 1, title: '任务一', responsibleMemberId: null, responsibleName: null, status: 'todo', planStartDate: '2026-10-09', planEndDate: null, isOverdue: false, refCount: 0 }
+  let tasks: Record<string, unknown>[]
+  let posted: Record<string, unknown>[]
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    if (url.startsWith('/api/v1/auth/me')) return json({ member: { id: 1, name: '甲', role: 'admin' } })
+    if (url === '/api/v1/tasks' && init?.method === 'POST') {
+      const body = JSON.parse(String(init.body)) as Record<string, unknown>
+      posted.push(body)
+      const created = { ...baseTask, id: 12 + posted.length, ...body }
+      tasks.push(created)
+      return json(created)
+    }
+    if (url.startsWith('/api/v1/projects/1/events')) return json({ events: [] })
+    if (url.startsWith('/api/v1/projects/1')) {
+      return json({
+        id: 1, name: '项目甲', templateCode: 'lianmai_365', status: 'active', priority: 'medium',
+        leadMemberId: 1, leadName: '张三', planStartDate: '2026-10-09', planEndDate: '2026-11-09', daysToDelivery: 31,
+        tasksTotal: tasks.length, tasksDone: 0, tasks: [...tasks], milestones: [],
+      })
+    }
+    if (url.startsWith('/api/v1/members')) return json({ members: [{ id: 1, name: '张三', status: 'active' }, { id: 2, name: '李四', status: 'active' }] })
+    if (url.startsWith('/api/v1/channels')) return json({ channels: [] })
+    if (url.startsWith('/api/v1/project-types')) return json({ types: [] })
+    return json({ tasks: [] })
+  })
+  beforeEach(() => {
+    cleanup()
+    posted = []
+    tasks = [{ ...baseTask }]
+    globalThis.fetch = fetchMock as unknown as typeof fetch
+  })
+
+  it('S2-6: 新增行常驻任务表尾行且有可见「+ 添加」按钮；标题空时置灰', async () => {
+    location.hash = '#/projects/1'
+    render(<StoreProvider><ProjectDetail id={1} /></StoreProvider>)
+    const newRow = await screen.findByTestId('task-new-row')
+    expect(newRow.tagName).toBe('TR') // Excel 式尾行：在任务表 tbody 内，列与任务列对齐
+    expect(newRow.closest('table')).toBeTruthy()
+    expect((within(newRow).getByRole('button', { name: '+ 添加' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.change(within(newRow).getByPlaceholderText(/新增任务标题/), { target: { value: '登录模块开发' } })
+    expect((within(newRow).getByRole('button', { name: '+ 添加' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('S2-6: 填哪列算哪列——Enter 跳列导航、⌘Enter 直提携全字段；成功后清标题/日期/备注、保留责任人并回焦标题框连续录入', async () => {
+    location.hash = '#/projects/1'
+    render(<StoreProvider><ProjectDetail id={1} /></StoreProvider>)
+    const newRow = await screen.findByTestId('task-new-row')
+    const title = within(newRow).getByPlaceholderText(/新增任务标题/) as HTMLInputElement
+    const ownerSelect = within(newRow).getByLabelText('新任务责任人（默认未指派）') as HTMLSelectElement
+    fireEvent.change(title, { target: { value: '登录模块开发' } })
+    fireEvent.change(ownerSelect, { target: { value: '2' } })
+    fireEvent.change(within(newRow).getByLabelText(/新任务计划开始/), { target: { value: '2026-11-10' } })
+    fireEvent.change(within(newRow).getByLabelText(/新任务计划结束/), { target: { value: '2026-11-20' } })
+    fireEvent.change(within(newRow).getByLabelText('新任务备注（可选）'), { target: { value: '含 SSO' } })
+    // S2-6 修订：Enter 在非末格 = Excel 式跳列导航（标题 → 责任人），不触发提交
+    title.focus()
+    fireEvent.keyDown(title, { key: 'Enter' })
+    expect(document.activeElement).toBe(ownerSelect)
+    expect(posted.length).toBe(0)
+    // ⌘Enter（或末格 Enter、+ 添加按钮）直接提交，携带已填全字段
+    fireEvent.keyDown(title, { key: 'Enter', metaKey: true })
+    await waitFor(() => expect(posted.length).toBe(1))
+    expect(posted[0]).toMatchObject({
+      projectId: 1, title: '登录模块开发', responsibleMemberId: 2,
+      planStartDate: '2026-11-10', planEndDate: '2026-11-20', note: '含 SSO',
+    })
+    // 成功后：标题/日期/备注清空、责任人保留（同批同人不重选）、回焦标题框可不停顿连续录入
+    const clearedRow = await screen.findByTestId('task-new-row')
+    await waitFor(() => expect((within(clearedRow).getByPlaceholderText(/新增任务标题/) as HTMLInputElement).value).toBe(''))
+    expect((within(clearedRow).getByLabelText('新任务责任人（默认未指派）') as HTMLSelectElement).value).toBe('2')
+    expect(document.activeElement).toBe(within(clearedRow).getByPlaceholderText(/新增任务标题/))
+  })
+
+  it('S2-6: 头部「在下方添加」聚焦新增行标题框（原为空操作桩）', async () => {
+    location.hash = '#/projects/1'
+    render(<StoreProvider><ProjectDetail id={1} /></StoreProvider>)
+    fireEvent.click(await screen.findByRole('button', { name: '在下方添加' }))
+    await waitFor(() => {
+      expect(document.activeElement).toBe(within(screen.getByTestId('task-new-row')).getByPlaceholderText(/新增任务标题/))
+    })
+  })
+})
+
 // PRD S41/S42/S43（v0.44）冒烟：任务行状态色彩（行底色 + 着色下拉/徽章，逾期红优先）、
 // 项目详情「进度与排期」卡（堆叠进度条 + 任务级甘特 + 里程碑刻度 + 未排期组）、
 // 组合页任务进度条（表格列 + 看板卡）。jsdom 不量像素，断言结构契约（data-testid/data-* 锚点）；
