@@ -960,7 +960,10 @@ async function finalizeClose(db, { project, payload, ctx, pageUrl, messageCount 
   await closeProject(db, project.id, { summary }, ctx.member.id)
   // S29-5（v0.87.2，K73）：绑定了知识页则标记标题【已结项】，结果播报进终态通知（失败不阻断结项）
   const mark = await wikiCloseMarkNotice(db, project.id, ctx.member.id)
-  return [closeChainFinalText(db, project, pageUrl, messageCount), mark].filter(Boolean).join('\n')
+  // S76（v0.89，K76）：绑定了飞书专题群则群名追加【已结项】——同口径尽力而为，播报进终态通知
+  const { chatCloseMarkNotice } = await import('../../engine/channels.js')
+  const chatMark = await chatCloseMarkNotice(db, project.id, ctx.member.id)
+  return [closeChainFinalText(db, project, pageUrl, messageCount), mark, chatMark].filter(Boolean).join('\n')
 }
 
 /** 汇总完成后的续链（onDone 回调，尽力而为不抛出）：成功→播报②并结项+终态通知；失败→中止并指路。 */
