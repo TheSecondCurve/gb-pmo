@@ -156,15 +156,15 @@ describe('S61 知识库绑定与写入', () => {
   })
 
   // —— S61-7 / S29-5（v0.87.2，K73）：结项自动标记知识页标题【已结项】——尽力而为、幂等可重入
-  it('S61-7: markWikiClosed——取节点当前标题追加【已结项】，PATCH 改节点标题并同步绑定行 + audit', async () => {
+  it('S61-7: markWikiClosed——取节点当前标题追加【已结项】，POST /nodes/:node_token/update_title 改节点标题并同步绑定行 + audit', async () => {
     const p = freshProject('标记项目')
     stubFetch([['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n7', obj_token: 'doc7', obj_type: 'docx', title: '标记项目页', space_id: 'sp1' } })]])
     await bindProjectWiki(db, p.id, { wikiUrl: 'https://x.feishu.cn/wiki/n7' }, members.admin.id)
     // 节点标题已被别人改成 v2（绑定行 title 是绑定时刻快照）——标记必须基于节点当前标题，不回写旧值
     const calls = stubFetch([
       ['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n7', obj_token: 'doc7', obj_type: 'docx', title: '标记项目页 v2', space_id: 'sp1' } })],
-      ['/wiki/v2/spaces/sp1/nodes/n7', (url, opts) => {
-        expect(opts.method).toBe('PATCH')
+      ['/wiki/v2/spaces/sp1/nodes/n7/update_title', (url, opts) => {
+        expect(opts.method).toBe('POST')
         expect(JSON.parse(opts.body).title).toBe('标记项目页 v2【已结项】')
         return okJson({})
       }],
@@ -173,7 +173,7 @@ describe('S61 知识库绑定与写入', () => {
     expect(r.marked).toBe(true)
     expect(r.title).toBe('标记项目页 v2【已结项】')
     expect(getProjectWiki(db, p.id).title).toBe('标记项目页 v2【已结项】') // 绑定行 title 同步
-    expect(calls.some((c) => c.url.includes('/wiki/v2/spaces/sp1/nodes/n7'))).toBe(true)
+    expect(calls.some((c) => c.url.includes('/wiki/v2/spaces/sp1/nodes/n7/update_title'))).toBe(true)
     const auditRow = db.prepare("SELECT detail FROM audit_logs WHERE action = 'project.wiki.close_mark' ORDER BY id DESC LIMIT 1").get()
     expect(auditRow).toBeTruthy()
   })
@@ -184,12 +184,12 @@ describe('S61 知识库绑定与写入', () => {
     await bindProjectWiki(db, p.id, { wikiUrl: 'https://x.feishu.cn/wiki/n6' }, members.admin.id)
     const calls = stubFetch([
       ['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n6', obj_token: 'doc6', obj_type: 'docx', title: '幂等项目页【已结项】', space_id: 'sp1' } })],
-      ['/wiki/v2/spaces/sp1/nodes/n6', () => okJson({})],
+      ['/wiki/v2/spaces/sp1/nodes/n6/update_title', () => okJson({})],
     ])
     const r = await markWikiClosed(db, p.id, members.admin.id)
     expect(r.marked).toBe(false)
     expect(r.reason).toBe('already')
-    expect(calls.some((c) => c.opts?.method === 'PATCH')).toBe(false)
+    expect(calls.some((c) => c.url.includes('update_title'))).toBe(false)
     // 未绑定项目：连 get_node 都不发（未绑定闸在飞书凭证检查之前）
     const p2 = freshProject('未绑定标记项目')
     const before = calls.length
@@ -201,10 +201,10 @@ describe('S61 知识库绑定与写入', () => {
     const p = freshProject('提示项目')
     stubFetch([['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n5', obj_token: 'doc5', obj_type: 'docx', title: '提示项目页', space_id: 'sp1' } })]])
     await bindProjectWiki(db, p.id, { wikiUrl: 'https://x.feishu.cn/wiki/n5' }, members.admin.id)
-    // 失败路径：PATCH 权限不足（131006）→ 人话提示含可执行指引，不抛出
+    // 失败路径：update_title 权限不足（131006）→ 人话提示含可执行指引，不抛出
     stubFetch([
       ['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n5', obj_token: 'doc5', obj_type: 'docx', title: '提示项目页', space_id: 'sp1' } })],
-      ['/wiki/v2/spaces/sp1/nodes/n5', () => ({ ok: true, json: async () => ({ code: 131006, msg: 'forbidden' }) })],
+      ['/wiki/v2/spaces/sp1/nodes/n5/update_title', () => ({ ok: true, json: async () => ({ code: 131006, msg: 'forbidden' }) })],
     ])
     const fail = await wikiCloseMarkNotice(db, p.id, members.admin.id)
     expect(fail).toContain('知识页标题标记失败')
@@ -212,7 +212,7 @@ describe('S61 知识库绑定与写入', () => {
     // 成功路径：提示含标记后的标题
     stubFetch([
       ['/wiki/v2/spaces/get_node', () => okJson({ node: { node_token: 'n5', obj_token: 'doc5', obj_type: 'docx', title: '提示项目页', space_id: 'sp1' } })],
-      ['/wiki/v2/spaces/sp1/nodes/n5', () => okJson({})],
+      ['/wiki/v2/spaces/sp1/nodes/n5/update_title', () => okJson({})],
     ])
     const okMsg = await wikiCloseMarkNotice(db, p.id, members.admin.id)
     expect(okMsg).toContain('知识页标题已标记')

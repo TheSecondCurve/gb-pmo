@@ -102,8 +102,8 @@ describe('S25 Agent 提议式项目与配置操作', () => {
       const url = String(rawUrl)
       if (url.includes('tenant_access_token')) return { ok: true, json: async () => ({ code: 0, tenant_access_token: 'tok' }) }
       if (url.includes('/wiki/v2/spaces/get_node')) return okJson({ node: { node_token: 'n295', obj_token: 'doc295', obj_type: 'docx', title: '提议结项标记项目页', space_id: 'sp295' } })
-      if (url.includes('/wiki/v2/spaces/sp295/nodes/n295')) {
-        expect(opts.method).toBe('PATCH')
+      if (url.includes('/wiki/v2/spaces/sp295/nodes/n295/update_title')) {
+        expect(opts.method).toBe('POST')
         expect(JSON.parse(opts.body).title).toBe('提议结项标记项目页【已结项】')
         return okJson({})
       }

@@ -197,7 +197,11 @@ export async function confirmProposal(db, id, by) {
   const wikiCloseMark = p.kind === 'close_project'
     ? await import('./wiki.js').then((w) => w.wikiCloseMarkNotice(db, Number(p.payload.projectId), by))
     : null
-  return { proposal: getProposal(db, id), result, wikiCloseMark }
+  // S76（v0.89，K76）：提议结项生效后专题群名追加【已结项】——同口径尽力而为
+  const chatCloseMark = p.kind === 'close_project'
+    ? await import('./channels.js').then((c) => c.chatCloseMarkNotice(db, Number(p.payload.projectId), by))
+    : null
+  return { proposal: getProposal(db, id), result, wikiCloseMark, chatCloseMark }
 }
 
 export async function rejectProposal(db, id, by) {
