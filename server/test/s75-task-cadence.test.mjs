@@ -163,6 +163,10 @@ describe('S75 常态任务周期四档', () => {
     createTask(db, { projectId: p.id, title: '双周对账A', cadence: { type: 'biweekly', weekdays: [1], parity: 0 } }, members.admin.id)
     createTask(db, { projectId: p.id, title: '周三例会C', cadence: { type: 'weekly', weekdays: [3] } }, members.admin.id)
     createTask(db, { projectId: p.id, title: '每日巡检D' }, members.admin.id)
+    // 同族时钟隔离②：建任务/立项事件的 business_time 落的也是真实 Date.now()——真实日期
+    // 越过假日历后会被「昨日以来动态」（sinceMs=假日 dayStart-1d）误带入正文。回拨到
+    // 假日历 11-01（早于三段所有窗口），恢复与真实运行日解耦的通过状态；断言不动。
+    db.prepare('UPDATE project_events SET business_time = ?, created_at = ? WHERE project_id = ?').run(bjNov(1), bjNov(1), p.id)
 
     const sent = []
     // v0.91 附带修复（日期炸弹）：晨报幂等行 created_at 是真实时刻，注入时刻向前倒跳（15→9 号）时
@@ -179,6 +183,11 @@ describe('S75 常态任务周期四档', () => {
     expect(day1).not.toContain('周三例会C') // 周日不适用（weekly 只认周三）
     expect(day1Tomorrow).toContain('双周对账A') // 明日 11-16 周一命中序列 A 周（v0.87.3 隔周，明日预览如实带出）
 
+    // 时钟隔离（v0.89 随行修复）：pushes.created_at 落的是真实 Date.now()（push.js），
+    // 幂等闸门却拿注入假时钟的 dayStart 比——真实日期越过假 11-09 起本段被上一段
+    // 的推送记录误判「今日已推送」跳过（2026-11-09 起 CI 永久红）。每段前清掉
+    // morning 推送行让三段各自到达 send；断言全部不动（K16 测试时钟纪律）。
+    db.prepare("DELETE FROM pushes WHERE push_type = 'morning'").run()
     const sent2 = []
     clearMorningLedger()
     await dailyProjectMorningPush(db, { now: () => bjNov(9), send: async (m) => { sent2.push(m); return { messageId: 'om_2' } } }) // 2026-11-09 周一（周序号 149 → 序列 B 周）
@@ -194,6 +203,7 @@ describe('S75 常态任务周期四档', () => {
     const day2TomorrowOnly = day2Tomorrow.split('【昨日以来动态】')[0]
     expect(day2TomorrowOnly).not.toContain('双周对账A')
 
+    db.prepare("DELETE FROM pushes WHERE push_type = 'morning'").run()
     const sent3 = []
     clearMorningLedger()
     await dailyProjectMorningPush(db, { now: () => bjNov(16), send: async (m) => { sent3.push(m); return { messageId: 'om_3' } } }) // 2026-11-16 周一（周序号 150 → 序列 A 周，隔周回归）

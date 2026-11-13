@@ -817,6 +817,16 @@ S69 的「适用星期」只能表达星期几组合；本场景把常态任务�
 | S75-5 | 当迁移 0038 执行时老任务回填正确（NULL/全周→daily；子集→weekly），weekdays 列删除；出参 weekdays 为 cadence 派生（daily→[1..7]） | 同上 |
 | S75-6 | 当盘点/视图行展示周期时用 cadenceLabel；bot add_task/确认卡/立项模板 weekdays 载荷兼容生效 | 同上 |
 
+## S76（P0）— 系统（大脑·飞书 IM）— 结项自动标记专题群群名【已结项】（v0.89）
+
+项目结项后飞书里的项目群名看不出已结束（K76；与 K73 知识页标题标记同族、各自独立）。三个结项入口（web 结项、提议确认卡、机器人一条链）在结项成功后，对项目绑定的每个飞书专题群（channels：platform=feishu、channelType=dedicated，可多群）GET 群信息取**当前**群名 → `PUT /im/v1/chats/:chat_id` 追加「【已结项】」→ 同步 channels.name + audit（`project.chat.close_mark`）。尽力而为不阻断、幂等可重入；通用群（general）不标记；取消（cancelled）不标记。前置：应用 `im:chat:update` 权限 + 机器人在群有编辑权（群管理员或群开全员可编辑）。决策见 design.md K76。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S76-1 | 当项目结项成功且绑定飞书专题群时，群名追加【已结项】（基于群当前名而非 channels.name 快照），channels.name 同步、审计留痕；web/确认卡/机器人三入口行为一致（web 与确认卡响应带 chatCloseMark，机器人终态通知播报一行） | `server/test/s76-chat-close-mark.test.mjs` |
+| S76-2 | 当群名已带【已结项】（幂等，零改名请求）、或只绑通用群（general 不标记）、或未绑飞书群、或项目为取消（cancelled 不标记）时，无改名动作、无多余飞书请求 | 同上 |
+| S76-3 | 当标记失败（群已解散/机器人无权限/凭证未配）时结项照常完成，提示翻人话（chatCloseMark / 播报一行），不抛出不阻断，且不影响知识页标记（K73） | 同上 |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

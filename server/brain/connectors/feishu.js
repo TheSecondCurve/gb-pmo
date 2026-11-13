@@ -219,6 +219,21 @@ export async function getChat(cfg, chatId) {
   return data.data || {}
 }
 
+/** 改群名（S76 结项给专题群名追加【已结项】，K76）。需应用 im:chat:update 权限且机器人在目标群
+ *  有编辑权（群管理员，或群开「所有成员可编辑群信息」）；群已解散/无权限由调用方兜人话提示。 */
+export async function renameChat(cfg, chatId, name) {
+  const token = await tenantToken(cfg)
+  const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/chats/${chatId}`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ name }),
+  })
+  if (!res.ok) throw Object.assign(new Error(`飞书群改名 HTTP ${res.status}`), { statusCode: 502 })
+  const data = await res.json()
+  if (data.code !== 0) throw Object.assign(new Error(`飞书群改名失败(${data.code}): ${data.msg}`), { statusCode: 502 })
+  return data.data || {}
+}
+
 /** 机器人自身信息（S20-16：open_id 用于群消息 @ 判定；调用方连接时取一次缓存）。 */
 export async function getBotInfo(cfg) {
   const token = await tenantToken(cfg)
@@ -358,9 +373,11 @@ export async function createWikiNode(cfg, spaceId, { parentNodeToken, title } = 
   return normalizeWikiNode(data.node)
 }
 
-/** 改 wiki 节点标题（知识库树里的显示名，不动 docx 内文标题块；K73 结项标记用）。 */
+/** 改 wiki 节点标题（知识库树里的显示名，不动 docx 内文标题块；K73 结项标记用）。
+ *  官方端点是 POST …/nodes/:node_token/update_title——不存在对节点本身的 PATCH；
+ *  K73 曾错调 PATCH /nodes/:node_token 被网关 404（离线桩测不出来，线上从未成功），v0.88.1 修正。 */
 export async function renameWikiNode(cfg, spaceId, nodeToken, title) {
-  const data = await feishuApi(cfg, `/wiki/v2/spaces/${spaceId}/nodes/${nodeToken}`, { method: 'PATCH', body: { title } })
+  const data = await feishuApi(cfg, `/wiki/v2/spaces/${spaceId}/nodes/${nodeToken}/update_title`, { method: 'POST', body: { title } })
   return normalizeWikiNode(data.node)
 }
 
