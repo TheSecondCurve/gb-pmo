@@ -345,6 +345,15 @@ export async function routeUnrouted(db, id, projectId, { llm: llmOverride, send 
 }
 
 /**
+ * S69-9（v0.91，K64 修订）候选 id 容错解析：清单以 "#306 标题" 呈现，模型会回显带 # 前缀的字符串
+ * （GLM-5.3-Flash 实测）——裸 Number() 得 NaN 使候选在过滤链静默蒸发（线上事故主因）。统一剥前缀再数值化。
+ */
+function parseTargetId(value) {
+  const n = Number(String(value ?? '').replace(/^#/, ''))
+  return Number.isInteger(n) && n > 0 ? n : NaN
+}
+
+/**
  * LLM 抽取：项目上下文 + 消息（可多条，S50 批量） → 事件数组（每条附 sourceMsg 源消息）。
  * 多条时 prompt 追加 msgIndex 归因约定；LLM 缺省/越界时归批次末条（LLM 答复通常针对最新消息）。
  * LLM 未配置时确定性降级：只产记录型进展事件（绝不自动改任务面，信任边界兜底）。
@@ -362,11 +371,11 @@ export async function extractEvents(llm, db, projectId, messages) {
   }
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId)
   const tasks = db
-    .prepare(`SELECT t.id, t.title, t.status, t.plan_end_date, m.name AS owner FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id WHERE t.project_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL`)
+    .prepare(`SELECT t.id, t.title, t.status, t.kind, t.plan_end_date, m.name AS owner FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id WHERE t.project_id = ? AND t.status IN ('todo','doing') AND t.deleted_at IS NULL`)
     .all(projectId)
   const milestones = db.prepare('SELECT id, name, plan_date FROM milestones WHERE project_id = ? AND status = ?').all(projectId, 'planned')
 
-  const taskList = tasks.map((t) => `#${t.id} ${t.title} [${t.status}${t.plan_end_date ? ` 截止${t.plan_end_date}` : ''}${t.owner ? ` 负责:${t.owner}` : ''}]`).join('\n') || '（无未完任务）'
+  const taskList = tasks.map((t) => `#${t.id} ${t.kind === 'routine' ? '〔常态〕' : ''}${t.title} [${t.status}${t.plan_end_date ? ` 截止${t.plan_end_date}` : ''}${t.owner ? ` 负责:${t.owner}` : ''}]`).join('\n') || '（无未完任务）'
   const msList = milestones.map((m) => `#${m.id} ${m.name} ${m.plan_date || ''}`).join('\n') || '（无里程碑）'
   const msgList = messages.map((m, i) => `[${i}] ${m.speakerName}: ${m.text}`).join('\n')
   const multi = messages.length > 1 // S50：多条时启用 msgIndex 归因约定
@@ -377,13 +386,13 @@ export async function extractEvents(llm, db, projectId, messages) {
         role: 'system',
         content: `你是企业项目大脑的抽取器。从群聊消息中抽取项目事件，输出 JSON {"events":[...]}。
 每条事件：{"nature":"record"|"suggestion","eventType":"progress|risk|decision|blocker|finance|schedule_change|status_change|owner_change","summary":"一句中文摘要","confidence":0~1,
-"suggestion 时必填":"targetObject=task|milestone、targetTaskId=所选对象清单里的#id、targetName=对象名称、targetField、targetValue"}。
+"suggestion 时必填":"targetObject=task|milestone、targetTaskId=所选对象清单里#后面的数字 id、targetName=对象名称、targetField、targetValue"}。
 字段与值：任务支持 status=todo|doing|done、plan_start_date/plan_end_date=YYYY-MM-DD、responsible_member_id=成员id；里程碑支持 status=planned|met|missed|cancelled、plan_date=YYYY-MM-DD。
 判定规则——群聊绝大多数围绕任务展开，每条消息先找状态/日期/责任人变更信号，找不到才按纯记录处理：
-① 完成或结束信号（完成了、搞定了、做完了、弄完了、上线了、交付了、验收通过了、评审过了、收尾了、这块结了、可以验收了等口语变体）→ 必须产 suggestion（eventType=status_change）：任务 status=done、里程碑 status=met；不得只产 record——record 归档不能替代状态变更。消息同时含过程细节时可另产一条 record（eventType=progress，可带 targetTaskId 归档任务时间线）摘要过程，两件事并存。「基本完成、差不多了、快了、还剩 X」是进行中不是完成，按 record 处理。
-② 开始或推进信号（开工了、开始做了、排上了、在做了）→ suggestion（eventType=status_change）：任务 status=doing。
-③ 日期信号（推迟/提前/改到 X 号/定在 X 号）→ suggestion（eventType=schedule_change）：对应对象的计划日期字段。
-④ 责任人信号（交给 X、转给 X、X 来负责）→ suggestion（eventType=owner_change）：responsible_member_id。
+① 完成或结束信号（完成了、搞定了、做完了、弄完了、上线了、交付了、验收通过了、评审过了、收尾了、这块结了、可以验收了等口语变体）→ 必须产 suggestion（eventType=status_change）：任务 status=done、里程碑 status=met；不得只产 record——record 归档不能替代状态变更。消息同时含过程细节时可另产一条 record（eventType=progress，可带 targetTaskId 归档任务时间线）摘要过程，两件事并存。「基本完成、差不多了、快了、还剩 X」是进行中不是完成，按 record 处理。**清单中标注〔常态〕的任务例外**：常态任务无终态（每日打卡型），完成/打卡/跳过信号不得产状态或日期变更建议，改产 record 事件（eventType=progress）并带 targetObject=task、targetTaskId、targetName 与 targetField="day_status"、targetValue="done"（跳过类信号给 "skip"）。
+② 开始或推进信号（开工了、开始做了、排上了、在做了）→ suggestion（eventType=status_change）：任务 status=doing（〔常态〕任务同样不适用，按 record 处理）。
+③ 日期信号（推迟/提前/改到 X 号/定在 X 号）→ suggestion（eventType=schedule_change）：对应对象的计划日期字段（〔常态〕任务无计划日期，不适用）。
+④ 责任人信号（交给 X、转给 X、X 来负责）→ suggestion（eventType=owner_change）：responsible_member_id（〔常态〕任务照常适用）。
 ⑤ 以上信号都没有的纯进展/风险/决策/阻塞/财务事实 → record（财务类消息如回款/开票/费用沟通 eventType=finance，仅记录、不含金额字段）；record 明确指向清单内某任务时可带 targetTaskId（摘要归档到该任务的更新记录）。
 对象定位：targetName 用清单中该对象的完整标题（原话用了简称也回写成完整标题，系统按标题消歧）；消息未点名对象时，结合清单与上下文推断最可能对应的任务（发言人名下任务优先），有把握就照常产出、confidence 按推断把握如实给，推不出具体任务才产项目级 record。同名或没有把握不要硬猜，给较低 confidence，不得编造 id。${multi ? '每条事件附 "msgIndex"（消息编号 [i] 的 i，0 基）指明来源消息；更新候选尤其要准确归因，无法确定时省略并降低 confidence。' : ''}
 与项目无关的寒暄不要产出。只输出 JSON。`,
@@ -404,7 +413,7 @@ export async function extractEvents(llm, db, projectId, messages) {
     .filter((e) => {
       if (e.nature !== 'suggestion') return true
       const targetObject = e.targetObject === 'milestone' || e.targetMilestoneId != null ? 'milestone' : 'task'
-      const targetId = Number(e.targetTaskId ?? e.targetMilestoneId)
+      const targetId = parseTargetId(e.targetTaskId ?? e.targetMilestoneId)
       const valid = targetObject === 'milestone' ? validMilestones : validTasks
       return targetId && valid.has(targetId) && e.targetField && e.targetValue !== undefined
     })
@@ -412,7 +421,7 @@ export async function extractEvents(llm, db, projectId, messages) {
       const hasValidIndex = Number.isInteger(e.msgIndex) && e.msgIndex >= 0 && e.msgIndex < messages.length
       const idx = hasValidIndex ? e.msgIndex : messages.length - 1
       const targetObject = e.targetObject === 'milestone' || e.targetMilestoneId != null ? 'milestone' : 'task'
-      const rawId = Number(e.targetTaskId ?? e.targetMilestoneId)
+      const rawId = parseTargetId(e.targetTaskId ?? e.targetMilestoneId)
       const valid = targetObject === 'milestone' ? validMilestones : validTasks
       const tid = rawId && valid.has(rawId) ? rawId : null
       const confidence = Number(e.confidence)

@@ -8,6 +8,7 @@ import * as auth from '../engine/auth.js'
 import * as chat from '../brain/chat.js' // S24 Web AI 助手会话（编排层复用 S20 核心 Agent）
 import * as proposalsEngine from '../engine/proposals.js' // S25 通用提议确认口子
 import * as wiki from '../engine/wiki.js' // S61 知识库绑定与写入
+import * as channels from '../engine/channels.js' // S76 结项专题群名标记
 import * as wikiArchive from '../engine/wikiArchive.js' // S63 项目群全量汇总归档知识库
 import { getAllSettings, setSetting, getSetting } from '../engine/settings.js'
 import { queryMetric, listMetrics } from '../engine/metrics.js'
@@ -159,7 +160,9 @@ export function registerApiRoutes(app) {
     const detail = projects.closeProject(db, Number(req.params.id), { summary: req.body?.summary }, req.member.id)
     // S29-5（v0.87.2，K73）：绑定了知识页则结项后标记标题【已结项】——尽力而为不阻断，提示随响应带出
     const wikiCloseMark = await wiki.wikiCloseMarkNotice(db, Number(req.params.id), req.member.id)
-    return { ...detail, wikiCloseMark }
+    // S76（v0.89，K76）：绑定了飞书专题群则结项后群名追加【已结项】——同口径尽力而为
+    const chatCloseMark = await channels.chatCloseMarkNotice(db, Number(req.params.id), req.member.id)
+    return { ...detail, wikiCloseMark, chatCloseMark }
   })
 
   app.get('/api/v1/projects/:id/closeout-draft', async (req) => {

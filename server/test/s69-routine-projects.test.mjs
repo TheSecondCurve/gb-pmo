@@ -1,10 +1,11 @@
 import { describe, it, expect, afterAll } from 'vitest'
 import { setupDb, seedMembers, setupApp, loginCookie, authed } from './helpers.mjs'
 import { createProject, updateProject, closeProject, queryProjects } from '../engine/projects.js'
-import { createTask, updateTask, deleteTask, tasksInventory } from '../engine/tasks.js'
+import { createTask, updateTask, deleteTask, tasksInventory, upsertChannel } from '../engine/tasks.js'
 import { getDailyBoard, setDayStatus } from '../engine/dailyBoard.js'
 import { listEvents } from '../engine/events.js'
 import { runWriteTool } from '../brain/bot/tools.js'
+import { ingestMessages, extractEvents } from '../brain/extract.js'
 import { PROPOSAL_KINDS } from '../engine/proposals.js'
 import { queryMetric } from '../engine/metrics.js'
 import { myWork, myTasksBoard } from '../engine/statusBoard.js'
@@ -374,5 +375,149 @@ describe('S69 常态项目与每周执行周视图', () => {
     expect(() => updateProject(db, delivery.id, { boardSpan: 'month' }, members.admin.id)).toThrow(/常态/)
     // 未设默认的常态项目缺省周
     expect(getDailyBoard(db, routine.id).span).toBe('week')
+  })
+})
+
+// —— S69-9（v0.91，K64 修订）：常态项目群消息抽取面自动打卡 ——
+// 成员不@机器人直接发打卡消息 → 定时抽取高置信自动写当日打卡记录（复用 setDayStatus 同一写入口）；
+// 低置信/多义/未识别发言人/不适用日降级 record 归档；routine 任务状态/日期建议持久层硬拒。
+describe('S69-9 常态项目群消息抽取面自动打卡（v0.91）', () => {
+  // 固定过去日：2026-11-12 周四 20:00 北京（11-13 是周五）——day 断言不依赖真实今天
+  const THU_8PM = Date.UTC(2026, 10, 12, 12, 0, 0)
+  const fakeLlm = (events) => ({ name: 'fake', complete: async () => JSON.stringify({ events }) })
+
+  const mk = () => {
+    const local = setupDb()
+    const m = seedMembers(local.db)
+    const p = createProject(local.db, {
+      name: '打卡抽取', kind: 'routine', typeCode: 'routine_ops', leadMemberId: m.lead.id,
+      tasks: ['看资讯', { title: '周报整理', weekdays: [1, 3, 5] }], // 每天 / 每周一三五（周四不适用）
+    }, m.admin.id)
+    const ch = upsertChannel(local.db, { platform: 'feishu', groupKey: 'oc_ck', channelType: 'dedicated', projectId: p.id }, m.admin.id)
+    return { db: local.db, close: () => local.db.close(), members: m, project: p, ch, dailyTask: p.tasks[0], weeklyTask: p.tasks[1] }
+  }
+  const dayRow = (db, taskId, day) => db.prepare('SELECT * FROM task_day_records WHERE task_id = ? AND day = ?').get(taskId, day)
+
+  it('S69-9: 高置信打卡候选（唯一命中+发言人已映射+归因明确）→ 自动写当日打卡记录，事件/审计与 bot 打卡同构', async () => {
+    const t = mk()
+    try {
+      const llm = fakeLlm([
+        // targetName 带清单标记回显 + targetTaskId 带 # 前缀——均为真实模型实测形态（GLM-5.3-Flash）
+        { nature: 'record', eventType: 'progress', summary: '看资讯打卡完成', targetObject: 'task', targetTaskId: `#${t.dailyTask.id}`, targetName: '〔常态〕看资讯', targetField: 'day_status', targetValue: 'done', confidence: 0.92, msgIndex: 0 },
+      ])
+      const stats = await ingestMessages(t.db, t.ch, [{ id: 'om_ck1', speakerId: 'fs_zhang', text: '看资讯打卡', ts: THU_8PM }], { llm })
+      // 当日打卡记录：day=消息北京日、done、操作人=发言成员、source=bot
+      const row = dayRow(t.db, t.dailyTask.id, '2026-11-12')
+      expect(row).toBeTruthy()
+      expect(row.status).toBe('done')
+      expect(row.operator_member_id).toBe(t.members.lead.id)
+      expect(row.source).toBe('bot')
+      // 事件：setDayStatus 同构（🗓 摘要 + operation_key 幂等锚点 + record/progress/effective）
+      const evt = t.db.prepare(`SELECT * FROM project_events WHERE source_ref = 'om_ck1'`).get()
+      expect(evt.summary).toBe(`🗓 任务「看资讯」2026-11-12 完成`)
+      expect(evt.nature).toBe('record')
+      expect(evt.status).toBe('effective')
+      expect(evt.operation_key).toContain('om_ck1')
+      expect(evt.operation_key).toContain('day_status')
+      expect(evt.speaker_member_id).toBe(t.members.lead.id)
+      // 审计与 S60 播报聚合
+      expect(t.db.prepare(`SELECT * FROM audit_logs WHERE action = 'task.dayStatus' AND object_id = ?`).get(String(t.dailyTask.id))).toBeTruthy()
+      expect(stats.progressEvents).toHaveLength(1)
+      expect(stats.events).toBe(1)
+    } finally { t.close() }
+  })
+
+  it('S69-9: 同消息重放不重复打卡；人工重置后重放不复活（operation_key 幂等）', async () => {
+    const t = mk()
+    try {
+      const llm = fakeLlm([
+        { nature: 'record', eventType: 'progress', summary: '看资讯打卡完成', targetTaskId: t.dailyTask.id, targetName: '看资讯', targetField: 'day_status', targetValue: 'done', confidence: 0.92, msgIndex: 0 },
+      ])
+      await ingestMessages(t.db, t.ch, [{ id: 'om_ck2', speakerId: 'fs_zhang', text: '看资讯打卡', ts: THU_8PM }], { llm })
+      // 人工重置（删行）
+      setDayStatus(t.db, { projectId: t.project.id, taskId: t.dailyTask.id, day: '2026-11-12', status: 'pending' }, t.members.lead.id)
+      expect(dayRow(t.db, t.dailyTask.id, '2026-11-12')).toBeFalsy()
+      // 同消息重放：operation_key 已存在 → 跳过自动打卡，不复活行、不重复事件
+      const eventsBefore = t.db.prepare('SELECT COUNT(*) AS n FROM project_events').get().n
+      await ingestMessages(t.db, t.ch, [{ id: 'om_ck2', speakerId: 'fs_zhang', text: '看资讯打卡', ts: THU_8PM }], { llm })
+      expect(dayRow(t.db, t.dailyTask.id, '2026-11-12')).toBeFalsy()
+      expect(t.db.prepare('SELECT COUNT(*) AS n FROM project_events').get().n).toBe(eventsBefore)
+      // 同一天第二条不同消息再打卡：照常落行（不同 operation_key）
+      await ingestMessages(t.db, t.ch, [{ id: 'om_ck3', speakerId: 'fs_zhang', text: '看资讯又打卡', ts: THU_8PM + 60_000 }], { llm })
+      expect(dayRow(t.db, t.dailyTask.id, '2026-11-12')?.status).toBe('done')
+    } finally { t.close() }
+  })
+
+  it('S69-9: 未识别发言人 / 低置信 → 降级 record 归档，不写打卡记录', async () => {
+    const t = mk()
+    try {
+      const stranger = fakeLlm([
+        { nature: 'record', eventType: 'progress', summary: '看资讯打卡', targetTaskId: t.dailyTask.id, targetName: '看资讯', targetField: 'day_status', targetValue: 'done', confidence: 0.95, msgIndex: 0 },
+      ])
+      await ingestMessages(t.db, t.ch, [{ id: 'om_ck4', speakerId: 'fs_stranger', text: '看资讯打卡', ts: THU_8PM }], { llm: stranger })
+      expect(dayRow(t.db, t.dailyTask.id, '2026-11-12')).toBeFalsy() // 无操作人归因 → 不自动打卡
+      expect(t.db.prepare(`SELECT COUNT(*) AS n FROM project_events WHERE raw_snapshot = '看资讯打卡'`).get().n).toBe(1) // record 照归档
+
+      const lowConf = fakeLlm([
+        { nature: 'record', eventType: 'progress', summary: '看资讯好像打卡了', targetTaskId: t.dailyTask.id, targetName: '看资讯', targetField: 'day_status', targetValue: 'done', confidence: 0.6, msgIndex: 0 },
+      ])
+      await ingestMessages(t.db, t.ch, [{ id: 'om_ck5', speakerId: 'fs_zhang', text: '看资讯好像打卡了', ts: THU_8PM }], { llm: lowConf })
+      expect(dayRow(t.db, t.dailyTask.id, '2026-11-12')).toBeFalsy()
+      expect(t.db.prepare(`SELECT COUNT(*) AS n FROM project_events WHERE raw_snapshot = '看资讯好像打卡了'`).get().n).toBe(1)
+    } finally { t.close() }
+  })
+
+  it('S69-9: 不适用日（每周一三五任务周四打卡）→ 降级 record，不写行不炸；交付项目任务无 day_status 语义', async () => {
+    const t = mk()
+    try {
+      const llm = fakeLlm([
+        { nature: 'record', eventType: 'progress', summary: '周报整理打卡', targetTaskId: t.weeklyTask.id, targetName: '周报整理', targetField: 'day_status', targetValue: 'done', confidence: 0.95, msgIndex: 0 },
+      ])
+      const stats = await ingestMessages(t.db, t.ch, [{ id: 'om_ck6', speakerId: 'fs_zhang', text: '周报整理打卡', ts: THU_8PM }], { llm })
+      expect(dayRow(t.db, t.weeklyTask.id, '2026-11-12')).toBeFalsy() // 周四不适用
+      expect(t.db.prepare(`SELECT COUNT(*) AS n FROM project_events WHERE raw_snapshot = '周报整理打卡'`).get().n).toBe(1) // 降级归档
+      expect(stats.events).toBe(1)
+
+      // 交付项目对照：day_status 候选对非 routine 任务无语义 → 降级 record，不写行
+      const deliveryP = createProject(t.db, { name: '打卡对照交付', typeCode: 'lianmai_365', leadMemberId: t.members.lead.id, planEndDate: '2026-12-31' }, t.members.admin.id)
+      const dch = upsertChannel(t.db, { platform: 'feishu', groupKey: 'oc_ck_d', channelType: 'dedicated', projectId: deliveryP.id }, t.members.admin.id)
+      const dllm = fakeLlm([
+        { nature: 'record', eventType: 'progress', summary: '设备预检打卡', targetTaskId: deliveryP.tasks[0].id, targetName: deliveryP.tasks[0].title, targetField: 'day_status', targetValue: 'done', confidence: 0.95, msgIndex: 0 },
+      ])
+      await ingestMessages(t.db, dch, [{ id: 'om_ck7', speakerId: 'fs_zhang', text: '设备预检打卡', ts: THU_8PM }], { llm: dllm })
+      expect(t.db.prepare('SELECT COUNT(*) AS n FROM task_day_records').get().n).toBe(0)
+      expect(t.db.prepare(`SELECT COUNT(*) AS n FROM project_events WHERE raw_snapshot = '设备预检打卡'`).get().n).toBe(1)
+    } finally { t.close() }
+  })
+
+  it('S69-9: 模型误产 routine 任务 status/plan_date 建议 → 持久层硬守卫拒绝（任务面不动、无建议事件）；responsible_member_id 不受限', async () => {
+    const t = mk()
+    try {
+      const llm = fakeLlm([
+        { nature: 'suggestion', eventType: 'status_change', summary: '看资讯完成了', targetObject: 'task', targetTaskId: t.dailyTask.id, targetName: '看资讯', targetField: 'status', targetValue: 'done', confidence: 0.95, msgIndex: 0 },
+        { nature: 'suggestion', eventType: 'schedule_change', summary: '看资讯推迟', targetObject: 'task', targetTaskId: t.dailyTask.id, targetName: '看资讯', targetField: 'plan_end_date', targetValue: '2026-12-01', confidence: 0.95, msgIndex: 0 },
+        { nature: 'suggestion', eventType: 'owner_change', summary: '看资讯交给李四', targetObject: 'task', targetTaskId: t.dailyTask.id, targetName: '看资讯', targetField: 'responsible_member_id', targetValue: String(t.members.dev.id), confidence: 0.95, msgIndex: 0 },
+      ])
+      const stats = await ingestMessages(t.db, t.ch, [{ id: 'om_ck8', speakerId: 'fs_zhang', text: '看资讯完成了 交给李四', ts: THU_8PM }], { llm })
+      // 状态/日期建议被硬守卫拒绝：任务面不动、无对应建议事件（既不 pending 也不生效）
+      expect(t.db.prepare('SELECT status FROM tasks WHERE id = ?').get(t.dailyTask.id).status).toBe('todo')
+      expect(t.db.prepare(`SELECT COUNT(*) AS n FROM project_events WHERE target_task_id = ? AND target_field IN ('status','plan_end_date')`).get(t.dailyTask.id).n).toBe(0)
+      expect(stats.suggestions).toBe(1) // owner_change 不受限：保留为候选（自动或 pending 走 K50 既有闸门）
+      expect(t.db.prepare(`SELECT COUNT(*) AS n FROM project_events WHERE target_task_id = ? AND target_field = 'responsible_member_id'`).get(t.dailyTask.id).n).toBe(1)
+    } finally { t.close() }
+  })
+
+  it('S69-9: 抽取提示词契约——routine 任务清单带〔常态〕标记；打卡信号产 day_status、禁状态建议', async () => {
+    const t = mk()
+    try {
+      let sys = ''
+      let user = ''
+      const llm = { name: 'fake', complete: async (messages) => { sys = messages[0].content; user = messages.find((m) => m.role === 'user')?.content || ''; return JSON.stringify({ events: [] }) } }
+      await extractEvents(llm, t.db, t.project.id, [{ speakerName: '张三', text: '看资讯打卡' }])
+      expect(sys).toContain('〔常态〕') // 规则句解释清单标记
+      expect(sys).toContain('day_status') // 打卡信号 → day_status 候选
+      expect(sys).toMatch(/常态任务无终态/) // 常态任务禁状态变更建议的规则句
+      expect(user).toContain(`#${t.dailyTask.id} 〔常态〕看资讯`) // 清单渲染带标记
+    } finally { t.close() }
   })
 })
