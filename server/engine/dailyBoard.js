@@ -268,9 +268,11 @@ export function getDailyBoard(db, projectId, { anchor, span, now = Date.now() } 
  * progress 事件 + 审计。可补过去日期、拒绝未来日期（北京日）；不适用日 400（S75 起按 cadence 判定）；
  * 备注 ≤200 字；终态项目 409 只读。
  * origin：web（页面格子）| bot（机器人 checkin_task，事件归因 sourcePlatform/generatedBy 随通道）。
+ * sourceRef/operationKey/businessTime（v0.91，S69-9）：抽取面自动打卡的溯源透传——源消息 id、
+ * 幂等锚点（K50 同款防重放）与业务时刻（缺省 now）；web/bot 既有路径不受影响（缺省 null/now）。
  * now：时钟注入（getDailyBoard 同款；缺省真实时刻）。
  */
-export function setDayStatus(db, { projectId, taskId, day, status, note }, by, { origin = 'web', sourcePlatform, now = Date.now() } = {}) {
+export function setDayStatus(db, { projectId, taskId, day, status, note }, by, { origin = 'web', sourcePlatform, sourceRef = null, operationKey = null, businessTime, now = Date.now() } = {}) {
   const project = assertRoutineProject(db, projectId)
   if (project.status === 'closed' || project.status === 'cancelled') {
     throw Object.assign(new Error('项目已结项/取消，周视图只读（S29 终态不可逆）'), { statusCode: 409 })
@@ -325,9 +327,10 @@ export function setDayStatus(db, { projectId, taskId, day, status, note }, by, {
     if (changed) {
       // 状态/备注变更才留讨论面痕迹（幂等重置无行、重复设置同值不刷事件流）
       const evt = addEvent(db, {
-        projectId: project.id, businessTime: now, nature: 'record', eventType: 'progress',
+        projectId: project.id, businessTime: businessTime ?? now, nature: 'record', eventType: 'progress',
         summary: `🗓 任务「${task.title}」${dayStr} ${label('dayStatus', nextStatus)}${cleanNote ? `：${cleanNote}` : ''}`,
         sourcePlatform: origin === 'bot' ? (sourcePlatform || 'feishu') : 'web',
+        sourceRef, operationKey,
         speakerMemberId: by ?? null,
         generatedBy: origin === 'bot' ? 'agent' : 'web',
       })

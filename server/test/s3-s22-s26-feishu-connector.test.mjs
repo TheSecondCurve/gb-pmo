@@ -114,6 +114,27 @@ describe('S3 消息拉取（fetchMessages / 文本归一）', () => {
     } finally { restore() }
   })
 
+  it('【工程防线】create_time 混合单位归一：文本 10 位秒 + 图片 13 位毫秒 → ts/nextCursor 恒秒级（K70 修订，v0.91）', async () => {
+    // 线上实证形态：飞书 im/v1/messages 的 create_time 文本是秒、图片/文件是毫秒——
+    // 不归一则 lastSec 被图片顶成毫秒，nextCursor 13 位写库后下轮 start_time 溢出成公元 5 万年，
+    // 渠道 API 拉取永久失败（v0.85.1 只修了 fetchChatHistory，增量拉取漏了同款归一）
+    const { restore } = stubFetch([
+      tokenOk,
+      ['/im/v1/messages', { code: 0, data: { has_more: false, items: [
+        { message_id: 't1', msg_type: 'text', create_time: '1793583000', sender: { id: 'ou_1' }, body: { content: '{"text":"文本秒"}' } },
+        { message_id: 'i1', msg_type: 'image', create_time: '1793583051219', sender: { id: 'ou_1' }, body: { content: '{"image_key":"img_v3_1"}' } },
+        { message_id: 't2', msg_type: 'text', create_time: '1793583100', sender: { id: 'ou_2' }, body: { content: '{"text":"后到的文本"}' } },
+      ] } }],
+    ])
+    try {
+      const out = await fetchMessages(CFG, { groupKey: 'oc_g' }, '1793582000')
+      expect(out.nextCursor).toBe('1793583100') // 秒级 10 位——毫秒消息不得把游标顶成 13 位
+      const byId = Object.fromEntries(out.messages.map((m) => [m.id, m]))
+      expect(byId.i1.ts).toBe(1793583051000) // 毫秒消息的 ts 归一成 秒×1000（不溢出）
+      expect(byId.t1.ts).toBe(1793583000000)
+    } finally { restore() }
+  })
+
   it('上游失败：HTTP 非 2xx 与业务码非 0 都抛 502 并带飞书业务信息（S22-6 同构口径）', async () => {
     let restore = stubFetch([['/auth/v3/tenant_access_token', new Response('gateway down', { status: 502 })]]).restore
     try {

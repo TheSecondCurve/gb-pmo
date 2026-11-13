@@ -3,6 +3,7 @@ import { setupDb, seedMembers } from './helpers.mjs'
 import { createProject } from '../engine/projects.js'
 import { upsertChannel } from '../engine/tasks.js'
 import { ingestMessages, isNoiseMessage } from '../brain/extract.js'
+import { today, addDays } from '../db/time.js'
 
 // PRD S50（v0.55，K33）— 抽取噪音预过滤 + 按项目批量抽取：
 // 噪音不进 LLM；按项目归组分批（≤8 条且 ≤3000 字）一次调用；事件按 msgIndex 归因源消息。
@@ -139,26 +140,30 @@ describe('S50 噪音预过滤与批量抽取', () => {
     const t0 = Date.now() - 3600000
     db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(t0 - 1000, target.id)
     let calls = 0
+    // v0.91 附带修复（日期炸弹）：targetValue 原写死 2026-11-0x——真实日期越过后，模板任务的计划开始日
+    // 晚于写死值，validateOption「开始不得晚于结束」拒掉候选。改动态未来日（K16：日期推算走 db/time）。
+    const d1 = addDays(today(), 20)
+    const d2 = addDays(today(), 30)
     const llm = fakeLlm(() => {
       calls += 1
-      return JSON.stringify({ events: [{ msgIndex: 0, nature: 'suggestion', eventType: 'schedule_change', summary: `${target.title}改期`, targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'plan_end_date', targetValue: calls === 1 ? '2026-11-01' : '2026-11-10', confidence: 0.95 }] })
+      return JSON.stringify({ events: [{ msgIndex: 0, nature: 'suggestion', eventType: 'schedule_change', summary: `${target.title}改期`, targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'plan_end_date', targetValue: calls === 1 ? d1 : d2, confidence: 0.95 }] })
     })
     const messages = Array.from({ length: 10 }, (_, i) => ({ id: `cross_${i}`, speakerId: 'fs_zhang', text: `${target.title}更新 ${i}`, ts: t0 + i * 60000 }))
     const stats = await ingestMessages(db, ch, messages, { llm })
     expect(calls).toBe(2)
     expect(stats.autoApplied).toBe(1)
     expect(stats.suggestions).toBe(0)
-    expect(db.prepare('SELECT plan_end_date FROM tasks WHERE id = ?').get(target.id).plan_end_date).toBe('2026-11-10')
+    expect(db.prepare('SELECT plan_end_date FROM tasks WHERE id = ?').get(target.id).plan_end_date).toBe(d2)
     expect(db.prepare(`SELECT COUNT(*) AS n FROM project_events WHERE target_task_id = ? AND nature = 'suggestion'`).get(target.id).n).toBe(1)
 
     const conflictLlm = fakeLlm(() => JSON.stringify({ events: [
-      { msgIndex: 0, nature: 'suggestion', eventType: 'schedule_change', summary: '改到 11 日', targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'plan_end_date', targetValue: '2026-11-11', confidence: 0.96 },
-      { msgIndex: 0, nature: 'suggestion', eventType: 'schedule_change', summary: '改到 12 日', targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'plan_end_date', targetValue: '2026-11-12', confidence: 0.96 },
+      { msgIndex: 0, nature: 'suggestion', eventType: 'schedule_change', summary: '改到后 40 天', targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'plan_end_date', targetValue: addDays(today(), 40), confidence: 0.96 },
+      { msgIndex: 0, nature: 'suggestion', eventType: 'schedule_change', summary: '改到后 41 天', targetObject: 'task', targetTaskId: target.id, targetName: target.title, targetField: 'plan_end_date', targetValue: addDays(today(), 41), confidence: 0.96 },
     ] }))
     const conflict = await ingestMessages(db, ch, [{ id: 'conflict_same_msg', speakerId: 'fs_zhang', text: `${target.title}改期但有歧义`, ts: t0 + 600000 }], { llm: conflictLlm })
     expect(conflict.autoApplied).toBe(0)
     expect(conflict.suggestions).toBe(1)
-    expect(db.prepare('SELECT plan_end_date FROM tasks WHERE id = ?').get(target.id).plan_end_date).toBe('2026-11-10')
+    expect(db.prepare('SELECT plan_end_date FROM tasks WHERE id = ?').get(target.id).plan_end_date).toBe(d2)
     expect(db.prepare(`SELECT status FROM project_events WHERE source_ref = 'conflict_same_msg'`).get().status).toBe('pending')
   })
 
