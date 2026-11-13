@@ -67,7 +67,12 @@ async function fetchRecentDiscussion(db, env, { fetchChat, limit, lookbackSec })
   if (!fetch) return { unavailable: true, reason: `平台 ${env.platform} 无消息连接器。` }
   const cursor = String(Math.floor(Date.now() / 1000) - lookbackSec)
   const { messages = [] } = await fetch(getSetting(db, `im.${env.platform}`), channel, cursor)
-  const botSeen = db.prepare('SELECT 1 FROM bot_commands WHERE message_id = ?')
+  // S20-23（v0.91）：只滤机器人自身消息与已处理指令——未@机器人的人类消息（refused_not_mentioned
+  // 台账行）不是机器人消息，不得过滤；口径与 S20-10 定时抽取去重一致（v0.57 修抽取面时漏改本处，
+  // 网关全量推送下生产群 recent_chat/minutes 曾恒空）
+  const botSeen = db.prepare(
+    `SELECT 1 FROM bot_commands WHERE message_id = ? AND (kind = 'bot_reply' OR (kind = 'command' AND result != 'refused_not_mentioned'))`
+  )
   const lines = messages
     .filter((m) => m.id && !botSeen.get(m.id))
     .map((m) => `${mapSpeaker(db, env.platform, m.speakerId)?.name || '未识别'}：${String(m.text || '').slice(0, 200)}`)
