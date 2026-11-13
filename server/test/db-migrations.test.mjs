@@ -72,4 +72,37 @@ describe('迁移', () => {
     expect(Number(db.prepare(`SELECT cursor FROM channels WHERE group_key = 'oc_legacy'`).get().cursor)).toBe(cursor)
     db.close()
   })
+
+  it('【工程防线】0039 游标毫秒→秒：13 位存量归秒、回看窗封顶 7 天、秒级行不动（K70 修订，v0.91）', () => {
+    const { db } = setupDb()
+    const now = Math.floor(Date.now() / 1000)
+    const rows = [
+      // [group_key, cursor, 期望断言用]：近期冻结（转秒后仍在 7 天窗内）→ 精确转秒
+      ['oc_recent_ms', String((now - 2 * 86400) * 1000)],
+      // 远古冻结（转秒后早于 now-7d）→ 封顶到 now-7d（防无幂等键的 record 重放重复）
+      ['oc_ancient_ms', String((now - 40 * 86400) * 1000)],
+      // 正常秒级行 → 原样不动
+      ['oc_sec', String(now - 86400)],
+    ]
+    for (const [key, cursor] of rows) {
+      db.prepare(
+        `INSERT INTO channels (platform, group_key, channel_type, project_id, cursor, created_at, updated_at)
+         VALUES ('feishu', ?, 'dedicated', NULL, ?, ?, ?)`
+      ).run(key, cursor, Date.now(), Date.now())
+    }
+    db.prepare(`DELETE FROM migrations_meta WHERE name = '0039_channel_cursor_ms_to_sec.sql'`).run()
+    const applied = migrate(db)
+    expect(applied).toBeGreaterThanOrEqual(1)
+    const get = (key) => Number(db.prepare(`SELECT cursor FROM channels WHERE group_key = ?`).get(key).cursor)
+    expect(get('oc_recent_ms')).toBe(now - 2 * 86400) // 毫秒→秒，窗内精确转
+    expect(get('oc_ancient_ms')).toBe(now - 7 * 86400) // 封顶：不早于 7 天前（容差 2s 内）
+    expect(Math.abs(get('oc_ancient_ms') - (now - 7 * 86400))).toBeLessThanOrEqual(2)
+    expect(get('oc_sec')).toBe(now - 86400) // 秒级行不动
+    // 全库不再有 13 位游标
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM channels WHERE length(cursor) = 13`).get().n).toBe(0)
+    // 幂等：重跑不动
+    migrate(db)
+    expect(get('oc_recent_ms')).toBe(now - 2 * 86400)
+    db.close()
+  })
 })

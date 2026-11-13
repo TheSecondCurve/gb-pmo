@@ -62,7 +62,11 @@ export async function fetchMessages(cfg, channel, cursor) {
     const data = await res.json()
     if (data.code !== 0) throw Object.assign(new Error(`飞书消息失败(${data.code}): ${data.msg}`), { statusCode: 502 })
     for (const item of data.data?.items || []) {
-      const sec = Number(item.create_time)
+      // create_time 口径不一致（K70 边界，gb-test 实证）：file/图片消息返回毫秒（13 位）、文本消息返回秒（10 位）——
+      // 统一归一到秒（fetchChatHistory 同款），否则 lastSec 顶成毫秒 → nextCursor 以 13 位写入 channels.cursor，
+      // 下轮 start=cursor+1 按秒解释溢出成公元 5 万年，渠道 API 拉取永久失败（v0.91，K70 修订）
+      const raw = Number(item.create_time)
+      const sec = raw > 1e11 ? Math.floor(raw / 1000) : raw
       messages.push({
         id: item.message_id,
         speakerId: item.sender?.id || '',

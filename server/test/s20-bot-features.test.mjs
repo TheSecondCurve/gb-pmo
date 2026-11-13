@@ -150,6 +150,42 @@ describe('S20 机器人指令通道 — 群讨论上下文 recent_chat（v0.34�
     const feedback = calls[1].map((m) => m.content).join('\n')
     expect(feedback).toContain('仅项目专题群')
   })
+
+  it('S20-23: 未@机器人的人类消息（refused_not_mentioned 台账行）不得被 recent_chat 过滤——bot_reply 仍滤（v0.91 线上修复）', async () => {
+    const p = await mkProject(ctx, '讨论戊项目', ctx.members.lead.id)
+    upsertChannel(ctx.db, { platform: 'feishu', groupKey: 'oc_rc2', name: '讨论群2', channelType: 'dedicated', projectId: p.id }, ctx.members.admin.id)
+    // 生产形态：网关全量推送下，成员不@机器人发的每条群消息都会先落 bot_commands 台账行（S20-16）
+    // 再被 refused_not_mentioned 忽略——v0.91 前 recent_chat 把这类行当「机器人消息」误滤，生产群恒空
+    const quietEvt = group('fs_zhang', 'oc_rc2', '微博评论区打卡')
+    const quiet = await handleBotEvent(ctx.db, { ...quietEvt, mentioned: false }, { send: recorder().send, secret: SECRET })
+    expect(quiet.result).toBe('refused_not_mentioned')
+    const row = ctx.db.prepare('SELECT kind, result FROM bot_commands WHERE message_id = ?').get(quietEvt.messageId)
+    expect(row.kind).toBe('command')
+    expect(row.result).toBe('refused_not_mentioned')
+
+    // 机器人真实回执一条（bot_reply 台账行——这类消息才该被过滤；回执文本与 fetchChat 里的假消息文本
+    // 分开，避免多轮历史注入把回执原文带进 calls 干扰 not.toContain 断言——同 S20-18 的构造手法）
+    const recBot = recorder()
+    await handleBotEvent(ctx.db, { ...group('fs_zhang', 'oc_rc2', '@bot 在吗'), mentioned: true }, { llm: scriptedLlm(JSON.stringify({ action: 'reply', text: '预置回执W7' })).llm, send: recBot.send, secret: SECRET })
+
+    const fetchChat = async () => ({
+      messages: [
+        { id: quietEvt.messageId, speakerId: 'fs_zhang', text: '微博评论区打卡', ts: Date.now() - 60_000 },
+        { id: recBot.sent[0].messageId, speakerId: 'ou_bot', text: '机器人回执Z9', ts: Date.now() - 50_000 },
+      ],
+      nextCursor: '9999999999',
+    })
+    const { llm, calls } = scriptedLlm(
+      JSON.stringify({ action: 'recent_chat', limit: 20 }),
+      JSON.stringify({ action: 'reply', text: '看到群里说了微博评论区打卡。' })
+    )
+    const rec = recorder()
+    const out = await handleBotEvent(ctx.db, { ...group('fs_zhang', 'oc_rc2', '@bot 看下群里刚说了什么'), mentioned: true }, { llm, send: rec.send, secret: SECRET, fetchChat })
+    expect(out.result).toBe('replied')
+    const feedback = calls[1].map((m) => m.content).join('\n')
+    expect(feedback).toContain('张三：微博评论区打卡') // 人类消息（带 refused_not_mentioned 行）不被过滤
+    expect(feedback).not.toContain('机器人回执Z9') // 机器人自身消息仍被滤
+  })
 })
 
 // —— v0.36（S20-19）：私聊占位反馈——慢路径先发「收到，正在处理…」，答案就绪把同一条消息原地编辑为最终答复。

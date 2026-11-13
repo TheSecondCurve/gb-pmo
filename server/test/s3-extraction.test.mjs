@@ -4,7 +4,7 @@ import { upsertChannel, createMilestone } from '../engine/tasks.js'
 import { ingestMessages, runExtraction, mapSpeaker, extractEvents } from '../brain/extract.js'
 import { addEvent, confirmEvent } from '../engine/events.js'
 import { getSetting } from '../engine/settings.js'
-import { today } from '../db/time.js'
+import { today, addDays } from '../db/time.js'
 
 // PRD S3 — IM 抽取与分拣（专题渠道 / 通用群 LLM 分拣 / 身份映射 / 完成信号建议）
 
@@ -159,11 +159,15 @@ describe('S3 IM 抽取与分拣', () => {
 
   it('S3-5: 【已废弃 v0.72】采纳率告警已裁撤：低于旧阈值不再推送告警、thresholds 无 acceptanceAlarm 键', async () => {
     // K51：告警整体移除。造 10 条建议（2 生效 / 8 驳回 → 20%，低于旧告警线 70%）验证不再告警
+    // v0.91 附带修复（日期炸弹）：targetValue 原写死 '2026-11-11'——今天越过该日后面向 2026-12-31 倒排的
+    // 任务 plan_start > 2026-11-11，confirmEvent 撞「计划开始日不能晚于计划结束日」400。改动态未来日
+    //（addDays(today(), 400)，K16：测试日期推算一律走 db/time）。
     const a = await mkProject('客户F系统', ctx.members.lead.id)
+    const farFuture = addDays(today(), 400)
     for (let i = 0; i < 10; i++) {
       const e = addEvent(ctx.db, {
         projectId: a.id, nature: 'suggestion', eventType: 'suggestion', summary: `建议${i}`,
-        targetTaskId: a.tasks[0].id, targetField: 'plan_end_date', targetValue: '2026-11-11', generatedBy: 'extraction',
+        targetTaskId: a.tasks[0].id, targetField: 'plan_end_date', targetValue: farFuture, generatedBy: 'extraction',
       })
       if (i < 2) confirmEvent(ctx.db, e.id, ctx.members.lead.id)
       else {
@@ -250,5 +254,25 @@ describe('S3 IM 抽取与分拣', () => {
     expect(ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(target.id).status).toBe('done')
     // 过程 record 同步归档任务时间线（S56），两件事并存互不替代
     expect(ctx.db.prepare(`SELECT COUNT(*) AS n FROM task_records WHERE task_id = ? AND content LIKE '%全部检查项通过%'`).get(target.id).n).toBe(1)
+  })
+
+  // v0.91【工程防线】线上事故主因：提示词对象清单是 "#306 标题" 格式，模型（GLM-5.3-Flash 实测）回显
+  // "targetTaskId":"#306"（带 # 的字符串），裸 Number() 解析得 NaN → suggestion 候选 100% 静默丢弃。
+  it('【工程防线】 targetTaskId 带 # 前缀字符串（"#<id>"，模型回显清单格式）→ 建议照常解析并自动生效（v0.91）', async () => {
+    const a = await mkProject('客户J系统', ctx.members.lead.id)
+    const ch = upsertChannel(ctx.db, { platform: 'feishu', groupKey: 'oc_j', channelType: 'dedicated', projectId: a.id })
+    const target = a.tasks.find((t) => t.title.includes('设备预检'))
+    const sourceTs = Date.now() - 2 * 86400000
+    ctx.db.prepare('UPDATE tasks SET updated_at = ? WHERE id = ?').run(sourceTs - 1000, target.id)
+    const llm = fakeLlm(() => JSON.stringify({
+      events: [{ nature: 'suggestion', eventType: 'status_change', summary: '设备预检已完成', targetObject: 'task', targetTaskId: `#${target.id}`, targetName: target.title, targetField: 'status', targetValue: 'done', confidence: 0.95, msgIndex: 0 }],
+    }))
+    const stats = await ingestMessages(ctx.db, ch, [{ id: 'om_j1', speakerId: 'fs_zhang', text: `${target.title}完成了`, ts: sourceTs }], { llm })
+    expect(stats.autoApplied).toBe(1)
+    expect(stats.suggestions).toBe(0)
+    expect(ctx.db.prepare('SELECT status FROM tasks WHERE id = ?').get(target.id).status).toBe('done')
+    const evt = ctx.db.prepare(`SELECT * FROM project_events WHERE source_ref = 'om_j1'`).get()
+    expect(evt.status).toBe('effective')
+    expect(evt.target_task_id).toBe(target.id)
   })
 })
