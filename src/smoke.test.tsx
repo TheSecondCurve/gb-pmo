@@ -167,6 +167,46 @@ describe('移动端响应式冒烟', () => {
     expect(screen.queryByLabelText(/每日项目群晨报/)).toBeNull()
   })
 
+  // S77（v0.90，K77）：快速立项 Tab——默认类型下拉 + 新群默认成员勾选（仅绑飞书在职成员），保存落 projects 设置
+  it('Admin：项目管理→快速立项——默认类型 + 新群默认成员勾选（S77，仅绑飞书成员可选）', async () => {
+    location.hash = '#/admin/project/quick-create'
+    const sFetch = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('/api/v1/members') && !url.includes('/digest')) {
+        return new Response(JSON.stringify({ members: [
+          { id: 2, name: '张三', feishuId: 'fs_zhang', status: 'active' },
+          { id: 3, name: '李四', feishuId: 'fs_li', status: 'active' },
+          { id: 4, name: '王五', feishuId: null, status: 'active' }, // 未绑飞书——不出现
+          { id: 5, name: '离职者', feishuId: 'fs_gone', status: 'offboarded' }, // 离职——不出现
+        ] }), { status: 200 })
+      }
+      if (url.includes('/api/v1/project-types')) {
+        return new Response(JSON.stringify({ types: [{ id: 1, code: 'lianmai_365', name: '365连麦', status: 'active' }] }), { status: 200 })
+      }
+      if (url.includes('/api/v1/admin/settings/projects')) return new Response('{}', { status: 200 })
+      return new Response(JSON.stringify({
+        member: { id: 1, name: '甲', role: 'admin' },
+        projects: { quickCreateTypeCode: 'lianmai_365', quickCreateDefaultMembers: [2] },
+      }), { status: 200 })
+    })
+    globalThis.fetch = sFetch as unknown as typeof fetch
+    render(<StoreProvider><Admin section="project" tab="quick-create" /></StoreProvider>)
+    expect((await screen.findByLabelText('默认成员 张三') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByLabelText('默认成员 李四') as HTMLInputElement).checked).toBe(false)
+    expect(screen.queryByLabelText('默认成员 王五')).toBeNull() // 未绑飞书不可选
+    expect(screen.queryByText('离职者')).toBeNull()
+    expect((screen.getByLabelText('快速立项默认类型') as HTMLSelectElement).value).toBe('lianmai_365')
+    // 勾选李四 → 保存：payload 携 [2,3]
+    fireEvent.click(screen.getByLabelText('默认成员 李四'))
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => {
+      const calls = sFetch.mock.calls as unknown as Array<[RequestInfo | URL, RequestInit?]>
+      const call = calls.find(([u]) => String(u).includes('/api/v1/admin/settings/projects'))
+      expect(call).toBeTruthy()
+      expect(JSON.parse(String(call?.[1]?.body)).quickCreateDefaultMembers).toEqual([2, 3])
+    })
+  })
+
   // S40-4（v0.43）：LLM 卡片可编辑超时——默认 120s（K22：GLM 大 JSON 实测约 117s），删掉即红
   it('Admin：LLM 配置卡含超时编辑字段（S40-4，默认 120s）', async () => {
     location.hash = '#/admin/integrations/llm'
