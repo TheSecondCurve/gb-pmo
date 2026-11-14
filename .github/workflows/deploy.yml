@@ -1,6 +1,6 @@
-# 合并 main 即发布:hk-build 自托管 runner(hk-dev)构建 gb-pmo 镜像推 ACR,
-# 再经 SSH 受限密钥(forced command)回源部署到香港测试机(与 gb-crm 同模式,
-# 绕开 org runner group 清单限制)。
+# 合并 main 即发布:hk-build 自托管 runner 构建 gb-pmo 镜像推 ACR,
+# 再经 SSH 受限密钥(forced command)部署到 hk-dev（85.189.89.26:3355，与 gb-crm 同模式；
+# 旧香港测试机 207.57.130.82 已于 2026-11-06 迁移下线，deploy.yml 当时漏改指向）。
 # provenance: false——个人版 ACR 不收 buildx attestation 的 OCI empty manifest。
 name: deploy
 
@@ -41,4 +41,4 @@ jobs:
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           echo "${{ secrets.DEPLOY_HOSTKEY }}" > ~/.ssh/known_hosts
-          ssh -i ~/.ssh/deploy_key deploy@207.57.130.82
+          ssh -p 3355 -i ~/.ssh/deploy_key deploy@85.189.89.26
