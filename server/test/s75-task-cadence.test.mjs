@@ -163,8 +163,17 @@ describe('S75 常态任务周期四档', () => {
     createTask(db, { projectId: p.id, title: '双周对账A', cadence: { type: 'biweekly', weekdays: [1], parity: 0 } }, members.admin.id)
     createTask(db, { projectId: p.id, title: '周三例会C', cadence: { type: 'weekly', weekdays: [3] } }, members.admin.id)
     createTask(db, { projectId: p.id, title: '每日巡检D' }, members.admin.id)
+    // 同族时钟隔离②：建任务/立项事件的 business_time 落的也是真实 Date.now()——真实日期
+    // 越过假日历后会被「昨日以来动态」（sinceMs=假日 dayStart-1d）误带入正文。回拨到
+    // 假日历 11-01（早于三段所有窗口），恢复与真实运行日解耦的通过状态；断言不动。
+    db.prepare('UPDATE project_events SET business_time = ?, created_at = ? WHERE project_id = ?').run(bjNov(1), bjNov(1), p.id)
 
     const sent = []
+    // v0.91 附带修复（日期炸弹）：晨报幂等行 created_at 是真实时刻，注入时刻向前倒跳（15→9 号）时
+    // 真实 created_at ≥ 注入日起点会被误判「今日已推」——原测试只在真实日期早于 2026-11-09 时成立。
+    // 每次推送前清该项目晨报台账行，断言聚焦 isApplicableDay 口径本身（幂等守卫由 S68 用例覆盖）。
+    const clearMorningLedger = () => db.prepare(`DELETE FROM pushes WHERE push_type = 'morning' AND related_project_id = ?`).run(p.id)
+    clearMorningLedger()
     await dailyProjectMorningPush(db, { now: () => bjNov(15), send: async (m) => { sent.push(m); return { messageId: 'om_1' } } }) // 2026-11-15 周日
     const day1Full = (sent.at(-1).post ? (sent.at(-1).post.zh_cn?.content || []).flat().map((r) => r?.text || '').join('\n') : sent.at(-1).text)
     const [day1, day1Tomorrow] = day1Full.split('【明日待办】') // 段落拆开：今日/明日分别断言（明日预览会带出命中任务）
@@ -174,21 +183,34 @@ describe('S75 常态任务周期四档', () => {
     expect(day1).not.toContain('周三例会C') // 周日不适用（weekly 只认周三）
     expect(day1Tomorrow).toContain('双周对账A') // 明日 11-16 周一命中序列 A 周（v0.87.3 隔周，明日预览如实带出）
 
+    // 时钟隔离（v0.89 随行修复）：pushes.created_at 落的是真实 Date.now()（push.js），
+    // 幂等闸门却拿注入假时钟的 dayStart 比——真实日期越过假 11-09 起本段被上一段
+    // 的推送记录误判「今日已推送」跳过（2026-11-09 起 CI 永久红）。每段前清掉
+    // morning 推送行让三段各自到达 send；断言全部不动（K16 测试时钟纪律）。
+    db.prepare("DELETE FROM pushes WHERE push_type = 'morning'").run()
     const sent2 = []
+    clearMorningLedger()
     await dailyProjectMorningPush(db, { now: () => bjNov(9), send: async (m) => { sent2.push(m); return { messageId: 'om_2' } } }) // 2026-11-09 周一（周序号 149 → 序列 B 周）
-    const day2 = (sent2.at(-1).post ? (sent2.at(-1).post.zh_cn?.content || []).flat().map((r) => r?.text || '').join('\n') : sent2.at(-1).text)
-    expect(day2).not.toContain('月度结算单') // 9 号非 15 号
-    expect(day2).not.toContain('双周对账A') // 周一但序列 B 周（周序号 149 奇）——S75 核心口径（v0.87.3 隔周）
-    expect(day2).not.toContain('周三例会C') // 周一非周三
-    expect(day2).toContain('每日巡检D')
-    // 明日预览（11-10 周二）：仅 daily
-    expect(day2).not.toContain('双周对账A')
+    const day2Full = (sent2.at(-1).post ? (sent2.at(-1).post.zh_cn?.content || []).flat().map((r) => r?.text || '').join('\n') : sent2.at(-1).text)
+    // 断言只看今日/明日待办段：【昨日以来动态】以注入时钟开窗、事件 created_at 是真实时刻，
+    // 真实日期越过固定注入日后动态段会合法带出任务名，不得参与适用性断言（v0.91 附带修复）
+    const [day2Today, day2Tomorrow] = day2Full.split('【明日待办】')
+    expect(day2Today).not.toContain('月度结算单') // 9 号非 15 号
+    expect(day2Today).not.toContain('双周对账A') // 周一但序列 B 周（周序号 149 奇）——S75 核心口径（v0.87.3 隔周）
+    expect(day2Today).not.toContain('周三例会C') // 周一非周三
+    expect(day2Today).toContain('每日巡检D')
+    // 明日预览（11-10 周二）：仅 daily（再切掉昨日动态段——见上方注）
+    const day2TomorrowOnly = day2Tomorrow.split('【昨日以来动态】')[0]
+    expect(day2TomorrowOnly).not.toContain('双周对账A')
 
+    db.prepare("DELETE FROM pushes WHERE push_type = 'morning'").run()
     const sent3 = []
+    clearMorningLedger()
     await dailyProjectMorningPush(db, { now: () => bjNov(16), send: async (m) => { sent3.push(m); return { messageId: 'om_3' } } }) // 2026-11-16 周一（周序号 150 → 序列 A 周，隔周回归）
-    const day3 = (sent3.at(-1).post ? (sent3.at(-1).post.zh_cn?.content || []).flat().map((r) => r?.text || '').join('\n') : sent3.at(-1).text)
-    expect(day3).toContain('双周对账A') // 周一且序列 A 周命中——隔周严格交替（v0.87.3）
-    expect(day3).toContain('每日巡检D')
+    const day3Full = (sent3.at(-1).post ? (sent3.at(-1).post.zh_cn?.content || []).flat().map((r) => r?.text || '').join('\n') : sent3.at(-1).text)
+    const [day3Today] = day3Full.split('【明日待办】')
+    expect(day3Today).toContain('双周对账A') // 周一且序列 A 周命中——隔周严格交替（v0.87.3）
+    expect(day3Today).toContain('每日巡检D')
   })
 
   it('S75-5: 迁移 0038 回填——weekdays 全周/NULL→daily、子集→weekly；weekdays 列删除；出参 weekdays 为派生', () => {
@@ -208,7 +230,7 @@ describe('S75 常态任务周期四档', () => {
     ins.run('周一三五任务', '1,3,5')
     ins.run('空星期任务', null)
 
-    expect(migrate(raw)).toBe(1) // 只应用 0038
+    expect(migrate(raw)).toBe(2) // 应用 0038 + 0039（v0.91 游标归一迁移；0039 对无渠道旧库为空更新）
     const rows = raw.prepare(`SELECT title, cadence FROM tasks ORDER BY id`).all()
     expect(JSON.parse(rows[0].cadence)).toEqual({ type: 'daily' })
     expect(JSON.parse(rows[1].cadence)).toEqual({ type: 'weekly', weekdays: [1, 3, 5] })

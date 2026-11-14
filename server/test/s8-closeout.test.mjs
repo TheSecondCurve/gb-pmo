@@ -158,7 +158,7 @@ describe('S8-3 / S29 取消项目', () => {
         const url = String(rawUrl)
         if (url.includes('tenant_access_token')) return { ok: true, json: async () => ({ code: 0, tenant_access_token: 'tok' }) }
         if (url.includes('/wiki/v2/spaces/get_node')) return okJson({ node: { node_token: 'n295', obj_token: 'doc295', obj_type: 'docx', title: '知识页', space_id: 'sp295' } })
-        if (url.includes('/wiki/v2/spaces/sp295/nodes/n295')) return patchOk ? okJson({}) : { ok: true, json: async () => ({ code: 131006, msg: 'forbidden' }) }
+        if (url.includes('/wiki/v2/spaces/sp295/nodes/n295/update_title')) return patchOk ? okJson({}) : { ok: true, json: async () => ({ code: 131006, msg: 'forbidden' }) }
         return okJson({})
       }
     }
