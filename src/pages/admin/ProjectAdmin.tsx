@@ -3,7 +3,7 @@ import { api } from '../../api'
 import { useStore } from '../../store'
 import { Badge, Btn, Card, Empty, Field, InlineText, Modal, Spinner, Tabs, inputCls } from '../../components/ui'
 import { fmtDateTime } from '../../fmt'
-import type { ChannelRow, ProjectRow, ProjectType } from '../../types'
+import type { ChannelRow, Member, ProjectRow, ProjectType } from '../../types'
 
 // S48（v0.53）：未分拣消息行（通用群低置信池）
 interface UnroutedRow { id: number; platform: string; groupKey: string; businessTime: number; speakerLabel: string | null; content: string }
@@ -17,6 +17,7 @@ export default function ProjectAdmin({ tab }: { tab: string }) {
     <div>
       <Tabs tabs={TABS} value={tab} onChange={nav} />
       {tab === 'types' && <TypesTab />}
+      {tab === 'quick-create' && <QuickCreateTab />}
       {tab === 'channels' && <ChannelsTab />}
       {tab === 'params' && <ParamsTab />}
     </div>
@@ -399,6 +400,67 @@ function ParamsTab() {
       </Card>
       <p className="text-[12px] text-[var(--color-ink-soft)]">
         各定时任务（信息更新对齐 / 预警 / 日报 / 晨报 / 日历同步 / 备份 / 周梳理）的 cron 与开关集中在配置台「定时任务」页配置（S67）。
+      </p>
+    </div>
+  )
+}
+
+// —— Tab（S77，v0.90，K77）：快速立项——默认类型 + 新群默认成员（私聊「快速立项」从无到有）——
+
+interface ProjectsCfg { quickCreateTypeCode: string; quickCreateDefaultMembers: number[] }
+
+function QuickCreateTab() {
+  const { toast } = useStore()
+  const [cfg, setCfg] = useState<ProjectsCfg | null>(null)
+  const [types, setTypes] = useState<ProjectType[] | null>(null)
+  const [members, setMembers] = useState<Member[] | null>(null)
+  useEffect(() => {
+    void (async () => {
+      const s = await api.settings()
+      setCfg(s.projects as ProjectsCfg)
+      setTypes((await api.projectTypes()).types)
+      setMembers((await api.members()).members)
+    })()
+  }, [])
+  if (!cfg || !types || !members) return <Spinner />
+  const bound = members.filter((m) => m.status === 'active' && m.feishuId) // 仅绑飞书的在职成员可选
+  const toggle = (id: number) => setCfg({
+    ...cfg,
+    quickCreateDefaultMembers: cfg.quickCreateDefaultMembers.includes(id)
+      ? cfg.quickCreateDefaultMembers.filter((x) => x !== id)
+      : [...cfg.quickCreateDefaultMembers, id],
+  })
+  return (
+    <div className="space-y-4">
+      <Card title="快速立项默认值（S77，v0.90）：飞书私聊机器人「快速立项 <项目名>」——建群拉人立项建页一条链">
+        <Field label="默认项目类型（/init 与私聊快速立项未带类型码时兜底）">
+          <select aria-label="快速立项默认类型" className={inputCls} value={cfg.quickCreateTypeCode}
+            onChange={(e) => setCfg({ ...cfg, quickCreateTypeCode: e.target.value })}>
+            {types.filter((t) => t.status === 'active').map((t) => <option key={t.code} value={t.code}>{t.name}（{t.code}）</option>)}
+          </select>
+        </Field>
+        <div className="mt-4">
+          <div className="mb-2 text-[12px] text-[var(--color-ink-soft)]">新群默认成员（建群后自动拉入；仅列绑定飞书的在职成员）</div>
+          <div className="flex flex-wrap gap-2">
+            {bound.length === 0 && <Empty hint="暂无绑定飞书的在职成员——「成员身份」页补 feishu_id 后可勾选" />}
+            {bound.map((m) => (
+              <label key={m.id} className="flex cursor-pointer items-center gap-1.5 rounded-full border border-[var(--color-line-strong)] px-3 py-1.5 text-[12px] transition-colors hover:border-[var(--color-ink)]">
+                <input type="checkbox" aria-label={`默认成员 ${m.name}`} checked={cfg.quickCreateDefaultMembers.includes(m.id)} onChange={() => toggle(m.id)} />
+                {m.name}
+              </label>
+            ))}
+          </div>
+        </div>
+        <div className="mt-4">
+          <Btn kind="primary" onClick={async () => {
+            await api.putSetting('projects', cfg)
+            toast('快速立项默认值已保存')
+            setCfg((await api.settings()).projects as ProjectsCfg)
+          }}>保存</Btn>
+        </div>
+      </Card>
+      <p className="text-[12px] text-[var(--color-ink-soft)]">
+        用法：飞书私聊机器人说「快速立项 项目名 [类型码]」——机器人建群（群名=项目名，机器人为群主）并把你与勾选成员拉进群、立项（类型清单任务实例化）、绑新群为专题渠道、在默认父页面下建知识页；群内 @机器人 /init 行为不变（S70）。
       </p>
     </div>
   )
