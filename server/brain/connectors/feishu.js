@@ -219,6 +219,38 @@ export async function getChat(cfg, chatId) {
   return data.data || {}
 }
 
+/** 机器人建群（S77 私聊快速立项从无到有，K77）。机器人为群主；需 im:chat:create 权限。返回 { chatId }。 */
+export async function createChat(cfg, { name }) {
+  const token = await tenantToken(cfg)
+  const res = await fetch('https://open.feishu.cn/open-apis/im/v1/chats', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ name, chat_mode: 'group', user_id_type: 'open_id' }),
+  })
+  if (!res.ok) throw Object.assign(new Error(`飞书建群 HTTP ${res.status}`), { statusCode: 502 })
+  const data = await res.json()
+  if (data.code !== 0) throw Object.assign(new Error(`飞书建群失败(${data.code}): ${data.msg}`), { statusCode: 502 })
+  return { chatId: data.data?.chat_id || null }
+}
+
+/** 拉用户入群（S77 建群后拉发起人与默认成员，K77）。open_id 须为本应用上下文 id（members.feishu_id）；
+ *  需「拉用户或机器人入群」权限（im:chat.members:write_only）。返回 { invalidIdList, notExistedIdList }。 */
+export async function addChatMembers(cfg, chatId, openIds) {
+  const token = await tenantToken(cfg)
+  const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/chats/${chatId}/members?member_id_type=open_id`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    body: JSON.stringify({ id_list: openIds }),
+  })
+  if (!res.ok) throw Object.assign(new Error(`飞书拉人入群 HTTP ${res.status}`), { statusCode: 502 })
+  const data = await res.json()
+  if (data.code !== 0) throw Object.assign(new Error(`飞书拉人入群失败(${data.code}): ${data.msg}`), { statusCode: 502 })
+  return {
+    invalidIdList: data.data?.invalid_id_list || [],
+    notExistedIdList: data.data?.not_existed_id_list || [],
+  }
+}
+
 /** 改群名（S76 结项给专题群名追加【已结项】，K76）。需应用 im:chat:update 权限且机器人在目标群
  *  有编辑权（群管理员，或群开「所有成员可编辑群信息」）；群已解散/无权限由调用方兜人话提示。 */
 export async function renameChat(cfg, chatId, name) {

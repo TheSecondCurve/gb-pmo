@@ -434,19 +434,25 @@ function hostOf(url) {
 
 /**
  * 快速立项核心（/init 斜杠与 write quick_create_project 共用，K66）。
- * payload: { name?（缺省=群名）, typeCode?（缺省=projects.quickCreateTypeCode） }。
- * 缺省规则：项目名=群名（evt.chatTitle，缺失时连接器 getChat 回拉）、牵头人=发起人
+ * payload: { name?（群聊缺省=群名；私聊必填）, typeCode?（缺省=projects.quickCreateTypeCode） }。
+ * 群聊（S70）：项目名=群名（evt.chatTitle，缺失时连接器 getChat 回拉）、牵头人=发起人
  * （天然满足 createProject「管理员或拟任牵头人本人」权限矩阵）；类型解析不出则拒绝并列候选。
- * 信任边界（K25）：对话面明确指令直接生效；知识页 best-effort——失败不阻塞立项与绑群。
+ * 私聊（S77/K77，仅飞书）：从无到有——项目名必填，机器人 createChat 建群（群名=项目名、群主）
+ * → 拉发起人+projects.quickCreateDefaultMembers（去重；未绑飞书跳过点名）→ 复用 S70 链。
+ * 信任边界（K25）：对话面明确指令直接生效；建群/拉人/知识页均为 best-effort 附属动作——
+ * 项目先建（事务核心），失败不回滚、如实回执并指路。
  */
 export async function runQuickCreate(db, payload = {}, ctx = {}) {
   const evt = ctx.evt || {}
   const platform = evt.platform || ctx.sourcePlatform || 'feishu'
-  if (evt.chatType !== 'group') return refused('快速立项只在群聊里可用——在新项目群里 @我 发 /init [类型码]。')
+  const isDm = evt.chatType === 'p2p' && platform === 'feishu' // 私聊从无到有仅飞书（企业微信无建群连接器）
+  if (evt.chatType !== 'group' && !isDm) {
+    return refused('快速立项在群聊或飞书私聊里可用——新项目群里 @我 发 /init [类型码]；或飞书私聊对我说「快速立项 <项目名>」（我来建群拉人，从无到有）。')
+  }
 
-  // 群名解析：chatTitle（网关带入）→ 连接器 getChat 回拉 → 明确报错
+  // 群名解析（群聊）：chatTitle（网关带入）→ 连接器 getChat 回拉；私聊无群名可借，项目名必填
   let groupName = evt.chatTitle || null
-  if (!groupName) {
+  if (!groupName && evt.chatType === 'group') {
     try {
       const chat = await CHAT_CONNECTORS[platform]?.getChat?.(getSetting(db, `im.${platform}`), evt.chatId)
       groupName = chat?.name || null
@@ -454,28 +460,32 @@ export async function runQuickCreate(db, payload = {}, ctx = {}) {
   }
   const name = String(payload.name || groupName || '').trim()
   if (!name) {
-    return refused('拿不到本群的群名（飞书接口失败或未授权），无法以群名立项——请稍后重试，或改用自然语言告诉我项目名（「建个项目，名字叫 XX」）。')
+    return refused(isDm
+      ? '私聊快速立项请给项目名：「快速立项 <项目名> [类型码]」——我会建群（群名=项目名）、把你和配置台勾选的默认成员拉进群、立项并建知识页，一条链完成。'
+      : '拿不到本群的群名（飞书接口失败或未授权），无法以群名立项——请稍后重试，或改用自然语言告诉我项目名（「建个项目，名字叫 XX」）。')
   }
 
-  // 守卫：群已是专题渠道 → 拒绝（防误绑重绑）
-  const existing = db.prepare(
-    'SELECT c.channel_type, c.project_id, p.name AS project_name FROM channels c LEFT JOIN projects p ON p.id = c.project_id WHERE c.platform = ? AND c.group_key = ?'
-  ).get(platform, evt.chatId)
-  if (existing?.channel_type === 'dedicated') {
-    return refused(`本群已绑定为项目「${existing.project_name || `#${existing.project_id}`}」的专题渠道，不能在此快速立项。要建新项目，请把我拉进一个新群再发 /init。`)
+  // 守卫（群聊）：群已是专题渠道 → 拒绝（防误绑重绑）；私聊建的新群天然无绑定
+  if (evt.chatType === 'group') {
+    const existing = db.prepare(
+      'SELECT c.channel_type, c.project_id, p.name AS project_name FROM channels c LEFT JOIN projects p ON p.id = c.project_id WHERE c.platform = ? AND c.group_key = ?'
+    ).get(platform, evt.chatId)
+    if (existing?.channel_type === 'dedicated') {
+      return refused(`本群已绑定为项目「${existing.project_name || `#${existing.project_id}`}」的专题渠道，不能在此快速立项。要建新项目，请把我拉进一个新群再发 /init。`)
+    }
   }
 
   // 类型解析：参数 → 全局默认 → 拒绝列候选（不猜）
   const code = String(payload.typeCode || getSetting(db, 'projects').quickCreateTypeCode || '').trim()
   if (!code) {
-    return refused(`快速立项需要项目类型：重发「/init <类型码>」，或让管理员在配置台「外部依赖→快速立项默认类型」配置全局默认。可用类型：${activeTypeList(db)}`)
+    return refused(`快速立项需要项目类型：重发「/init <类型码>」（私聊「快速立项 <项目名> <类型码>」），或让管理员在配置台「项目管理→快速立项」配置全局默认。可用类型：${activeTypeList(db)}`)
   }
   const type = db.prepare(`SELECT code, name FROM project_types WHERE code = ? AND status = 'active'`).get(code)
   if (!type) {
     return refused(`项目类型 ${code} 不存在或已停用。可用类型：${activeTypeList(db)}`)
   }
 
-  // ① 建项目（任务按类型清单实例化；立项事件+审计在引擎内）
+  // ① 建项目（任务按类型清单实例化；立项事件+审计在引擎内）——事务核心，先行
   let proj
   try {
     proj = createProject(db, { name, typeCode: type.code, leadMemberId: ctx.member.id }, ctx.member.id)
@@ -483,8 +493,40 @@ export async function runQuickCreate(db, payload = {}, ctx = {}) {
     return refused(`立项失败：${e.message}`)
   }
 
-  // ② 绑群为专题渠道（cursor=当前时刻，不回灌历史；群名回填渠道名）
-  upsertChannel(db, { platform, groupKey: evt.chatId, name: groupName || name, channelType: 'dedicated', projectId: proj.id }, ctx.member.id)
+  // ①′ 私聊从无到有（S77/K77）：机器人建群（群名=项目名）→ 拉发起人+默认成员（best-effort，失败不回滚项目）
+  let groupKey = evt.chatId
+  let bindName = groupName || name
+  const dmLines = []
+  let bindChannel = true
+  if (isDm) {
+    const cfg = getSetting(db, 'im.feishu')
+    try {
+      const chat = await feishuConnector.createChat(cfg, { name })
+      groupKey = chat.chatId
+      bindName = name
+      // 默认成员解析：在职且绑飞书者拉入（feishu_id 即本应用 open_id）；未绑/离职跳过点名
+      const defaults = getSetting(db, 'projects').quickCreateDefaultMembers || []
+      const rows = defaults.map((id) => db.prepare('SELECT name, feishu_id AS feishuId, status FROM members WHERE id = ?').get(Number(id))).filter(Boolean)
+      const skipped = rows.filter((m) => m.status !== 'active' || !m.feishuId).map((m) => m.name)
+      const nameByFeishu = new Map(rows.filter((m) => m.status === 'active' && m.feishuId).map((m) => [m.feishuId, m.name]))
+      const idList = [...new Set([evt.senderOpenId, ...nameByFeishu.keys()])] // 发起人与默认成员去重
+      let failedNames = []
+      try {
+        const r = await feishuConnector.addChatMembers(cfg, groupKey, idList)
+        const bad = new Set([...(r.invalidIdList || []), ...(r.notExistedIdList || [])])
+        failedNames = [...bad].map((fid) => nameByFeishu.get(fid) || fid)
+      } catch (e) {
+        failedNames = [`（拉人接口失败：${e.message}）`]
+      }
+      dmLines.push(`新群「${name}」已建（机器人为群主）→ 已拉入 ${idList.length - failedNames.length}/${idList.length} 人${failedNames.length ? `；拉入失败：${failedNames.join('、')}` : ''}${skipped.length ? `；未绑飞书跳过：${skipped.join('、')}` : ''}`)
+    } catch (e) {
+      dmLines.push(`建群失败：${e.message}——项目已建好；可手动建群拉我进去后对我说「登记本群为该项目专题群」补绑`)
+      bindChannel = false
+    }
+  }
+
+  // ② 绑群为专题渠道（cursor=当前时刻，不回灌历史；群名回填渠道名）——建群失败时跳过
+  if (bindChannel) upsertChannel(db, { platform, groupKey, name: bindName, channelType: 'dedicated', projectId: proj.id }, ctx.member.id)
 
   // ③ 默认父页下建知识页并绑定（best-effort：失败不阻塞，回执单列原因）
   let wikiLine
@@ -501,10 +543,13 @@ export async function runQuickCreate(db, payload = {}, ctx = {}) {
   }
 
   const taskCount = db.prepare('SELECT COUNT(*) AS n FROM tasks WHERE project_id = ? AND deleted_at IS NULL').get(proj.id).n
+  const channelLine = !bindChannel
+    ? '渠道未绑定（建群失败，见上——补绑后开始定时抽取归档）'
+    : isDm ? `新群已绑定为项目专题渠道（从现在开始定时抽取归档，不回灌历史）` : `本群已绑定为项目专题渠道（从现在开始定时抽取归档，不回灌历史）`
   return {
     type: 'receipt',
     result: 'replied',
-    text: `快速立项完成 ✓\n· 项目「${proj.name}」（#${proj.id}，类型 ${type.name}，牵头人 ${ctx.member.name}）\n· 任务按类型清单实例化 ${taskCount} 项——可对我说「初始分配一下」补责任人与排期\n· ${wikiLine}\n· 本群已绑定为项目专题渠道（从现在开始定时抽取归档，不回灌历史）`,
+    text: `快速立项完成 ✓\n· 项目「${proj.name}」（#${proj.id}，类型 ${type.name}，牵头人 ${ctx.member.name}）\n· 任务按类型清单实例化 ${taskCount} 项——可对我说「初始分配一下」补责任人与排期\n· ${wikiLine}${dmLines.length ? `\n· ${dmLines.join('\n· ')}` : ''}\n· ${channelLine}`,
   }
 }
 

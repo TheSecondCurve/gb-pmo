@@ -90,6 +90,13 @@ const VALIDATORS = {
       throw Object.assign(new Error('debug.maxOutputBytes 须为 1024~1048576 的整数（字节）'), { statusCode: 400 })
     }
   },
+  // S77（v0.90，K77）：快速立项——新群默认成员须为整数成员 id 数组（成员存在性/飞书绑定在立项时兜底点名）
+  projects(value) {
+    const m = value?.quickCreateDefaultMembers
+    if (m === undefined) return
+    if (!Array.isArray(m)) throw Object.assign(new Error('projects.quickCreateDefaultMembers 须为数组（成员 id 列表）'), { statusCode: 400 })
+    if (m.some((id) => !Number.isInteger(id))) throw Object.assign(new Error('projects.quickCreateDefaultMembers 须为整数成员 id 数组'), { statusCode: 400 })
+  },
   // S34（v0.35）：备份存储——endpoint 须完整 http(s) URL；keepCount 1~365；pathStyle 布尔。
   // 四项完整性（endpoint/bucket/accessKeyId/secretAccessKey）不在此拦——测试连接/执行时判定并回原因（S22 同构）。
   backup(value) {
