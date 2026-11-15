@@ -2,7 +2,7 @@
 // S69（v0.80，K64）前端冒烟：常态项目执行视图 DailyWeekGrid——窗口格子矩阵渲染、不适用格置灰、
 // 就地打卡调用与期切换；WeekdayPicker 星期勾选。api 层 mock（组件冒烟不设标准层）。
 // v0.81（K65）：窗口三档 span（周/双周/月）+ 导航锚点服务端下发（前端零日期推算）+ Tabs 切换即持久化项目默认。
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, fireEvent, waitFor, cleanup } from '@testing-library/react'
 import DailyWeekGrid, { CadencePicker } from './components/DailyWeekGrid'
 import { StoreProvider } from './store'
@@ -67,8 +67,13 @@ const board = (over: Partial<DailyBoardData> = {}): DailyBoardData => {
   }
 }
 
+// 卸载必须在 afterEach：文件最后一个测试（滚动跟随）结束时 CadencePicker 弹层仍开着，
+// 其 100ms 轮询 interval 存活到 jsdom 环境销毁后，place() 摸 window 抛
+// ReferenceError: window is not defined（CI coverage 偶发失败 #43538334344）。
+// cleanup 放 beforeEach 时最后一个测试无人收尾，此竞态必留。
+afterEach(cleanup)
+
 beforeEach(() => {
-  cleanup()
   vi.mocked(api.dailyBoard).mockReset().mockImplementation(async (_id?: number, opts?: { anchor?: string; span?: string }) => {
     const span = opts?.span ?? 'week'
     const n = span === 'month' ? 31 : span === 'biweek' ? 14 : 7
