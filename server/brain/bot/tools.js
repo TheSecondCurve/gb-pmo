@@ -11,7 +11,7 @@ import { queryMetric } from '../../engine/metrics.js'
 import { projectBrief } from '../../engine/brief.js'
 import { addEvent, confirmEvent } from '../../engine/events.js'
 import { assertValue, label } from '../../engine/enums.js'
-import { mapSpeaker } from '../extract.js'
+import { mapSpeaker, composeQuotedText } from '../extract.js'
 import { upsertChannel, canManageChannel } from '../../engine/tasks.js'
 import { createProposal, PROPOSAL_KINDS } from '../../engine/proposals.js'
 import { normalizeTypeTasks, normalizeWeekdays } from '../../engine/projectTypes.js'
@@ -75,7 +75,9 @@ async function fetchRecentDiscussion(db, env, { fetchChat, limit, lookbackSec })
   )
   const lines = messages
     .filter((m) => m.id && !botSeen.get(m.id))
-    .map((m) => `${mapSpeaker(db, env.platform, m.speakerId)?.name || '未识别'}：${String(m.text || '').slice(0, 200)}`)
+    // S78：引用原文并入行内（单行「【引用 发言人】…」，与抽取面 composeQuotedText 同口径），
+    // 供 LLM 解析「这个/按这条」类指代；整行截断护栏放宽到 400（正文 200 + 引用段）
+    .map((m) => `${mapSpeaker(db, env.platform, m.speakerId)?.name || '未识别'}：${composeQuotedText(String(m.text || '').slice(0, 200), m.quoteText, m.quoteSpeakerId ? mapSpeaker(db, env.platform, m.quoteSpeakerId)?.name : null)}`.slice(0, 400))
   return { lines, take }
 }
 

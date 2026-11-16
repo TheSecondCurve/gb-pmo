@@ -137,6 +137,8 @@ async function connectReal(db, cfg, secret) {
         const text = rawText.replace(/^@\S+\s*/, '').trim()
         if (!text) return
         const info = await chatInfo(msg.chat_id, chatType)
+        // S78（v0.92，K78）：引用回复回查被引用原文（外部群不查；resolveQuote 内部降级 null，永不抛错）
+        const quote = !info.external && msg.parent_id ? await feishu.resolveQuote(cfg, msg.parent_id) : null
         await handleBotEvent(db, {
           messageId: msg.message_id,
           chatId: msg.chat_id,
@@ -147,6 +149,7 @@ async function connectReal(db, cfg, secret) {
           external: info.external,
           chatTitle: info.name,
           mentioned: resolveMention({ chatType, mentions: msg.mentions, rawText, botOpenId }),
+          quote: quote ? { messageId: quote.messageId, speakerId: quote.speakerId, text: quote.text } : null,
         }, { send, patch, secret })
       } catch (e) {
         console.error('[bot] 消息处理失败:', e.message)

@@ -104,6 +104,20 @@ export function isNoiseMessage(text) {
 const BATCH_MAX_MESSAGES = 8
 const BATCH_MAX_CHARS = 3000
 
+// —— S78（v0.92，K78）引用文本并入：唯一口径（抽取面/机器人事件面/recent_chat 共用） ——
+const QUOTE_MAX_CHARS = 300 // 引用段截断护栏（成本预算；normalizeText 上限 2000 太宽）
+
+/**
+ * 把被引用原文并入消息正文：单行「【引用 发言人】原文」缀在正文后。
+ * 引用压成单行（换行折为空格，不破坏逐行消息格式）、超长截断；无引用原样返回。
+ */
+export function composeQuotedText(text, quoteText, speakerName) {
+  const q = String(quoteText || '').replace(/\s+/g, ' ').trim()
+  if (!q) return String(text || '')
+  const who = speakerName ? ` ${speakerName}` : ''
+  return `${String(text || '')}【引用${who}】${q.slice(0, QUOTE_MAX_CHARS)}`
+}
+
 /** 把同项目消息切成批次（保序）。 */
 function chunkBatches(items) {
   const batches = []
@@ -156,7 +170,10 @@ export async function ingestMessages(db, channel, messages, { llm: llmOverride, 
     }
     const speaker = mapSpeaker(db, channel.platform, msg.speakerId, msg.speakerLabel)
     if (!speaker) stats.unknownSpeakers += 1
-    prepared.push({ msg: { ...msg, speakerMemberId: speaker?.id ?? null, speakerName: speaker?.name || '未识别发言人' }, speaker })
+    // S78：引用原文并入正文（噪音判定已在上一步按原文本完成——纯应酬不因引用进 LLM）；
+    // 分拣/未分拣池/批量抽取/原文快照统一看到并入后文本，事件归因仍归当前发言人（K50 不变）
+    const quoteName = msg.quoteSpeakerId ? mapSpeaker(db, channel.platform, msg.quoteSpeakerId)?.name : null
+    prepared.push({ msg: { ...msg, text: composeQuotedText(msg.text, msg.quoteText, quoteName), speakerMemberId: speaker?.id ?? null, speakerName: speaker?.name || '未识别发言人' }, speaker })
   }
 
   // ② 通用群逐条分拣（不合并：跨消息判定会互相污染，K33）；专题渠道直接落定
@@ -260,14 +277,16 @@ export function mapSpeaker(db, platform, speakerId, _fallbackLabel) {
 
 // —— S52（v0.57，K35）事件驱动抽取缓冲 ——
 
-/** 网关落缓冲：仅已绑定渠道（专题/通用）的群消息；message_id 全局去重（INSERT OR IGNORE）。 */
-export function bufferInboundMessage(db, { platform = 'feishu', groupKey, messageId, speakerId, text, ts }) {
+/** 网关落缓冲：仅已绑定渠道（专题/通用）的群消息；message_id 全局去重（INSERT OR IGNORE）。
+ *  S78：quoteText/quoteSpeakerId 为被引用消息的原文与发言人（可空），排干抽取与 API 路径同口径。 */
+export function bufferInboundMessage(db, { platform = 'feishu', groupKey, messageId, speakerId, text, ts, quoteText, quoteSpeakerId }) {
   if (!messageId || !text || !groupKey) return false
   const bound = db.prepare('SELECT 1 FROM channels WHERE platform = ? AND group_key = ?').get(platform, groupKey)
   if (!bound) return false
   db.prepare(
-    'INSERT OR IGNORE INTO im_buffer (platform, group_key, message_id, speaker_id, text, ts, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(platform, groupKey, messageId, speakerId || null, String(text).slice(0, 2000), ts || Date.now(), Date.now())
+    'INSERT OR IGNORE INTO im_buffer (platform, group_key, message_id, speaker_id, text, quote_text, quote_speaker_id, ts, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(platform, groupKey, messageId, speakerId || null, String(text).slice(0, 2000),
+    quoteText ? String(quoteText).slice(0, 2000) : null, quoteSpeakerId || null, ts || Date.now(), Date.now())
   return true
 }
 
@@ -286,7 +305,8 @@ export async function drainBuffer(db, channel, opts = {}) {
     .all(channel.platform, channel.groupKey)
   if (!rows.length) return null
   const stats = await ingestMessages(db, channel, rows.map((r) => ({
-    id: r.message_id, speakerId: r.speaker_id, speakerLabel: r.speaker_label, text: r.text, ts: r.ts,
+    id: r.message_id, speakerId: r.speaker_id, speakerLabel: r.speaker_label, text: r.text,
+    quoteText: r.quote_text || null, quoteSpeakerId: r.quote_speaker_id || null, ts: r.ts,
   })), opts)
   db.prepare(`UPDATE im_buffer SET consumed_at = ? WHERE id IN (${rows.map(() => '?').join(',')})`)
     .run(Date.now(), ...rows.map((r) => r.id))
@@ -394,6 +414,7 @@ export async function extractEvents(llm, db, projectId, messages) {
 ③ 日期信号（推迟/提前/改到 X 号/定在 X 号）→ suggestion（eventType=schedule_change）：对应对象的计划日期字段（〔常态〕任务无计划日期，不适用）。
 ④ 责任人信号（交给 X、转给 X、X 来负责）→ suggestion（eventType=owner_change）：responsible_member_id（〔常态〕任务照常适用）。
 ⑤ 以上信号都没有的纯进展/风险/决策/阻塞/财务事实 → record（财务类消息如回款/开票/费用沟通 eventType=finance，仅记录、不含金额字段）；record 明确指向清单内某任务时可带 targetTaskId（摘要归档到该任务的更新记录）。
+引用回复：消息正文末尾的「【引用 发言人】…」段是发言人引用的上一条消息原文，用于理解「这个/按这条」类指代；引用是上下文而非发言人本轮新述——事件归因与变更对象按本轮消息判定，不得把引用内容单独当作新事件或让被引用者顶替发言人。
 对象定位：targetName 用清单中该对象的完整标题（原话用了简称也回写成完整标题，系统按标题消歧）；消息未点名对象时，结合清单与上下文推断最可能对应的任务（发言人名下任务优先），有把握就照常产出、confidence 按推断把握如实给，推不出具体任务才产项目级 record。同名或没有把握不要硬猜，给较低 confidence，不得编造 id。${multi ? '每条事件附 "msgIndex"（消息编号 [i] 的 i，0 基）指明来源消息；更新候选尤其要准确归因，无法确定时省略并降低 confidence。' : ''}
 与项目无关的寒暄不要产出。只输出 JSON。`,
       },
