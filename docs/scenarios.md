@@ -837,6 +837,18 @@ S70 快速立项只能在已存在的群里触发（真人建群→加机器人�
 | S77-2 | 配置台「快速立项」Tab：默认类型下拉+默认成员勾选（仅绑飞书在职成员）；保存落 projects 设置；非法形状 400 | 同上（引擎校验）+ `src/smoke.test.tsx`（勾选卡渲染与保存） |
 | S77-3 | 群内 /init 行为不变（不建群不拉人、回执文案不变）；私聊缺名称明确引导；建群/拉人失败不回滚项目、如实回执并指路 | 同上 |
 
+## S78（P0）— 成员（机器人·IM 全域）— 引用回复上下文：被引用原文随消息透传（v0.92）
+
+飞书「引用回复」的接口载荷只含用户本轮新写的正文（被引用原文仅以 parent_id/root_id 关联，事件与列表均不含原文，需按 message_id 单条回查）；此前机器人事件面与渠道抽取面都丢弃该字段，用户引用消息说「这个完成了」时指代不可解析。本场景把被引用原文以「【引用 发言人】原文」口径并入两条链路：连接器回查（缓存/降级）→ 机器人 LLM 上下文与审计 / 抽取面分拣与抽取 prompt（噪音判定仍按原文本、事件归因仍归当前发言人，K50 不变）。话题群明确不做（K78 边界）。决策见 design.md K78。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S78-1 | fetchMessages/fetchChatHistory 对带 parent_id 的消息经单条接口回查被引用原文（data.items[0]），消息附 parentId/quoteText/quoteSpeakerId（无引用为 null）；同 parent 进程内缓存零重复回查；回查失败降级 quoteText=null 不阻断拉取与游标推进；无 parent 零回查 | `server/test/s78-quote-context.test.mjs` |
+| S78-2 | 机器人事件面：quote 注入 LLM 用户消息（「【引用 发言人】原文」，未映射省略名字）；斜杠命令解析仍用纯正文；bot_commands.detail 留痕 quoteText/quoteMessageId（raw_text 纯正文）；未@群消息落 im_buffer 带 quote_text，排干与 API 路径同口径 | 同上 |
+| S78-3 | 抽取面：噪音预过滤按原文本判定（纯应酬带引用仍跳过）；带引用消息并入后进通用群分拣 prompt、未分拣池 content 与分批抽取 prompt；系统提示含引用段语义（引用是上下文，事件归当前发言人） | 同上 |
+| S78-4 | recent_chat/minutes 讨论回读行格式并入引用标记（单行、截断护栏） | 同上 |
+| S78-5 | 被引用消息为机器人卡片（interactive）时拍平读取 div 文本（lark_md content 与旧 text 字段都认），不再只剩 tag 名 | 同上 |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |

@@ -423,6 +423,8 @@ client.sh action generate_person_digest '{}'
 | text | TEXT |  |
 | ts | INTEGER | 消息时刻（epoch 毫秒） |
 | consumed_at | INTEGER | 抽取排干时刻；NULL=待消费 |
+| quote_text | TEXT |  |
+| quote_speaker_id | TEXT |  |
 
 ### project_wiki_bindings
 

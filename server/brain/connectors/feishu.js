@@ -18,7 +18,8 @@ function normalizeText(item) {
   try {
     if (msgType === 'text') return JSON.parse(item.body?.content || '{}').text || ''
     if (msgType === 'post') return extractPostText(JSON.parse(item.body?.content || '{}'))
-    if (msgType === 'interactive') return (JSON.parse(item.body?.content || '{}').elements || []).map((e) => e.text?.text || e.tag || '').join(' ').slice(0, 2000)
+    // S78-5：卡片 div 的文本在 e.text.content（lark_md）——旧形态只有 e.text.text（plain_text），两者都认
+    if (msgType === 'interactive') return (JSON.parse(item.body?.content || '{}').elements || []).map((e) => e.text?.text || e.text?.content || e.tag || '').join(' ').slice(0, 2000)
   } catch {
     /* 原样降级 */
   }
@@ -67,11 +68,15 @@ export async function fetchMessages(cfg, channel, cursor) {
       // 下轮 start=cursor+1 按秒解释溢出成公元 5 万年，渠道 API 拉取永久失败（v0.91，K70 修订）
       const raw = Number(item.create_time)
       const sec = raw > 1e11 ? Math.floor(raw / 1000) : raw
+      const { parentId, quoteText, quoteSpeakerId } = await attachQuoteFields(cfg, item) // S78：引用关系与被引用原文
       messages.push({
         id: item.message_id,
         speakerId: item.sender?.id || '',
         text: normalizeText(item),
         ts: sec * 1000,
+        parentId,
+        quoteText,
+        quoteSpeakerId,
       })
       lastSec = Math.max(lastSec, sec)
     }
@@ -79,6 +84,60 @@ export async function fetchMessages(cfg, channel, cursor) {
   } while (pageToken)
   // 无新消息时游标推进到本次窗口终点，避免下次重复拉空窗口
   return { messages, nextCursor: String(messages.length ? lastSec : end) }
+}
+
+// —— S78（v0.92，K78）引用回复回查：飞书引用消息只带 parent_id，被引用原文需按 message_id 单条回查 ——
+
+const QUOTE_CACHE_MAX = 2000 // 进程内缓存上限（防长驻进程膨胀；FIFO 驱逐）
+const quoteCache = new Map()
+
+/** 清空引用缓存（测试隔离用）。 */
+export function clearQuoteCache() {
+  quoteCache.clear()
+}
+
+/** 获取单条消息（GET /im/v1/messages/:message_id；响应消息对象在 data.items[0]，合并转发除外）。 */
+export async function getMessage(cfg, messageId) {
+  const token = await tenantToken(cfg)
+  const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/messages/${encodeURIComponent(messageId)}`, {
+    headers: { authorization: `Bearer ${token}` },
+  })
+  if (!res.ok) throw Object.assign(new Error(`飞书单条消息 HTTP ${res.status}`), { statusCode: 502 })
+  const data = await res.json()
+  if (data.code !== 0) throw Object.assign(new Error(`飞书单条消息失败(${data.code}): ${data.msg}`), { statusCode: 502 })
+  return data.data?.items?.[0] || null
+}
+
+/**
+ * 回查被引用消息并拍平：{ messageId, text, speakerId } | null。
+ * 永不抛错——引用已删除/无权限/网络失败一律降级 null（不阻断拉取与指令主链路）；空文本（含拍不出字的卡片）同 null。
+ * 成功才缓存（失败下轮可重试）；图片/文件给占位，不漏原始 JSON。
+ */
+export async function resolveQuote(cfg, parentId) {
+  if (!parentId) return null
+  if (quoteCache.has(parentId)) return quoteCache.get(parentId)
+  let out = null
+  try {
+    const item = await getMessage(cfg, parentId)
+    const text = item
+      ? (item.msg_type === 'image' ? '[图片]' : item.msg_type === 'file' ? '[文件]' : normalizeText(item)).trim()
+      : ''
+    if (text) out = { messageId: parentId, text: text.slice(0, 2000), speakerId: item?.sender?.id || '' }
+  } catch {
+    /* 降级：无引用照常走主链路 */
+  }
+  if (out) {
+    if (quoteCache.size >= QUOTE_CACHE_MAX) quoteCache.delete(quoteCache.keys().next().value)
+    quoteCache.set(parentId, out)
+  }
+  return out
+}
+
+/** 消息对象的引用字段组装（fetchMessages / fetchChatHistory 共用口径，S78）。 */
+async function attachQuoteFields(cfg, item) {
+  const parentId = item.parent_id || null
+  const quote = parentId ? await resolveQuote(cfg, parentId) : null
+  return { parentId, quoteText: quote?.text || null, quoteSpeakerId: quote?.speakerId || null }
 }
 
 export async function testConnection(cfg) {
@@ -477,6 +536,7 @@ export async function fetchChatHistory(cfg, groupKey, { startSec = 0, maxMessage
         fileKey,
         fileName,
         ts: sec * 1000,
+        ...(await attachQuoteFields(cfg, item)), // S78：引用关系与被引用原文（消费者按需取用）
       })
     }
     pageToken = data.data?.has_more ? data.data?.page_token : ''
