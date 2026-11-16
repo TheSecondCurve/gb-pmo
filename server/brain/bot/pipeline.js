@@ -324,7 +324,7 @@ export async function runConversation(db, env, opts = {}) {
   const out = await runAgentLoop({
     llm,
     systemPrompt: opts.systemPrompt,
-    userText: env.text,
+    userText: opts.userText ?? env.text, // S78：IM 适配器传入并入引用段后的用户文本（斜杠已在上游用纯正文分发）
     history: opts.history ?? [],
     execTool: makeExecTool(db, env, { llm, sqlLog, fetchChat: opts.fetchChat, push: opts.push, botSecret: opts.botSecret }),
   })

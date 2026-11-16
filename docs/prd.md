@@ -1,5 +1,7 @@
 # 需求初稿（PRD）— 企业项目大脑（Project Brain）
 
+> **v0.92**（2026-11-15）：**引用回复上下文透传——机器人与抽取面可读被引用原文（S78，design.md K78）**——飞书「引用回复」消息的接口载荷只含用户本轮新写的正文，被引用原文仅以 parent_id/root_id 关联（官方口径：事件与列表均不含被引用内容，需按 message_id 单条回查）；此前两条链路（机器人事件面、渠道抽取面）都丢弃这两个字段——用户引用任务卡片/他人消息说「这个完成了」「按这条登记」时指代不可解析，事件留痕也看不到引用上下文。本次统一透传：①连接器新增 `getMessage` 单条回查（进程内按 message_id 缓存、失败降级无引用不阻断主链路），`fetchMessages`/`fetchChatHistory` 对带 parent_id 的消息附 `parentId/quoteText/quoteSpeakerId`；②机器人事件面（网关）对带引用的入站消息（非外部群）回查注入信封 `quote`，指令层把「【引用 发言人】原文」并入 LLM 用户消息（斜杠命令解析仍用纯正文，不受引用污染），`bot_commands.detail` 留痕 quoteText/quoteMessageId，未@机器人的群消息落 im_buffer 时带 `quote_text`（migration 0040）与 API 路径同口径；③抽取面噪音预过滤仍按用户原文本判定（「好的」引用回复不因引用变长而进 LLM），带引用消息并入「【引用 发言人】原文」后进通用群分拣/未分拣池/分批抽取 prompt，事件归因与原文快照仍归当前发言人（K50 归因口径不变）；④recent_chat/minutes 讨论回读行内并入引用标记；⑤被引用消息为机器人卡片（interactive）时拍平读取 div 文本（lark_md 的 content 字段），不再只剩 tag 名。话题群（话题回复需 thread 容器/replies 接口）明确不做（K78 边界）。无新增飞书权限（复用消息读取权限族 im:message / im:message.group_msg）。
+
 > **v0.91**（2026-11-13）：**常态项目抽取面自动打卡（S69-9，design.md K64 修订）+ 抽取链路三缺陷修复（S20-23；design.md K70 修订、K35/K50 边界补记）**——线上常态项目群成员连发 16 条打卡消息（未@机器人），系统零更新、机器人自查也回「均无成员发言内容可提取」。排查（生产数据 + 同款配置复现）定位三层叠加缺陷：①抽取器把 LLM 回显的 `"targetTaskId":"#306"`（照抄提示词对象清单 `#id 标题` 格式）用裸 `Number()` 解析得 NaN，suggestion 候选自上线起几乎全被静默丢弃（历史仅 7 条成功，record 型不经此解析故存活）——解析容错 `#` 前缀；②`recent_chat`/`minutes` 的「机器人自身消息过滤」把所有带 `refused_not_mentioned` 台账行的人类消息一并滤掉（v0.57 修抽取面同款 bug 时漏改 bot 工具面；网关全量推送下每条人类群消息都有台账行）→ 生产群恒空——**S20-23** 钉住口径：只滤 bot_reply 与已处理指令，与 S20-10 定时抽取一致；③`fetchMessages` 未归一飞书 create_time 混合单位（文本 10 位秒/图片文件 13 位毫秒，K70 已实证但 v0.85.1 只修了 fetchChatHistory），任一图片消息即把游标写成毫秒 → 下轮 start_time 溢出成公元 5 万年、API 永久失败（线上 18/18 渠道冻结、被 S52 缓冲掩盖）——本次同步归一 + **migration 0039 存量游标毫秒→秒**（回看窗封顶 7 天：im_buffer 已消费行只留 7 天，更深重放会产无幂等键的重复 record 事件）。借此按用户拍板把打卡语义做进抽取面（**推翻 K64 边界行「IM 抽取面不做打卡自动生效」**）：常态项目群里未@机器人的打卡/跳过消息，目标任务唯一命中、发言人已映射成员、confidence≥0.85 且源消息归因明确 → **自动写当日打卡记录**（day=消息北京日、操作人=发言人、done/skip，复用 `setDayStatus` 同一写入口，operation_key 幂等——同消息重放不重复打卡、人工重置后重放不复活）；低置信/多义/未识别发言人/不适用日降级 record 型进展归档；routine 任务的状态/计划日期字段建议在持久层硬拒（K64：常态任务无终态；responsible_member_id 不受限），防打卡消息被误产为 status=done 自动生效污染任务面。
 
 > **v0.90**（2026-11-10）：**私聊机器人快速立项——建群+拉人+立项+知识页，从无到有一条链（S77，design.md K77）**——此前快速立项（S70）只在群内可用：须真人先建群、群设置加机器人、再 @机器人 /init，「从无到有」卡在第一公里（用户 2026-11-10 需求：私聊一句话建起全套）。现在成员**私聊机器人**说「快速立项 <名称> [类型码]」（或 /init <名称>）即可：机器人 `createChat` 建群（**群名=项目名，机器人为群主**；`im:chat:create` 已实测开通）→ members API 拉入**发起人 + 配置台勾选的「新群默认成员」**（`projects.quickCreateDefaultMembers`，members.feishu_id 即本应用上下文 open_id；未绑飞书的默认成员跳过且回执点名；去重）→ 复用 S70 链：建项目（类型清单实例化）→ 绑新群为专题渠道 → 默认父页下建知识页 → 回执在私聊（含建群、拉人结果与页面链接）。**失败语义**：项目先建（事务核心）；建群/拉人失败不回滚项目，如实回执并指路（群登记补绑）；个别成员拉失败点名不阻断。配置台「项目管理」新增**「快速立项」Tab**：默认类型下拉 + 默认成员勾选（**仅列绑定了飞书的在职成员**），存 `projects` 设置键（`quickCreateTypeCode` + `quickCreateDefaultMembers`，后者入 DEFAULT_SETTINGS 后 put_setting 白名单自动生效，非法形状 400）。群内 /init 行为不变；企业微信无建群连接器，私聊快速立项仅飞书。
@@ -1150,8 +1152,6 @@
 >   - S75-5 当迁移 0038 执行时老任务回填正确：weekdays NULL/全周 → daily；子集 → weekly（含组合）；**weekdays 列删除**，引擎/接口不再读写该列（出参 weekdays 为 cadence 派生）。
 >   - S75-6 当任务盘点（S45）与执行视图行展示周期标签时用 cadenceLabel（每天/每周一、三、五/每两周周一/每月1、15号）；bot add_task/确认卡/立项模板的 weekdays 载荷继续兼容生效。
 
-<<<<<<< HEAD
-=======
 > **场景 S76（P0）— 系统（大脑·飞书 IM）— 结项自动标记专题群群名【已结项】（v0.89，K76）**
 > - 触发角色/时机：任意结项入口结项成功后（web `POST /projects/:id/close`、提议确认卡生效、机器人一条链 finalizeClose）。
 > - 操作内容：对项目绑定的每个飞书专题群（platform=feishu、channelType=dedicated）：GET 群信息取当前群名 → 未带【已结项】则 `PUT /im/v1/chats/:chat_id` 追加标记 → 同步 channels.name + audit（`project.chat.close_mark`）。
@@ -1174,7 +1174,19 @@
 >   - S77-2 配置台「项目管理→快速立项」：默认类型下拉（active 类型）+ 默认成员勾选（仅绑飞书在职成员可选）；保存落 projects 设置（quickCreateTypeCode/quickCreateDefaultMembers）；非法形状（成员 id 非整数等）400。
 >   - S77-3 群内 /init 行为不变（不建群、不拉人、回执文案不变）；私聊缺名称时明确引导；建群或拉人失败不回滚项目，回执如实说明并指路群登记补绑。
 
->>>>>>> df75f90 (feat: v0.90——私聊快速立项从无到有：机器人建群拉人 + 配置台默认成员勾选（S77，K77）)
+> **场景 S78（P0）— 成员（机器人·IM 全域）— 引用回复上下文：被引用原文随消息透传（v0.92，K78）**
+> - 触发角色/时机：成员在飞书以「引用回复」发送消息——私聊/群@机器人（机器人事件面），或群里任意消息（定时抽取面与 recent_chat/minutes 回读）。
+> - 操作内容：连接器对带 parent_id 的消息按 message_id 单条回查被引用原文（拍平为文本，进程内缓存复用）；机器人事件面注入信封 quote 进 LLM 上下文与审计；抽取面把「【引用 发言人】原文」并入消息正文进分拣/抽取/未分拣池。
+> - 产生/变更的记录：bot_commands.detail（quoteText/quoteMessageId 留痕）；im_buffer.quote_text（migration 0040）；抽取产出 project_events 的原文快照含引用段（归因仍归当前发言人）。
+> - 完成标志：用户引用任务卡片/他人消息说「这个完成了」「按这条登记风险」时，机器人与抽取 LLM 都能看到被引用原文并正确解析指代；引用已删除/不可读时降级为无引用，主链路不受影响。
+> - 审批/协作：无（只读上下文增强，不扩大自动生效范围——K50 信任边界不变）。
+> - 验收标准：
+>   - S78-1 连接器：fetchMessages/fetchChatHistory 对带 parent_id 的消息经「获取单条消息」接口（data.items[0]）回查被引用原文，消息对象新增 parentId/quoteText/quoteSpeakerId（无引用消息 parentId=null、quoteText=null）；同一被引用消息进程内缓存（重复出现零重复回查）；回查失败（HTTP/业务码/空文本）降级 quoteText=null 不阻断拉取与游标推进；无 parent_id 消息零回查。
+>   - S78-2 机器人事件面：带 quote 的入站消息，LLM 用户消息并入「【引用 发言人】原文」（发言人经 feishu_id 映射，未映射省略名字）；斜杠命令解析仍用纯正文（/bind 等参数不受引用污染）；bot_commands.detail 留痕 quoteText/quoteMessageId（raw_text 仍为纯正文）；未@机器人的群消息落 im_buffer 带 quote_text，排干抽取与 API 路径同口径。
+>   - S78-3 抽取面：噪音预过滤按用户原文本判定（纯应酬「好的」带引用仍按噪音跳过，不因引用进 LLM）；带引用消息并入后进通用群分拣 prompt 与未分拣池 content、进分批抽取 prompt（msgIndex 归因约定与 K50 源消息归因不变——引用是上下文，事件归当前发言人）；抽取器系统提示含引用段语义说明。
+>   - S78-4 recent_chat/minutes：专题群讨论回读的行格式并入引用标记（单行「【引用 发言人】…」，截断护栏），供 LLM 解析「这个/按这条」类指代。
+>   - S78-5 卡片引用可读：被引用消息为机器人卡片（interactive）时拍平读取 div 文本（lark_md 的 content 与旧形态 text 字段都认），不再只剩 tag 名。
+
 **P1/P2 场景（编号预分配，细节在晋级时补全）：**
 
 | 编号 | 级别 | 场景 | 一句话说明 |
@@ -1587,11 +1599,7 @@ Interactive dashboard 是 P0 标配交付（见 analytics-design.md）。**维�
 5. **机器人进群**：将机器人拉入每个项目专题群与配置为通用群的群（群设置 → 群机器人 → 添加；或用「将用户或机器人拉入群聊」API `im/v1/chats/:chat_id/members` 批量操作）。
 6. **服务端拉取**：用 `tenant_access_token` 调用 `GET /open-apis/im/v1/messages?container_id=<群 chat_id>`（[获取会话历史消息](https://open.feishu.cn/document/server-docs/im-v1/message/list)），按 `page_token` 分页（page_size ≤ 50），按创建时间升序推进游标。频率限制 1000 次/分钟、50 次/秒，对每小时增量绰绰有余。**前提：机器人必须在该群内**（否则报错 230002）。
 7. **机器人指令通道（S20，v0.11）**：同一应用补开——
-<<<<<<< HEAD
-   - 权限：`im:message:send_as_bot`（以机器人身份发消息）、`im:message.p2p_msg`（收用户发给机器人的私聊消息）、`im:message.group_at_msg`（收群里@机器人的消息）；`im:chat:readonly` 已在基础权限内（读群信息判定外部群）。
-=======
    - 权限：`im:message:send_as_bot`（以机器人身份发消息）、`im:message.p2p_msg`（收用户发给机器人的私聊消息）、`im:message.group_at_msg`（收群里@机器人的消息）；`im:chat:readonly` 已在基础权限内（读群信息判定外部群）；`im:chat:update`（更新群信息——结项自动给专题群名追加【已结项】，S76/K76，v0.89；机器人须在目标群有编辑权：群管理员或群开「所有成员可编辑群信息」）；`im:chat:create`（机器人创建群聊——私聊快速立项从无到有建群，S77/K77，v0.90）与「拉用户或机器人入群」权限 `im:chat.members:write_only`（建群后拉发起人与默认成员；两项均已实测开通）。
->>>>>>> df75f90 (feat: v0.90——私聊快速立项从无到有：机器人建群拉人 + 配置台默认成员勾选（S77，K77）)
    - 事件与回调 → 订阅方式选**「使用长连接接收事件」**（免公网回调，内网 NAT 可用）→ 订阅 `im.message.receive_v1`（接收消息）与 `card.action.trigger`（消息卡片按钮回调，同一条长连接下发）。
    - 依赖：服务端 `npm i @larksuiteoapi/node-sdk`（网关懒加载，未安装时 bot 不启动、主进程不受影响）。
    - 开通顺序：配置台 `im.feishu` 打开 `botEnabled` 保存即建立长连接（热生效，无需重启进程；进程重启后同样按配置自动拉起）。
