@@ -1,7 +1,8 @@
 // S3/K50：项目级抽取候选汇总、确定性对象消歧、批量自动应用与重放幂等。
 // LLM 负责给出候选，本模块决定哪些可写；自动执行与人工确认共用 events.js 的 apply 口子。
-// S69-9（v0.91，K64 修订）：record 分流识别 day_status 打卡候选——唯一命中+发言人映射+高置信+归因
-// 明确时自动写当日打卡记录（复用 setDayStatus 同一写入口），否则降级普通 record 归档。
+// S69-9（v0.91，K64 修订；v0.93 放宽阈值）：record 分流识别 day_status 打卡候选——唯一命中+发言人映射
+// +置信度达标（≥0.6 大致匹配）+归因明确时自动写当日打卡记录（复用 setDayStatus 同一写入口），
+// 否则降级普通 record 归档。
 
 import { addEvent, applyExtractedEvent } from '../engine/events.js'
 import { addTaskRecord } from '../engine/tasks.js'
@@ -14,6 +15,10 @@ const TASK_FIELDS = new Set(['status', 'plan_start_date', 'plan_end_date', 'resp
 const MILESTONE_FIELDS = new Set(['status', 'plan_date'])
 // K64 修订：常态任务无终态（S69）——状态/计划日期字段不经抽取建议通道（打卡走 day_status 分流）
 const ROUTINE_FORBIDDEN_FIELDS = new Set(['status', 'plan_start_date', 'plan_end_date'])
+// S69-9 打卡自动生效置信度闸门：≥0.6「大致匹配」即落库（K64 修订 v0.93——2026-11-16 线上实证常态群
+// 消息以打卡为主、降级无第二落点，漏打卡代价高于误打卡）；<0.6 降级归档。
+// K50 suggestion 自动生效阈值 0.85 不动：状态/日期/责任人是高污染字段，风险等级不同。
+const DAY_STATUS_CONFIDENCE = 0.6
 
 function normName(value) {
   // 剥离集含 〔〕：清单标记会随标题被模型回显进 targetName（GLM 实测），消歧须与裸标题可比
@@ -214,7 +219,8 @@ function eventPayload(projectId, evt, selected, operationKey, candidates = []) {
  * （day=源消息北京日、操作人=发言成员、origin=bot、事件/审计同构）；幂等锚 operation_key。
  * 返回 'applied'（已生效）/ 'skipped'（同消息重放，不复活）/ 'downgrade'（资格不足或引擎拒绝，
  * 调用方降级普通 record 归档）。闸门对齐 K50 自动生效纪律：唯一命中、发言人已映射、归因明确、
- * confidence≥0.85、项目 active；已有当日记录（人工/机器人先打过）不覆盖——降级归档留痕。
+ * confidence≥0.6（K64 修订 v0.93 放宽，原 0.85）、项目 active；已有当日记录（人工/机器人先打过）
+ * 不覆盖——降级归档留痕。
  */
 function applyDayStatusCandidate(db, { projectId, projectName, channel, evt, source, stats }) {
   const resolved = resolveTarget(db, projectId, evt)
@@ -236,7 +242,7 @@ function applyDayStatusCandidate(db, { projectId, projectName, channel, evt, sou
   }
   const project = db.prepare('SELECT status FROM projects WHERE id = ?').get(projectId)
   const attributed = evt.sourceAttributed && Boolean(source.id)
-  const qualifies = Boolean(source.speakerMemberId) && attributed && Number(evt.confidence) >= 0.85 && project?.status === 'active'
+  const qualifies = Boolean(source.speakerMemberId) && attributed && Number(evt.confidence) >= DAY_STATUS_CONFIDENCE && project?.status === 'active'
   if (!qualifies) return 'downgrade'
   try {
     const out = setDayStatus(db, { projectId, taskId: selected.targetTaskId, day, status }, source.speakerMemberId, {
