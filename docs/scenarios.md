@@ -740,7 +740,7 @@ web 侧边栏 `#/my` 页：跨在跑项目聚合本人未完任务（/my 斜杠�
 | S69-6 | 当统计任务口径时，常态任务退出：逾期/未指派/关键人负载/健康度/组合页进度/brief/晨报（`kind='work'` 既有过滤）；`/my` 与 S66 我的工作台不计常态任务；任务盘点对常态项目按「常态清单」呈现、全局未分配盘点不计常态任务 | 同上 |
 | S69-7 | 当维护常态任务行时，建/改/删沿用任务面与既有通道（机器人 add_task 对常态项目自动 routine、无排期/提醒语义）；状态/计划起止 patch 400（行停用走删除）；适用星期可改（≥1 天） | 同上 |
 | S69-8 | 当切换执行视图窗口时，span 支持 周（缺省，自然周周一锚点）/ 双周（**全局纪元锚：2024-01-01（周一）起每 14 天，跨年不断链**）/ 月（自然月，28/29/30/31 天如实）三档；窗口计算唯一在引擎（响应 start/end/days/prevAnchor/nextAnchor，前端零日期推算）；缺省 span 取 参数 → 项目默认（projects.board_span，交付项目设值 400）→ 周；非法 span 400；双周对齐/月边界/跨月导航正确 | 同上 |
-| S69-9 | 常态项目群成员不@机器人发打卡类消息：唯一命中+发言人已映射+confidence≥0.85+归因明确 → 抽取自动写当日打卡记录（day=消息北京日、操作人=发言人、done/skip，复用 setDayStatus，operation_key 幂等不复活）；低置信/多义/未识别/不适用日降级 record 归档；routine 任务 status/计划日期字段建议持久层硬拒（K64 修订，v0.91） | `server/test/s69-routine-projects.test.mjs`（抽取链路锚 `server/test/s3-extraction.test.mjs`） |
+| S69-9 | 常态项目群成员不@机器人发打卡类消息：唯一命中+发言人已映射+confidence≥0.6（v0.93 放宽，原 0.85）+归因明确 → 抽取自动写当日打卡记录（day=消息北京日、操作人=发言人、done/skip，复用 setDayStatus，operation_key 幂等不复活）；低置信（<0.6）/多义/未识别/不适用日降级 record 归档；routine 任务 status/计划日期字段建议持久层硬拒（K64 修订，v0.91/v0.93） | `server/test/s69-routine-projects.test.mjs`（抽取链路锚 `server/test/s3-extraction.test.mjs`） |
 
 ## S70（P0）— 全员（机器人）— 新群快速立项与知识页默认父页回落（v0.82）
 
