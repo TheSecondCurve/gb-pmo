@@ -378,9 +378,10 @@ describe('S69 常态项目与每周执行周视图', () => {
   })
 })
 
-// —— S69-9（v0.91，K64 修订）：常态项目群消息抽取面自动打卡 ——
-// 成员不@机器人直接发打卡消息 → 定时抽取高置信自动写当日打卡记录（复用 setDayStatus 同一写入口）；
-// 低置信/多义/未识别发言人/不适用日降级 record 归档；routine 任务状态/日期建议持久层硬拒。
+// —— S69-9（v0.91，K64 修订；v0.93 放宽阈值）：常态项目群消息抽取面自动打卡 ——
+// 成员不@机器人直接发打卡消息 → 定时抽取按闸门（confidence≥0.6 大致匹配即自动，v0.93 放宽原 0.85）
+// 自动写当日打卡记录（复用 setDayStatus 同一写入口）；
+// 低置信（<0.6）/多义/未识别发言人/不适用日降级 record 归档；routine 任务状态/日期建议持久层硬拒。
 describe('S69-9 常态项目群消息抽取面自动打卡（v0.91）', () => {
   // 固定过去日：2026-11-12 周四 20:00 北京（11-13 是周五）——day 断言不依赖真实今天
   const THU_8PM = Date.UTC(2026, 10, 12, 12, 0, 0)
@@ -448,7 +449,7 @@ describe('S69-9 常态项目群消息抽取面自动打卡（v0.91）', () => {
     } finally { t.close() }
   })
 
-  it('S69-9: 未识别发言人 / 低置信 → 降级 record 归档，不写打卡记录', async () => {
+  it('S69-9: 未识别发言人 / 低置信（<0.6）→ 降级 record 归档，不写打卡记录', async () => {
     const t = mk()
     try {
       const stranger = fakeLlm([
@@ -459,11 +460,36 @@ describe('S69-9 常态项目群消息抽取面自动打卡（v0.91）', () => {
       expect(t.db.prepare(`SELECT COUNT(*) AS n FROM project_events WHERE raw_snapshot = '看资讯打卡'`).get().n).toBe(1) // record 照归档
 
       const lowConf = fakeLlm([
-        { nature: 'record', eventType: 'progress', summary: '看资讯好像打卡了', targetTaskId: t.dailyTask.id, targetName: '看资讯', targetField: 'day_status', targetValue: 'done', confidence: 0.6, msgIndex: 0 },
+        { nature: 'record', eventType: 'progress', summary: '看资讯好像打卡了', targetTaskId: t.dailyTask.id, targetName: '看资讯', targetField: 'day_status', targetValue: 'done', confidence: 0.5, msgIndex: 0 },
       ])
       await ingestMessages(t.db, t.ch, [{ id: 'om_ck5', speakerId: 'fs_zhang', text: '看资讯好像打卡了', ts: THU_8PM }], { llm: lowConf })
-      expect(dayRow(t.db, t.dailyTask.id, '2026-11-12')).toBeFalsy()
+      expect(dayRow(t.db, t.dailyTask.id, '2026-11-12')).toBeFalsy() // 0.5 < 0.6 → 仍降级
       expect(t.db.prepare(`SELECT COUNT(*) AS n FROM project_events WHERE raw_snapshot = '看资讯好像打卡了'`).get().n).toBe(1)
+    } finally { t.close() }
+  })
+
+  it('S69-9: confidence 0.6「大致匹配」→ 自动写当日打卡；0.59 仍降级（v0.93 放宽，2026-11-16「付费听友群 打卡」线上回归）', async () => {
+    const t = mk()
+    try {
+      // 线上形态：消息未点名第 N 次，模型按上下文推断目标并如实给低偏置信——v0.91 闸门（0.85）
+      // 静默降级致打卡丢失且无第二落点；v0.93 起 ≥0.6 即自动生效
+      const under = fakeLlm([
+        { nature: 'record', eventType: 'progress', summary: '按上下文推断为看资讯打卡', targetTaskId: t.dailyTask.id, targetName: '看资讯', targetField: 'day_status', targetValue: 'done', confidence: 0.59, msgIndex: 0 },
+      ])
+      await ingestMessages(t.db, t.ch, [{ id: 'om_ck8', speakerId: 'fs_zhang', text: '看资讯打卡', ts: THU_8PM }], { llm: under })
+      expect(dayRow(t.db, t.dailyTask.id, '2026-11-12')).toBeFalsy() // 0.59 < 0.6 → 不写行
+      expect(t.db.prepare(`SELECT COUNT(*) AS n FROM project_events WHERE raw_snapshot = '看资讯打卡'`).get().n).toBe(1)
+
+      const at = fakeLlm([
+        { nature: 'record', eventType: 'progress', summary: '按上下文推断为看资讯打卡', targetTaskId: t.dailyTask.id, targetName: '看资讯', targetField: 'day_status', targetValue: 'done', confidence: 0.6, msgIndex: 0 },
+      ])
+      const stats = await ingestMessages(t.db, t.ch, [{ id: 'om_ck9', speakerId: 'fs_zhang', text: '看资讯打卡', ts: THU_8PM + 60_000 }], { llm: at })
+      const row = dayRow(t.db, t.dailyTask.id, '2026-11-12')
+      expect(row?.status).toBe('done') // 0.6 大致匹配 → 自动落库
+      expect(row?.source).toBe('bot')
+      expect(row?.operator_member_id).toBe(t.members.lead.id)
+      expect(t.db.prepare(`SELECT * FROM project_events WHERE source_ref = 'om_ck9'`).get().summary).toBe(`🗓 任务「看资讯」2026-11-12 完成`)
+      expect(stats.events).toBe(1)
     } finally { t.close() }
   })
 
