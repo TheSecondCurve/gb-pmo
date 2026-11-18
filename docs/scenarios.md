@@ -864,6 +864,17 @@ S70 快速立项只能在已存在的群里触发（真人建群→加机器人�
 | S79-6 | 表格同步：落库后异步写多维表格（字段映射含新字段与来源=群报单），synced_record_id 回填；失败不阻塞落库，下轮补推未同步行 | 同上 |
 | S79-7 | 配置：sales.chatId/baseToken/tableId 默认值即生产值、可改；scheduler.salesEnabled/salesCron/salesReportCron 可改，salesEnabled 默认关——未开或配置不全静默跳过 | 同上 |
 
+## S80（P0）— 销售（机器人·销售群）— 报单凭证截图自动归档到多维表格附件（v0.94.1）
+
+报单文本与付款截图是群里连续的不同消息（图先文后/文先图后、同发言人几十秒内）。连接器提 image_key → 归属算法挂到成交记录 → 同步时下载原图直传 bitable → 写「成交凭证」附件字段。文件实体存飞书云，SQLite 只存 file_token 引用（用户拍板不存本地）。决策见 design.md K80。
+
+| # | 验收标准 | 对应测试 |
+|---|---|---|
+| S80-1 | fetchMessages 消息对象带 imageKeys[]——image 消息（body.content.image_key）与 post 内嵌 img 元素都提取；纯文本消息为空数组 | `server/test/s80-sales-voucher.test.mjs` |
+| S80-2 | 归属：同发言人 ±10 分钟窗口内最近已落库报单（\|ts 差\| 最小）；跨发言人不抢；一单多图全挂；无主图静默；同图重放查重不重复挂；两遍处理下图先文后可关联 | 同上 |
+| S80-3 | 附件同步：未同步行 create 携带附件；已同步行 PATCH 追加（新旧 file_token 合并整体写入）；voucher_tokens 幂等不重传；下载/上传失败跳过该图不阻塞记账与其余字段（token 留空下轮补） | 同上 |
+| S80-4 | 口径边界：凭证不上抽取回执、不进每日汇总；凭证链路异常零群消息（静默降级，台账可查） | 同上 |
+
 ## 必测清单（engineering-standards §4）
 
 | 项 | 对应测试 |
