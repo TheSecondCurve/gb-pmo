@@ -112,6 +112,10 @@ export const DEFAULT_SETTINGS = {
     digestEnabled: true,
     morningCron: '30 9 * * *',         // 每日项目群晨报（S68，默认每日 09:30；项目级日幂等——当日已推不重发）
     morningEnabled: true,
+    salesCron: '*/30 * * * *',         // 销售报单抽取（S79，默认每 30 分钟；游标幂等增量）
+    salesEnabled: false,               // 默认关——云文档 scope/外部群/表格授权配齐后手动开（S22 同构）
+    salesReportCron: '0 20 * * *',     // 销售每日汇总播报（S79，默认 20:00；日级幂等——当日已推不重发）
+    salesReportEnabled: false,         // 默认关，与 salesEnabled 同批开启
   },
   // S22 项目日历：feishuCalendarId 空=未初始化（配置台「外部依赖→飞书」初始化写入；同步任务静默跳过）
   calendar: { feishuCalendarId: '' },
@@ -159,5 +163,13 @@ export const DEFAULT_SETTINGS = {
     prefix: 'backups/', // 对象前缀（保存时归一化：去首斜杠、补尾斜杠；空=桶根）
     pathStyle: false,   // 路径风格寻址（MinIO/自建 S3 常需 true；OSS/R2 用 virtual-hosted）
     keepCount: 30,      // 云端滚动保留份数（1~365，超出删最旧）
+  },
+  // S79（v0.94，K79）销售成交登记域：报单群与目标多维表格——默认值即生产值（用户 2026-11-18 提供），
+  // 配置台/API 可改。开关与频率在 scheduler 块（salesEnabled 默认关）；游标不落配置
+  // （= sales_messages MAX(ts) 派生）。凭证附件 v0.94 不同步文件（表内源消息ID回溯群消息）。
+  sales: {
+    chatId: 'oc_d5ac056209bf35bd08383f5babca4293', // 销售数据同步群（外部群，机器人进群后拉历史消息）
+    baseToken: 'OzZcbBHa5aDnVvscpyxc6QE1nzg',     // 多维表格「2026 女商成交登记表」
+    tableId: 'tblU1tSP7A0LZ0t9',                  // 「成交登记总表」（合并单表，金额 number，K79）
   },
 }

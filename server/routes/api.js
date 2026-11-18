@@ -563,6 +563,19 @@ export function registerApiRoutes(app) {
     return { history: listBackupHistory(db) }
   })
 
+  // —— S79（v0.94，K79）销售成交登记域：读端点（全员透明 D1；写入走群报单机器人链路，
+  // 手动触发复用 S67-5 scheduler/run：task=salesExtraction|salesReport） ——
+  app.get('/api/v1/sales/records', async (req) => {
+    const { listSalesRecords } = await import('../engine/sales.js')
+    const q = req.query ?? {}
+    return { records: listSalesRecords(db, { fromDay: q.fromDay, toDay: q.toDay, limit: q.limit ? Number(q.limit) : 200 }) }
+  })
+
+  app.get('/api/v1/sales/summary', async (req) => {
+    const { salesSummary } = await import('../engine/sales.js')
+    return salesSummary(db, { day: req.query?.day || undefined })
+  })
+
   // —— S67-5（v0.77，K58）：定时任务手动触发——与调度器同一 runner 表执行一次并回显；
   // 幂等语义与定时一致（不在手动路径绕过判重：晨报当日已推跳过、周报本周已推跳过、备份未配跳过） ——
   app.post('/api/v1/admin/scheduler/run', async (req, reply) => {

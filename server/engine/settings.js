@@ -13,11 +13,11 @@ export function getSetting(db, key) {
 // 值校验器（按 key）：保存前拦截非法值，中文错误带 400。
 const VALIDATORS = {
   scheduler(value) {
-    for (const k of ['extractionCron', 'alertCron', 'reportCron', 'calendarSyncCron', 'backupCron', 'digestCron', 'morningCron']) {
+    for (const k of ['extractionCron', 'alertCron', 'reportCron', 'calendarSyncCron', 'backupCron', 'digestCron', 'morningCron', 'salesCron', 'salesReportCron']) {
       if (value?.[k] === undefined) continue
       parseCron(value[k]) // 非法即 throw（statusCode 400，含字段与原因）
     }
-    for (const k of ['extractionEnabled', 'alertEnabled', 'reportEnabled', 'calendarSyncEnabled', 'backupEnabled', 'digestEnabled', 'morningEnabled']) {
+    for (const k of ['extractionEnabled', 'alertEnabled', 'reportEnabled', 'calendarSyncEnabled', 'backupEnabled', 'digestEnabled', 'morningEnabled', 'salesEnabled', 'salesReportEnabled']) {
       if (value?.[k] === undefined) continue
       if (typeof value[k] !== 'boolean') {
         throw Object.assign(new Error(`scheduler.${k} 须为布尔值（true/false）`), { statusCode: 400 })
@@ -111,6 +111,16 @@ const VALIDATORS = {
     }
     if (value?.pathStyle !== undefined && typeof value.pathStyle !== 'boolean') {
       throw Object.assign(new Error('backup.pathStyle 须为布尔值（MinIO/自建 S3 多为 true；OSS/R2 用 false）'), { statusCode: 400 })
+    }
+  },
+  // S79（v0.94，K79）：销售域坐标——三项均须非空字符串（trim 后判空）；存在性（群/表是否真实可达）
+  // 不在保存时拦，抽取/同步运行时判定并回原因（S22 同构：未配全=跳过）。
+  sales(value) {
+    for (const k of ['chatId', 'baseToken', 'tableId']) {
+      if (value?.[k] === undefined) continue
+      if (typeof value[k] !== 'string' || !value[k].trim()) {
+        throw Object.assign(new Error(`sales.${k} 须为非空字符串`), { statusCode: 400 })
+      }
     }
   },
 }
