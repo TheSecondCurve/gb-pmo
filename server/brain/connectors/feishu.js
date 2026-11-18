@@ -38,6 +38,27 @@ function extractPostText(content) {
   return out.join(' ').slice(0, 2000)
 }
 
+/** S80（v0.94.1，K80）：提取消息内图片 image_key——image 消息（body.content.image_key）与
+ *  post 富文本内嵌 img 元素（图文混排报单）；其余类型/解析失败返回空数组（不抛错）。 */
+export function extractImageKeys(item) {
+  const keys = []
+  try {
+    const c = JSON.parse(item.body?.content || '{}')
+    if (item.msg_type === 'image' && c.image_key) keys.push(c.image_key)
+    if (item.msg_type === 'post') {
+      for (const lang of Object.values(c)) {
+        if (!lang) continue
+        for (const para of lang.content || []) {
+          for (const run of para || []) {
+            if (run?.tag === 'img' && run.image_key) keys.push(run.image_key)
+          }
+        }
+      }
+    }
+  } catch { /* 原样降级：无图 */ }
+  return keys
+}
+
 /**
  * 增量拉取一个群的消息。cursor = 上一批最后一条消息的创建时间（秒）。
  * 返回 { messages: [{ id, speakerId, text, ts(ms) }], nextCursor }
@@ -73,6 +94,7 @@ export async function fetchMessages(cfg, channel, cursor) {
         id: item.message_id,
         speakerId: item.sender?.id || '',
         text: normalizeText(item),
+        imageKeys: extractImageKeys(item), // S80：报单凭证截图（image 消息与 post 内嵌图）
         ts: sec * 1000,
         parentId,
         quoteText,
@@ -647,6 +669,12 @@ async function uploadDocMedia(cfg, parentId, { parentType, fileName, bytes, cont
 /** 上传图片为文档素材（drive/v1/medias/upload_all，parent_type=docx_image），parent=目标 image 块 id；返回 fileToken。 */
 export async function uploadDocImage(cfg, imageBlockId, { fileName, bytes, contentType }) {
   return uploadDocMedia(cfg, imageBlockId, { parentType: 'docx_image', fileName, bytes, contentType })
+}
+
+/** S80（v0.94.1，K80）：上传文件为多维表格附件素材（parent_type=bitable_file，parent_node=base_token）；
+ *  返回 fileToken（写入记录「成交凭证」附件字段用）。权限族与表格读写不同，不足时 403 带中文指引。 */
+export async function uploadBitableFile(cfg, baseToken, { fileName, bytes, contentType }) {
+  return uploadDocMedia(cfg, baseToken, { parentType: 'bitable_file', fileName, bytes, contentType })
 }
 
 /**

@@ -7,11 +7,11 @@ import { getLlm, parseJsonLoose } from './llm.js'
 import { parseReport, looksLikeReport, normalizeAssistant, normalizeProduct, normalizePayPlatform, normalizeYesNo, parseAmount, parseDealDate } from '../engine/salesParser.js'
 import {
   recordSalesMessage, updateSalesMessageStatus, salesCursor,
-  findSalesDuplicate, insertSalesRecord,
+  findSalesDuplicate, insertSalesRecord, attachVoucher,
 } from '../engine/sales.js'
 import { today } from '../db/time.js'
 import * as feishu from './connectors/feishu.js'
-import { syncPendingToBitable } from './salesSync.js'
+import { syncPendingToBitable, syncVoucherBackfill } from './salesSync.js'
 
 /** LLM 兜底（S79-3）：非模板但含成交语义的消息 → 结构化 JSON（同一套字段名，落库前同归一校验）。 */
 async function llmFallback(llm, text, { today: todayStr }) {
@@ -70,11 +70,19 @@ export async function runSalesExtraction(db, { llm, send } = {}) {
   const { messages } = await feishu.fetchMessages(feishuCfg, { groupKey: salesCfg.chatId }, cursor)
   const out = { pulled: messages.length, recorded: 0, duplicates: 0, pending: 0, noise: 0, llmUsed: 0 }
   const todayStr = today() // 北京日（S19；相对日期「今天/昨天」的锚）
+  const images = [] // S80：本轮图片消息（纯图与图文混排都收集，第二遍归属）
 
+  // 第一遍：文本报单解析落库（S79 语义不变）
   for (const msg of messages) {
     const text = String(msg.text ?? '').trim()
+    const hasImage = (msg.imageKeys || []).length > 0
+    if (hasImage) images.push(msg) // S80：混排消息文本照常解析，图也收集
     const base = { messageId: msg.id, chatId: salesCfg.chatId, speakerId: msg.speakerId ?? '', text, ts: msg.ts }
-    if (!text) { recordSalesMessage(db, { ...base, status: 'noise', detail: '空文本（图片/卡片等）' }); out.noise++; continue }
+    if (!text) {
+      // 纯图片消息不落台账（S80：归属幂等靠 vouchers 查重；无图的空文本——卡片/系统消息——仍记噪音）
+      if (!hasImage) { recordSalesMessage(db, { ...base, status: 'noise', detail: '空文本（卡片等）' }); out.noise++ }
+      continue
+    }
     const rowId = recordSalesMessage(db, { ...base, status: 'noise' })
     if (!rowId) continue // message_id 幂等：重放/刷屏零重复（S79-2）
 
@@ -121,11 +129,22 @@ export async function runSalesExtraction(db, { llm, send } = {}) {
   // 轮末汇总回执（S79-4 回执语义）：有新成交发一条恭喜、无新成交静默零打扰（不逐条刷屏）
   if (out.recorded > 0) await reply(`收到 ${out.recorded} 条成交信息入库，恭喜！`)
 
-  // 表格同步（best-effort：失败不阻塞，下轮补推）
+  // S80 第二遍：图片归属（本轮报单已全部落库——图先文后同轮也能挂上；无主图静默）
+  let voucherAttached = 0
+  for (const img of images) {
+    for (const imageKey of img.imageKeys || []) {
+      if (attachVoucher(db, { speakerId: img.speakerId ?? '', ts: img.ts, messageId: img.id, imageKey })) voucherAttached++
+    }
+  }
+  out.voucherAttached = voucherAttached
+
+  // 表格同步（best-effort：失败不阻塞，下轮补推）+ 已同步行的凭证补挂（S80-3 PATCH）
   try {
     const sync = await syncPendingToBitable(db)
     out.synced = sync.synced
     if (sync.error) out.syncError = sync.error
+    const back = await syncVoucherBackfill(db)
+    out.voucherPatched = back.patched
   } catch (e) {
     out.syncError = e.message
   }
