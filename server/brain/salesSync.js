@@ -22,12 +22,15 @@ export function toBitableFields(rec, voucherTokens = []) {
     客户手机号: rec.customerPhone || '',
     备注: rec.note || '',
     源消息ID: rec.messageId,
-    来源: ['群报单'],
+    来源: '群报单',
   }
-  if (rec.payPlatform) f.付款平台 = [rec.payPlatform]
+  // 单选字段传字符串：bitable v1 API 应用身份（tenant_access_token）下数组格式触发
+  // 1254062 SingleSelectFieldConvFail（2026-11-18 线上二分实证：app+数组❌ / app+字符串✅ / user 两者✅）。
+  // 字符串是两种身份都接受的最大公约数格式（v0.94.2.2）。
+  if (rec.payPlatform) f.付款平台 = rec.payPlatform
   if (rec.tradeNo) f.付款交易号 = rec.tradeNo
-  if (rec.selfOwned) f.是否自营产品 = [rec.selfOwned]
-  if (rec.distribution) f.是否涉及分销 = [rec.distribution]
+  if (rec.selfOwned) f.是否自营产品 = rec.selfOwned
+  if (rec.distribution) f.是否涉及分销 = rec.distribution
   const tokens = (voucherTokens || []).filter(Boolean)
   if (tokens.length) f.成交凭证 = tokens.map((t) => ({ file_token: t }))
   return f
@@ -78,11 +81,12 @@ export async function syncPendingToBitable(db, opts = {}) {
       method: 'POST',
       body: { records: payload },
     })
-    const created = res?.records || [] // feishuApi 已剥壳返回 body.data（{records:[{record:{record_id}}]}）
+    const created = res?.records || [] // feishuApi 已剥壳返回 body.data；record_id 平铺在 records[i].id
     let n = 0
     for (let i = 0; i < created.length && i < rows.length; i++) {
-      if (created[i]?.record?.record_id) {
-        markSalesSynced(db, rows[i].id, created[i].record.record_id)
+      const rid = created[i]?.record?.record_id ?? created[i]?.id // 双形态兼容（线上实证 batch_create 返回 {id}）
+      if (rid) {
+        markSalesSynced(db, rows[i].id, rid)
         n++
       }
     }
