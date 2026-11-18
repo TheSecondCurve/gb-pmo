@@ -32,6 +32,7 @@ export const ADMIN_SECTIONS: { key: string; label: string; tabs: { key: string; 
       { key: 'llm', label: 'LLM' },
       { key: 'feishu', label: '飞书' },
       { key: 'wecom', label: '企业微信' },
+      { key: 'sales', label: '销售域' }, // S79（v0.94.2）：报单群与多维表格坐标（凭证复用「飞书」Tab）
     ],
   },
   {
