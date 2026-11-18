@@ -203,7 +203,7 @@ describe('S79-6 多维表格同步（失败补推）', () => {
     const bodies = []
     const ok = stubFetch([TOKEN_OK, ['/bitable/v1/apps/', (u, opts) => {
       bodies.push(JSON.parse(opts.body))
-      return { code: 0, data: { records: [{ record: { record_id: 'recSY1' } }, { record: { record_id: 'recSY2' } }] } }
+      return { code: 0, data: { records: [{ id: 'recSY1' }, { id: 'recSY2' }] } } // 真实形态：record_id 平铺在 records[i].id
     }]])
     try {
       const r2 = await syncPendingToBitable(ctx.db)
@@ -213,8 +213,8 @@ describe('S79-6 多维表格同步（失败补推）', () => {
       // 字段映射：select 数组 / datetime 毫秒 / 来源
       const f = bodies[0].records[0].fields
       expect(f.金额).toBe(999)
-      expect(f.付款平台).toEqual(['微信'])
-      expect(f.来源).toEqual(['群报单'])
+      expect(f.付款平台).toBe('微信') // v1 应用身份单选须字符串（1254062 实证）
+      expect(f.来源).toBe('群报单')
       expect(f.源消息ID).toBe('om_sync1')
       expect(typeof f.成交日期).toBe('number')
       void a; void b
