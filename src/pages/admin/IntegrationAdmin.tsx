@@ -4,7 +4,7 @@ import { useStore } from '../../store'
 import { Btn, Card, Field, Spinner, Tabs, inputCls } from '../../components/ui'
 import { ADMIN_SECTIONS } from './sections'
 
-const TABS = ADMIN_SECTIONS[2].tabs
+const TABS = ADMIN_SECTIONS.find((s) => s.key === 'integrations')!.tabs
 
 export default function IntegrationAdmin({ tab }: { tab: string }) {
   const nav = (key: string) => { location.hash = `#/admin/integrations/${key}` }
