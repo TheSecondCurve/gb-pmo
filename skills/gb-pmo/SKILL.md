@@ -520,6 +520,8 @@ client.sh action generate_person_digest '{}'
 | source | TEXT | bot（群报单）| manual（人工录入，预留） |
 | synced_record_id | TEXT | 多维表格 record_id（NULL = 未同步/失败待补推，S79-6） |
 | synced_at | INTEGER |  |
+| vouchers | TEXT |  |
+| voucher_tokens | TEXT |  |
 
 ## 枚举（值 ↔ 中文 label，双向对齐）
 

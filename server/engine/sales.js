@@ -44,17 +44,18 @@ export function findSalesDuplicate(db, rec) {
   return null
 }
 
-/** 成交记录落库（调用方已完成查重与关键字段校验；订单号冲突由唯一索引兜底抛错；可选字段 ?? '' 归一）。 */
+/** 成交记录落库（调用方已完成查重与关键字段校验；订单号冲突由唯一索引兜底抛错；可选字段 ?? '' 归一）。
+ *  vouchers（S80）：可选初始凭证引用 JSON（测试/直插路径；抽取链路经 attachVoucher 后置挂）。 */
 export function insertSalesRecord(db, rec) {
   const r = db.prepare(
     `INSERT INTO sales_records
      (message_id, order_no, deal_day, deal_ts, amount, product, assistant, customer_nick, customer_name,
-      customer_phone, pay_platform, trade_no, self_owned, distribution, note, source, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      customer_phone, pay_platform, trade_no, self_owned, distribution, note, source, vouchers, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     rec.messageId, rec.orderNo ?? '', rec.dealDay, rec.dealTs, rec.amount, rec.product ?? '', rec.assistant ?? '',
     rec.customerNick ?? '', rec.customerName ?? '', rec.customerPhone ?? '', rec.payPlatform ?? '', rec.tradeNo ?? '',
-    rec.selfOwned ?? '', rec.distribution ?? '', rec.note ?? '', rec.source ?? 'bot', Date.now()
+    rec.selfOwned ?? '', rec.distribution ?? '', rec.note ?? '', rec.source ?? 'bot', rec.vouchers ?? '[]', Date.now()
   )
   return Number(r.lastInsertRowid)
 }
@@ -118,4 +119,60 @@ export function salesSummary(db, { day = today() } = {}) {
     byProduct,
     pendingToday,
   }
+}
+
+// —— S80（v0.94.1，K80）报单凭证截图归属与记账 ——
+
+/** 归属时间窗：同发言人 ±10 分钟（用户拍板；报单到截图一般几十秒，10 分钟宽而不串单）。 */
+export const VOUCHER_WINDOW_MS = 10 * 60 * 1000
+
+/**
+ * 截图归属（S80-2）：挂到同发言人 ±窗口内**最近的已落库报单**（sales_messages.status='recorded'
+ * 的源消息，|ts 差| 最小）——双向窗口（图先文后/文先图后都认）、跨发言人不抢挂、无主静默返回 false。
+ * 幂等：vouchers 源消息号查重，同图重放不重复 append。返回是否挂上。
+ */
+export function attachVoucher(db, { speakerId, ts, messageId, imageKey }) {
+  const row = db.prepare(
+    `SELECT r.id, r.vouchers FROM sales_records r
+     JOIN sales_messages m ON m.message_id = r.message_id
+     WHERE m.speaker_id = ? AND m.status = 'recorded' AND ABS(m.ts - ?) <= ?
+     ORDER BY ABS(m.ts - ?) ASC LIMIT 1`
+  ).get(speakerId, ts, VOUCHER_WINDOW_MS, ts)
+  if (!row) return false
+  const vouchers = JSON.parse(row.vouchers || '[]')
+  if (vouchers.some((v) => v.msgId === messageId && v.imageKey === imageKey)) return true // 重放幂等
+  vouchers.push({ msgId: messageId, imageKey })
+  db.prepare('UPDATE sales_records SET vouchers = ? WHERE id = ?').run(JSON.stringify(vouchers), row.id)
+  return true
+}
+
+/** 读取凭证引用（[{msgId, imageKey}]）。 */
+export function getVouchers(db, id) {
+  const row = db.prepare('SELECT vouchers FROM sales_records WHERE id = ?').get(id)
+  return JSON.parse(row?.vouchers || '[]')
+}
+
+/** 已上传 file_token 对位读取（与 vouchers 等长，null=未上传成功）。 */
+export function getVoucherTokens(db, id) {
+  const row = db.prepare('SELECT voucher_tokens FROM sales_records WHERE id = ?').get(id)
+  return JSON.parse(row?.voucher_tokens || '[]')
+}
+
+/** token 对位记账（S80-3 幂等）：index 对齐 vouchers，只填空位、已上传不覆盖。 */
+export function setVoucherTokenAt(db, id, index, token) {
+  const tokens = getVoucherTokens(db, id)
+  while (tokens.length < index) tokens.push(null)
+  tokens[index] = token ?? null
+  db.prepare('UPDATE sales_records SET voucher_tokens = ? WHERE id = ?').run(JSON.stringify(tokens), id)
+}
+
+/** 附件未完成行（已同步但 tokens 未对齐 vouchers，或未同步行带图）：backfill 候选。 */
+export function listVoucherPending(db, { onlySynced = false, limit = 20 } = {}) {
+  const cond = onlySynced ? "synced_record_id IS NOT NULL AND" : ''
+  return camelizeRows(db.prepare(
+    `SELECT * FROM sales_records WHERE ${cond} vouchers != '[]' AND (
+       json_array_length(vouchers) > json_array_length(voucher_tokens)
+       OR voucher_tokens LIKE '%null%'
+     ) ORDER BY id LIMIT ?`
+  ).all(Math.min(Math.max(limit, 1), 100)))
 }

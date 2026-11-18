@@ -230,7 +230,7 @@ describe('S75 常态任务周期四档', () => {
     ins.run('周一三五任务', '1,3,5')
     ins.run('空星期任务', null)
 
-    expect(migrate(raw)).toBe(4) // 应用 0038 + 0039（v0.91 游标归一）+ 0040（v0.92 im_buffer 引用列）+ 0041（v0.94 销售域两张表，对旧库为纯新增）
+    expect(migrate(raw)).toBe(5) // 应用 0038 + 0039（v0.91 游标归一）+ 0040（v0.92 im_buffer 引用列）+ 0041（v0.94 销售域两张表）+ 0042（v0.94.1 凭证两列，纯新增）
     const rows = raw.prepare(`SELECT title, cadence FROM tasks ORDER BY id`).all()
     expect(JSON.parse(rows[0].cadence)).toEqual({ type: 'daily' })
     expect(JSON.parse(rows[1].cadence)).toEqual({ type: 'weekly', weekdays: [1, 3, 5] })
