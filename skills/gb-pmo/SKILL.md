@@ -484,6 +484,43 @@ client.sh action generate_person_digest '{}'
 | source | TEXT | web | bot（打卡来源通道） |
 | updated_at | INTEGER |  |
 
+### sales_messages
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| message_id | TEXT | 飞书消息 id（消息级幂等键，S79-2） |
+| chat_id | TEXT | 来源销售群（settings.sales.chatId） |
+| speaker_id | TEXT | 发言人 open_id（回执 @ 与审计） |
+| text | TEXT | 原文快照（复核/重解析用，D2 保留原话口径） |
+| ts | INTEGER | 消息时刻 epoch 毫秒（游标 = MAX(秒)） |
+| status | TEXT |  |
+| detail | TEXT | 状态说明（缺失字段清单等） |
+
+### sales_records
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| message_id | TEXT | 源报单消息（溯源；非唯一——补发合流不建新行） |
+| order_no | TEXT | 订单号（业务幂等键；空 = 报单未提供） |
+| deal_day | TEXT | 北京日历日 YYYY-MM-DD（S19，汇总日界口径） |
+| deal_ts | INTEGER | 成交日北京零点 epoch 毫秒（写表格 datetime 用） |
+| amount | REAL | 成交金额（元；销售域金额对象，K79） |
+| product | TEXT | 归一后产品名（名册见 engine/salesParser.js） |
+| assistant | TEXT | 归一后小助手名（剥括号注释） |
+| customer_nick | TEXT |  |
+| customer_name | TEXT |  |
+| customer_phone | TEXT |  |
+| pay_platform | TEXT | 微信|支付宝|微店|线下|其他（空 = 未提供） |
+| trade_no | TEXT | 付款账号或平台交易号 |
+| self_owned | TEXT | 是|否（空 = 未提供，不猜） |
+| distribution | TEXT | 是|否（空 = 未提供，不猜） |
+| note | TEXT |  |
+| source | TEXT | bot（群报单）| manual（人工录入，预留） |
+| synced_record_id | TEXT | 多维表格 record_id（NULL = 未同步/失败待补推，S79-6） |
+| synced_at | INTEGER |  |
+
 ## 枚举（值 ↔ 中文 label，双向对齐）
 
 - **memberRole**: admin=系统管理员、member=成员

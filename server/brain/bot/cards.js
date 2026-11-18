@@ -255,3 +255,34 @@ export function buildInitAssignCard({ proposalId, projectName, rows, warnings = 
   })
   return card('orange', `初始分配草案 #${proposalId}`, elements)
 }
+
+// —— S79（v0.94，K79）销售域卡片 ——
+
+/** 金额展示格式（与 brain/salesReport.js 的降级文本同口径；展示层各自持有，不引引擎依赖）。 */
+const salesMoney = (n) => `¥${Number(n).toLocaleString('zh-CN', { maximumFractionDigits: 2 })}`
+
+/**
+ * S79-5 销售每日汇总卡：绿色 header（成交喜报语义）+ 今日/本月合计 + 本月按产品成交金额明细
+ * （column_set ≤TABLE_MAX_ROWS 行成表、超出退化文本行，S45 元素预算护栏）+ 待补发提示。
+ * 不做小助手排行榜（用户 2026-11-18 拍板）。输入 = engine/sales.js salesSummary 返回体；
+ * 纯函数不感知 HTTP。投递层降级链（卡片失败→纯文本补发）在 brain/salesReport.js（K41/S55 同款）。
+ */
+export function buildSalesDailyCard(s) {
+  const elements = [
+    md(`**今日成交 ${s.today.count} 单，合计 ${salesMoney(s.today.amount)}**`),
+    md(`本月累计 **${s.month.count}** 单，**${salesMoney(s.month.amount)}**`),
+  ]
+  if (s.byProduct && s.byProduct.length) {
+    elements.push({ tag: 'hr' })
+    elements.push(md('**本月产品成交明细**'))
+    const rows = s.byProduct.map((p) => [p.product, String(p.n), salesMoney(p.amount)])
+    if (rows.length <= TABLE_MAX_ROWS) {
+      elements.push(...table(['产品', '单数', '金额'], rows, [4, 1, 3]))
+    } else {
+      elements.push(md(s.byProduct.slice(0, TABLE_MAX_ROWS).map((p) => `· ${p.product}：${p.n} 单 ${salesMoney(p.amount)}`).join('\n')))
+      elements.push(md(`（及其余 ${rows.length - TABLE_MAX_ROWS} 个产品）`))
+    }
+  }
+  if (s.pendingToday > 0) elements.push(md(`⚠️ 今日有 **${s.pendingToday}** 条报单缺关键字段待补发`))
+  return card('green', `📊 销售日报 ${s.day}`, elements)
+}
