@@ -5,7 +5,7 @@ import { getSetting, setSetting } from '../engine/settings.js'
 import { bjDayStartMs } from '../db/time.js'
 
 // PRD S67（v0.75，K53）— 配置台「定时任务」集中管理页：
-// 全部 7 项调度任务一页配 cron + 启用开关（含 S68 新增晨报任务）；纯提醒发送门槛
+// 全部 9 项调度任务一页配 cron + 启用开关（含 S68 晨报、S79 销售两项）；纯提醒发送门槛
 // reminder.fireAfterHour 收口到同页（补 0-23 校验器，此前只能走 API 改）。
 // v0.77（K58）：S67-5 手动触发（POST /api/v1/admin/scheduler/run）；晨报锚点改进程启动时刻（重启不补跑）。
 
@@ -15,7 +15,7 @@ afterAll(() => ctx?.db.close())
 const at = (y, mo, d, h, mi) => new Date(y, mo, d, h, mi).getTime()
 
 describe('S67 定时任务集中配置', () => {
-  it('S67-1: settings.scheduler 含全部 7 项任务键（含新增晨报），默认值就位', async () => {
+  it('S67-1: settings.scheduler 含全部 9 项任务键（含新增晨报与 S79 销售两项），默认值就位', async () => {
     ctx = await setupApp()
     const cookie = await loginCookie(ctx.app, 'admin', 'admin-pass-123')
     const s = await authed(ctx.app, cookie, 'GET', '/api/v1/admin/settings')
@@ -26,9 +26,11 @@ describe('S67 定时任务集中配置', () => {
       backupCron: '30 3 * * *', backupEnabled: true,
       digestCron: '0 9 * * 1', digestEnabled: true,
       morningCron: '30 9 * * *', morningEnabled: true, // v0.75 新增（S68 每日项目群晨报）
+      salesCron: '*/30 * * * *', salesEnabled: false, // v0.94 新增（S79 销售报单抽取，默认 30 分钟，默认关）
+      salesReportCron: '0 20 * * *', salesReportEnabled: false, // v0.94 新增（S79 销售每日汇总播报）
     })
-    // 任务表 7 项，晨报在内
-    expect(TASKS.map((t) => t.key)).toEqual(['extraction', 'alerts', 'report', 'calendarSync', 'backup', 'digest', 'morning'])
+    // 任务表 9 项，晨报与销售两项在内
+    expect(TASKS.map((t) => t.key)).toEqual(['extraction', 'alerts', 'report', 'calendarSync', 'backup', 'digest', 'morning', 'salesExtraction', 'salesReport'])
   })
 
   it('S67-2: 非法 cron / 非布尔开关拒绝（400 带字段），合法保存回读一致；成员 403', async () => {

@@ -1,4 +1,4 @@
-// 调度器（S18，v0.7）：七项定时任务（信息更新对齐 / 预警 / 日报 / 项目日历同步 / 数据库备份 / 每周梳理与周报〔S49〕/ 每日项目群晨报〔S68，v0.75〕）
+// 调度器（S18，v0.7）：定时任务（信息更新对齐 / 预警 / 日报 / 项目日历同步 / 数据库备份 / 每周梳理与周报〔S49〕/ 每日项目群晨报〔S68，v0.75〕/ 销售报单抽取与每日汇总播报〔S79，v0.94〕）
 // 由 settings.scheduler 的 cron + 每任务 enabled 开关驱动。调度器随进程默认运行（原 ENABLE_SCHEDULER 环境变量已删除）；
 // 心跳每分钟读配置判定（改配置保存即生效，无需重启）；判定语义 =「上次运行之后到现在」窗口内存在 cron 匹配分钟（isDue）。
 // 测试不启动调度器（测试只走 buildApp；心跳行为用注入 runners 直测）。
@@ -17,6 +17,8 @@ export const TASKS = [
   { key: 'backup', cronKey: 'backupCron', enabledKey: 'backupEnabled' }, // S34 数据库异地备份（存储未配全时 runner 内部跳过）
   { key: 'digest', cronKey: 'digestCron', enabledKey: 'digestEnabled' }, // S49 每周梳理 + 老板周报（runner 内周级幂等）
   { key: 'morning', cronKey: 'morningCron', enabledKey: 'morningEnabled' }, // S68 每日项目群晨报（runner 内项目级日幂等）
+  { key: 'salesExtraction', cronKey: 'salesCron', enabledKey: 'salesEnabled' }, // S79 销售报单抽取（游标幂等增量；配置未全时 runner 内跳过）
+  { key: 'salesReport', cronKey: 'salesReportCron', enabledKey: 'salesReportEnabled' }, // S79 销售每日汇总播报（runner 内日级幂等）
 ]
 
 const DEFAULT_RUNNERS = {
@@ -31,6 +33,8 @@ const DEFAULT_RUNNERS = {
   backup: async (db) => (await import('../engine/backup.js')).runBackup(db),
   digest: async (db, { llm }) => (await import('./digest.js')).weeklyDigestRun(db, { llm }),
   morning: async (db, { llm }) => (await import('./morningPush.js')).dailyProjectMorningPush(db, { llm }),
+  salesExtraction: async (db, { llm }) => (await import('./salesExtract.js')).runSalesExtraction(db, { llm }),
+  salesReport: async (db) => (await import('./salesReport.js')).dailySalesReport(db, { force: false }),
 }
 
 /** 纯判定：给定调度配置（含 cron 与 enabled）与各任务上次运行时刻，返回此刻应跑的任务 key 数组。
@@ -51,6 +55,7 @@ export function dueTasks(cfg, lastRuns, nowMs) {
  */
 export function initialLastRun(db, taskKey, nowMs) {
   if (taskKey === 'digest') return bjDayStartMs(nowMs)
+  if (taskKey === 'salesReport') return bjDayStartMs(nowMs) // S79：日级幂等锚今日零点——停机跨时点当日补发（同 digest）
   if (taskKey !== 'report') return nowMs
   const dayStart = bjDayStartMs(nowMs) // 「今日」按北京日（S19）
   const lastPush = db

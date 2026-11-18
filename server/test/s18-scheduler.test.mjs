@@ -201,6 +201,8 @@ describe('S18 管理端点（手动对齐 + 调度配置）', () => {
       backupCron: '30 3 * * *', backupEnabled: true, // v0.35 新增（S34 数据库异地备份，存储未配全时静默跳过）
       digestCron: '0 9 * * 1', digestEnabled: true, // v0.54 新增（S49 每周梳理+老板周报，周级幂等）
       morningCron: '30 9 * * *', morningEnabled: true, // v0.75 新增（S68 每日项目群晨报）
+      salesCron: '*/30 * * * *', salesEnabled: false, // v0.94 新增（S79 销售报单抽取，默认 30 分钟，默认关）
+      salesReportCron: '0 20 * * *', salesReportEnabled: false, // v0.94 新增（S79 销售每日汇总播报）
     })
 
     const memberPut = await authed(ctx.app, leadCookie, 'PUT', '/api/v1/admin/settings/scheduler', {
