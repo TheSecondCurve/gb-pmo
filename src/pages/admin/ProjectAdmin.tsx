@@ -9,7 +9,7 @@ import type { ChannelRow, Member, ProjectRow, ProjectType } from '../../types'
 interface UnroutedRow { id: number; platform: string; groupKey: string; businessTime: number; speakerLabel: string | null; content: string }
 import { ADMIN_SECTIONS } from './sections'
 
-const TABS = ADMIN_SECTIONS[0].tabs
+const TABS = ADMIN_SECTIONS.find((s) => s.key === 'project')!.tabs
 
 export default function ProjectAdmin({ tab }: { tab: string }) {
   const nav = (key: string) => { location.hash = `#/admin/project/${key}` }
