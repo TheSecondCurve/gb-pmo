@@ -5,7 +5,7 @@ import { Badge, Btn, Card, Field, Spinner, Tabs, inputCls } from '../../componen
 import { fmtDateTime } from '../../fmt'
 import { ADMIN_SECTIONS } from './sections'
 
-const TABS = ADMIN_SECTIONS[3].tabs
+const TABS = ADMIN_SECTIONS.find((s) => s.key === 'ops')!.tabs
 
 // S26（v0.19）运维诊断：Docker/PaaS 容器不可 exec 的排障入口。
 // 诊断 shell 等价把容器执行权交给管理员账号——开关默认关、全程审计，用完建议关闭。

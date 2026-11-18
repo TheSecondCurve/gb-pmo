@@ -7,7 +7,7 @@ import type { Member } from '../../types'
 import { ROLE_LABEL } from '../../types'
 import { ADMIN_SECTIONS } from './sections'
 
-const TABS = ADMIN_SECTIONS[1].tabs
+const TABS = ADMIN_SECTIONS.find((s) => s.key === 'users')!.tabs
 
 export default function UserAdmin({ tab }: { tab: string }) {
   const nav = (key: string) => { location.hash = `#/admin/users/${key}` }

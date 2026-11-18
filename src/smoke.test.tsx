@@ -1218,3 +1218,41 @@ describe('S72 常态项目关闭「生成项目汇总」（v0.84）', () => {
     expect(screen.getByRole('button', { name: '生成项目汇总' })).toBeTruthy()
   })
 })
+
+// S79-7（v0.94.2 修订）：销售域配置台入口——①外部依赖「销售域」Tab 可见（钉 tab 条索引 bug：
+// IntegrationAdmin 曾硬编码 ADMIN_SECTIONS[2]（=users），S67 插入 scheduler 后索引顶偏、销售域 tab 不可见）；
+// ②三坐标输入框（chatId/baseToken/tableId）；③定时任务页含销售两项（cron+开关）
+describe('S79-7 销售域配置台入口（v0.94.2）', () => {
+  it('Admin：外部依赖页 tab 条含「销售域」，三坐标输入框渲染（索引 bug 修复锚点）', async () => {
+    location.hash = '#/admin/integrations/sales'
+    const sFetch = vi.fn(async () => new Response(JSON.stringify({
+      member: { id: 1, name: '甲', role: 'admin' },
+      sales: { chatId: 'oc_test_sales', baseToken: 'BASE123', tableId: 'tblTBL456' },
+      'im.feishu': { appId: 'cli_x', appSecret: '' },
+    }), { status: 200 }))
+    globalThis.fetch = sFetch as unknown as typeof fetch
+    render(<StoreProvider><Admin section="integrations" tab="sales" /></StoreProvider>)
+    expect(screen.getByRole('button', { name: '销售域' })).toBeTruthy() // tab 条可见（修复前显示 users 的 tabs）
+    expect((await screen.findByLabelText(/报单群 chat_id/)) as HTMLInputElement).toBeTruthy()
+    expect((screen.getByLabelText(/多维表格 base_token/) as HTMLInputElement).value).toBe('BASE123')
+    expect((screen.getByLabelText(/成交登记总表 table_id/) as HTMLInputElement).value).toBe('tblTBL456')
+    expect(screen.getByText(/不要手动改总表字段名/)).toBeTruthy()
+  })
+  it('Admin：定时任务页含销售报单抽取与每日汇总播报两行（cron 输入 + 开关）', async () => {
+    location.hash = '#/admin/scheduler/tasks'
+    const sFetch = vi.fn(async () => new Response(JSON.stringify({
+      member: { id: 1, name: '甲', role: 'admin' },
+      scheduler: {
+        extractionCron: '0 * * * *', extractionEnabled: true,
+        salesCron: '*/30 * * * *', salesEnabled: false,
+        salesReportCron: '0 20 * * *', salesReportEnabled: false,
+      },
+      reminder: { fireAfterHour: 9 },
+    }), { status: 200 }))
+    globalThis.fetch = sFetch as unknown as typeof fetch
+    render(<StoreProvider><Admin section="scheduler" tab="tasks" /></StoreProvider>)
+    expect((await screen.findByLabelText(/销售报单抽取/)) as HTMLInputElement).toBeTruthy()
+    expect((screen.getByLabelText(/销售每日汇总播报/) as HTMLInputElement).value).toBe('0 20 * * *')
+    expect(screen.getByText(/拉报单群消息记账 \+ 同步多维表格 \+ 凭证截图归档/)).toBeTruthy()
+  })
+})
