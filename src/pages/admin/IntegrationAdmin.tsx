@@ -14,7 +14,48 @@ export default function IntegrationAdmin({ tab }: { tab: string }) {
       {tab === 'llm' && <LlmCard />}
       {tab === 'feishu' && <FeishuCard />}
       {tab === 'wecom' && <WecomCard />}
+      {tab === 'sales' && <SalesCard />}
     </div>
+  )
+}
+
+// S79（v0.94.2）：销售域坐标——报单群与目标多维表格（默认值即生产值）。开关与频率在「定时任务」页
+// （salesExtraction / salesReport 两行）；凭证复用「飞书」Tab 的自建应用（同一个 appId/appSecret）。
+interface SalesCfg { chatId: string; baseToken: string; tableId: string }
+
+function SalesCard() {
+  const { toast } = useStore()
+  const [cfg, setCfg] = useState<SalesCfg | null>(null)
+  useEffect(() => {
+    void (async () => { setCfg((await api.settings()).sales as SalesCfg) })()
+  }, [])
+  if (!cfg) return <Spinner />
+  const save = async () => {
+    try {
+      await api.putSetting('sales', cfg)
+      toast('销售域坐标已保存（三项均须非空；生效即时）')
+    } catch (e) { toast((e as Error).message, 'bad') }
+  }
+  return (
+    <Card title="销售成交登记域（S79，v0.94）：报单群与多维表格坐标——机器人定时拉群报单记账，同步到表格总表">
+      <div className="space-y-3">
+        <Field label="报单群 chat_id（oc_ 开头；外部群，机器人须已进群）">
+          <input className={inputCls + ' font-mono'} value={cfg.chatId} onChange={(e) => setCfg({ ...cfg, chatId: e.target.value })} />
+        </Field>
+        <Field label="多维表格 base_token（「2026 女商成交登记表」）">
+          <input className={inputCls + ' font-mono'} value={cfg.baseToken} onChange={(e) => setCfg({ ...cfg, baseToken: e.target.value })} />
+        </Field>
+        <Field label="成交登记总表 table_id（tbl 开头）">
+          <input className={inputCls + ' font-mono'} value={cfg.tableId} onChange={(e) => setCfg({ ...cfg, tableId: e.target.value })} />
+        </Field>
+        <div><Btn kind="primary" onClick={() => void save()}>保存</Btn></div>
+      </div>
+      <p className="mt-2 text-[12px] leading-5 text-[var(--color-ink-soft)]">
+        凭证复用「飞书」Tab 的自建应用（同一 appId/appSecret）。抽取频率与开关在「定时任务」页（销售报单抽取 / 销售每日汇总播报，默认关）。
+        权限前提：应用具备云文档（bitable）读写与附件上传、机器人已进报单群；未配全时任务静默跳过（运行记录可查）。
+        换群/换表后下一轮抽取生效（游标按群 chat_id 区分）；不要手动改总表字段名——同步按中文字段名写入。
+      </p>
+    </Card>
   )
 }
 

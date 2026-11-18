@@ -21,6 +21,8 @@ const TASK_META: { key: string; cronKey: string; enabledKey: string; label: stri
   { key: 'calendarSync', cronKey: 'calendarSyncCron', enabledKey: 'calendarSyncEnabled', label: '项目日历同步', desc: '项目日程与飞书日历对账同步（S22，初始化在「外部依赖→飞书」）' },
   { key: 'backup', cronKey: 'backupCron', enabledKey: 'backupEnabled', label: '数据库备份', desc: '异地备份（存储配置在「运维诊断→数据库备份」，未配全自动跳过，S34）' },
   { key: 'digest', cronKey: 'digestCron', enabledKey: 'digestEnabled', label: '每周梳理与周报', desc: '牵头人项目梳理 + 老板周报，周级幂等（S49）' },
+  { key: 'salesExtraction', cronKey: 'salesCron', enabledKey: 'salesEnabled', label: '销售报单抽取', desc: '拉报单群消息记账 + 同步多维表格 + 凭证截图归档（群/表坐标在「外部依赖→销售域」，默认关，S79/S80）' },
+  { key: 'salesReport', cronKey: 'salesReportCron', enabledKey: 'salesReportEnabled', label: '销售每日汇总播报', desc: '当日成交汇总卡片推销售群（日级幂等，S79）' },
 ]
 
 /** 手动运行结果一行摘要：晨报/周报类 {results:[...]} 汇总数，其余截断 JSON。 */
