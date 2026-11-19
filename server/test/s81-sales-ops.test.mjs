@@ -250,7 +250,12 @@ describe('S81-6 表格同步（upsert + insert-only）', () => {
       expect(f.来源).toBe('群日报')
 
       // 修订：改金额 → synced_at < updated_at → PATCH 既有行
-      db.prepare("UPDATE ops_reports SET reported_amount = 4000, updated_at = ? WHERE account = '漫漫' AND day = '2026-11-19'").run(Date.now())
+      // 修订时间戳须严格晚于 r1 落库的 synced_at、又严格早于 r2 的——自旋等时钟跳毫秒取「下一个时刻」，
+      // 同毫秒 Date.now() 会让严格 < 判脏失效（偶发绿）；固定 +N 推到未来则 r3 「无脏行」必挂，都不可取
+      const syncedAt = db.prepare("SELECT synced_at FROM ops_reports WHERE account = '漫漫' AND day = '2026-11-19'").get().synced_at
+      let revisedAt = Date.now()
+      while (revisedAt <= syncedAt) revisedAt = Date.now()
+      db.prepare("UPDATE ops_reports SET reported_amount = 4000, updated_at = ? WHERE account = '漫漫' AND day = '2026-11-19'").run(revisedAt)
       bodies.length = 0
       const r2 = await syncOpsToBitable(db)
       expect(r2.reports.updated).toBeGreaterThanOrEqual(1)
