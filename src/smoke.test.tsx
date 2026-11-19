@@ -1085,6 +1085,10 @@ describe('S66 我的任务工作台', () => {
     // 日期文案四式之一（S30-4 区间式）直接展示在行内，不藏在 tooltip
     const rangeDate = rows[1]!.querySelector('[data-testid="myt-task-date"]') as HTMLElement
     expect(rangeDate.textContent).toContain(`${shift(T, -40)} ~ ${shift(T, 5)}`)
+    // 「前往项目 →」与项目名同为链接（此前 aside 是纯文本，形似链接却不可点）
+    const gotoLinks = Array.from(groups[1]!.querySelectorAll('a[href="#/projects/22"]'))
+    expect(gotoLinks.length).toBe(2) // 项目名 + 前往项目 →
+    expect(gotoLinks.some((a) => (a.textContent || '').includes('前往项目'))).toBe(true)
     // 纯提醒 ⏰ 标注 + 未排期沉底不进清单主体
     expect(groups[1]!.querySelectorAll('[data-testid="myt-reminder"]').length).toBe(1)
     const unsched = groups[1]!.querySelector('[data-testid="unscheduled-group"]') as HTMLElement

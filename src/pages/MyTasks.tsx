@@ -110,7 +110,7 @@ function ProjectBlock({ group, index, save }: {
       <SectionHeading
         index={`0${index + 1}`}
         title={<a className="display-type editorial-link text-[20px] font-semibold" href={`#/projects/${group.projectId}`}>{group.projectName}</a>}
-        aside={<span className="num text-[11px] tracking-[0.1em] text-[var(--color-ink-soft)]">{group.tasks.length} 项未完 · 前往项目 →</span>}
+        aside={<span className="num text-[11px] tracking-[0.1em] text-[var(--color-ink-soft)]">{group.tasks.length} 项未完 · <a className="editorial-link" href={`#/projects/${group.projectId}`}>前往项目 →</a></span>}
       />
       <Card>
         {sorted.length > 0 ? (
