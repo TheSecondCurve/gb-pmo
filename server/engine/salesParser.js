@@ -77,17 +77,6 @@ export function parseDealDate(raw, { today: todayStr = today() } = {}) {
   if (s === '今天' || s === '今日' || s === '当天') return todayStr
   if (s === '昨天') return addDays(todayStr, -1)
   if (s === '前天') return addDays(todayStr, -2)
-<<<<<<< HEAD
-  let m = s.match(/^(\d{4})年(\d{1,2})月(\d{1,2})\s*日?$/) // 「19 日」数字与日之间空格（输入法常见，线上实证 v0.95.1）
-  let day = null
-  if (m) day = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`
-  else if ((m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/))) day = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`
-  else if ((m = s.match(/^(\d{1,2})[-/.月](\d{1,2})日?$/))) { // 点分隔「11.19」（线上实证 v0.95.3）
-    let y = Number(todayStr.slice(0, 4))
-    const md = `${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`
-    if (dayDiff(todayStr, `${y}-${md}`) < -180) y += 1 // 已过半年前的月日 = 下一周期（明年）
-    day = `${y}-${md}`
-=======
   const t = s
     .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)) // 全角数字 → 半角
     .replace(/[．・。]/g, '.').replace(/[－—–～]/g, '-').replace(/[／]/g, '/')
@@ -98,7 +87,6 @@ export function parseDealDate(raw, { today: todayStr = today() } = {}) {
   if (m) {
     const day = `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`
     return isCalendarDay(day) ? day : null
->>>>>>> origin/feat/date-lenient
   }
   if ((m = t.match(/^(\d{1,2})\s*[月\-/. ]\s*(\d{1,2})\s*[日号]?$/))) {
     let y = Number(todayStr.slice(0, 4))

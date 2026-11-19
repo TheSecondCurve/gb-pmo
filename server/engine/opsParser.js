@@ -136,23 +136,6 @@ export function parseOpsReport(text, opts = {}) {
   return { matched: true, fields, leads, missing, fieldLineCount }
 }
 
-<<<<<<< HEAD
-/** 日报日期归一：复用报单相对词与多形态（今天/昨天/2026年11月19日/11-19…）。 */
-function parseOpsDay(raw, todayStr) {
-  const s = String(raw ?? '').trim()
-  if (!s) return null
-  if (s === '今天' || s === '今日' || s === '当天') return todayStr
-  if (s === '昨天') return addDays(todayStr, -1)
-  let m = s.match(/^(\d{4})年(\d{1,2})月(\d{1,2})\s*日?$/)
-  if (m) { const d = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`; return isCalendarDay(d) ? d : null }
-  if ((m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/))) { const d = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`; return isCalendarDay(d) ? d : null }
-  // 点分隔「11.19」（线上实证 v0.95.3）
-  if ((m = s.match(/^(\d{1,2})[-/.月](\d{1,2})日?$/))) { const d = `${todayStr.slice(0, 4)}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`; return isCalendarDay(d) && d <= addDays(todayStr, 1) ? d : null }
-  return null
-}
-
-=======
->>>>>>> origin/feat/date-lenient
 /**
  * 解析零散线索消息（确定性层）：行式字段（微信名：x / 微信号：x…）收集为若干条；
  * 单条口语串（线索：a，b，c）交 parseLeadLine。LLM 兜底在 brain 层，结果组装回同结构。
