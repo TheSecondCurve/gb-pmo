@@ -143,7 +143,7 @@ function parseOpsDay(raw, todayStr) {
   if (!s) return null
   if (s === '今天' || s === '今日' || s === '当天') return todayStr
   if (s === '昨天') return addDays(todayStr, -1)
-  let m = s.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日?$/)
+  let m = s.match(/^(\d{4})年(\d{1,2})月(\d{1,2})\s*日?$/)
   if (m) { const d = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`; return isCalendarDay(d) ? d : null }
   if ((m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/))) { const d = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`; return isCalendarDay(d) ? d : null }
   if ((m = s.match(/^(\d{1,2})[-/月](\d{1,2})日?$/))) { const d = `${todayStr.slice(0, 4)}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`; return isCalendarDay(d) && d <= addDays(todayStr, 1) ? d : null }

@@ -75,7 +75,7 @@ export function parseDealDate(raw, { today: todayStr = today() } = {}) {
   if (s === '今天' || s === '今日' || s === '当天') return todayStr
   if (s === '昨天') return addDays(todayStr, -1)
   if (s === '前天') return addDays(todayStr, -2)
-  let m = s.match(/^(\d{4})年(\d{1,2})月(\d{1,2})日?$/)
+  let m = s.match(/^(\d{4})年(\d{1,2})月(\d{1,2})\s*日?$/) // 「19 日」数字与日之间空格（输入法常见，线上实证 v0.95.1）
   let day = null
   if (m) day = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`
   else if ((m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/))) day = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`
@@ -170,7 +170,7 @@ export function parseReport(text, opts = {}) {
     voucher: String(raw.voucher ?? '').trim(),
     selfOwned: normalizeYesNo(raw.selfOwned),
     distribution: normalizeYesNo(raw.distribution),
-    note: String(raw.note ?? '').trim(),
+    note: String(raw.note ?? '').trim().replace(/^[_＿\s]+$/, ''), // 模板占位符「____」归一为空
   }
   const missing = []
   if (!fields.orderNo) missing.push('订单号')
