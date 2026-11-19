@@ -222,7 +222,8 @@ describe('S81-5 汇总与对账 + 播报三节', () => {
 describe('S81-6 表格同步（upsert + insert-only）', () => {
   it('S81-6: 未配表静默跳过；日报 create→修订 PATCH；线索 insert-only；失败不阻塞', async () => {
     const db = ctx.db
-    // 未配 opsTableId/leadsTableId（默认空）→ 跳过
+    // 未配 opsTableId/leadsTableId（显式清空——默认值已是生产表 id）→ 跳过
+    setSetting(db, 'sales', { opsTableId: '', leadsTableId: '' })
     const r0 = await syncOpsToBitable(db)
     expect(r0.skipped).toBe(true)
 
