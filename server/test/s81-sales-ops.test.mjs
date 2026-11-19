@@ -103,6 +103,10 @@ describe('S81-1/S81-2/S81-3 三类分流与日终红线（抽取管线集成）'
       const o1 = ctx.db.prepare("SELECT status, detail FROM sales_messages WHERE message_id = 'om_o1'").get()
       expect(o1.status).toBe('ops_report')
       expect(o1.detail).toContain('r1')
+      // v0.95.2（K81 修订）：归属=发言人名册名——om_o1/om_d1 由 ou_seller_1（名册「漫漫」）发，
+      // 即使 om_d1 文本写「成交小助手：漫漫」、换人 ou_other 发的修订也归发言人名下
+      const d1 = ctx.db.prepare("SELECT assistant FROM sales_records WHERE message_id = 'om_d1'").get()
+      expect(d1.assistant).toBe('漫漫')
     } finally { s.restore() }
   })
 
@@ -120,29 +124,41 @@ describe('S81-1/S81-2/S81-3 三类分流与日终红线（抽取管线集成）'
       expect(sent.some((t) => t.includes('与以往发言人不同'))).toBe(false) // 同发言人：静默覆盖
     } finally { s.restore() }
 
-    // 换人代报（ou_other 用「漫漫」名发）→ 温和提醒 + 仍覆盖
+    // v0.95.2：换人代报——不再提醒（代发是常态）；ou_other 名册未配置 → 日报归文本账号名回退，
+    // 修订覆盖同一 (account, day) 行（缓慢归位：配置名册后归发言人）
     items.length = 0
     items.push(msg('om_o3', REPORT.replace('¥3,500', '¥3,700'), 51002, 'ou_other'))
     s = stubFetch([TOKEN_OK, ['/im/v1/messages', () => ({ code: 0, data: { has_more: false, items } })]])
     try {
       const r = await runSalesExtraction(ctx.db, { send: (t) => sent.push(t) })
       expect(r.opsRevised).toBe(1)
-      expect(sent.some((t) => t.includes('漫漫') && t.includes('与以往发言人不同'))).toBe(true) // 温和提醒
+      expect(sent.some((t) => t.includes('与以往发言人不同'))).toBe(false) // 提醒已删（K81 修订）
       const row = ctx.db.prepare("SELECT revision, reported_amount FROM ops_reports WHERE account = '漫漫' AND day = '2026-11-19'").get()
       expect(row.revision).toBe(3)
-      expect(row.reported_amount).toBe(3700) // 仍覆盖（不拦截）
+      expect(row.reported_amount).toBe(3700) // 仍覆盖
     } finally { s.restore() }
   })
 
-  it('S81-2: 日报缺账号/日期 → pending 提醒不入库', async () => {
-    const items = [msg('om_o4', REPORT.split('\n').filter((l) => !l.startsWith('运营账号')).join('\n'), 52001)]
-    const s = stubFetch([TOKEN_OK, ['/im/v1/messages', () => ({ code: 0, data: { has_more: false, items } })]])
+  it('S81-2: 日报缺日期 → pending；缺运营账号 → 正常入库归发言人名册名（v0.95.2，K81 修订）', async () => {
+    // 缺日期 → pending（日期仍是关键字段）
+    const items = [msg('om_o4', REPORT.split('\n').filter((l) => !l.startsWith('日期')).join('\n'), 52001)]
+    let s = stubFetch([TOKEN_OK, ['/im/v1/messages', () => ({ code: 0, data: { has_more: false, items } })]])
     const sent = []
     try {
       const r = await runSalesExtraction(ctx.db, { send: (t) => sent.push(t) })
       expect(r.pending).toBe(1)
-      expect(sent.some((t) => t.includes('运营账号') && t.includes('补发'))).toBe(true)
-      expect(ctx.db.prepare("SELECT COUNT(*) AS n FROM ops_reports WHERE day = '2026-11-19' AND revision >= 4").get().n).toBe(0)
+      expect(sent.some((t) => t.includes('日期') && t.includes('补发'))).toBe(true)
+    } finally { s.restore() }
+    // 缺运营账号 → 不再 pending：归属=发言人名册名（ou_seller_1=漫漫），日期改 11-20 隔离主链
+    items.length = 0
+    items.push(msg('om_o5', REPORT.split('\n').filter((l) => !l.startsWith('运营账号')).join('\n').replace('2026年11月19日', '2026年11月20日'), 52002))
+    s = stubFetch([TOKEN_OK, ['/im/v1/messages', () => ({ code: 0, data: { has_more: false, items } })]])
+    try {
+      const r = await runSalesExtraction(ctx.db, { send: (t) => sent.push(t) })
+      expect(r.pending).toBe(0)
+      expect(r.opsReports).toBe(1)
+      const row = ctx.db.prepare("SELECT account FROM ops_reports WHERE day = '2026-11-20'").get()
+      expect(row.account).toBe('漫漫') // 文本无账号字段——归发言人名册名
     } finally { s.restore() }
   })
 })
@@ -180,10 +196,10 @@ describe('S81-3 线索解析与去重（纯函数 + 数据层）', () => {
     db.prepare('UPDATE sales_assistants SET assistant_name = ?, status = ?, bound_at = ? WHERE id = ?').run('小闪', 'confirmed', Date.now(), zhang.id)
     expect(resolveAssistantByOpenId(db, 'ou_zhang')).toBe('小闪')
     // 共现学习：confirmed 的「小闪」名下 ou_zhang；ou_li 用「小闪」名发 → mismatch
+    // v0.95.2（K81 修订）：共现学习退出归属链路（名册=用户配置唯一真相）——学习函数保留但管线不再调用
     expect(learnAssistantBinding(db, { assistantName: '小闪', openId: 'ou_li' })).toBe('mismatch')
-    expect(learnAssistantBinding(db, { assistantName: '新助手甲', openId: 'ou_new1' })).toBe('learned') // 未知名+未知人 → candidate 学习
-    expect(learnAssistantBinding(db, { assistantName: '新助手甲', openId: 'ou_new1' })).toBe('ok') // 再共现 → confirmed（内部升级）
-    expect(db.prepare("SELECT status FROM sales_assistants WHERE open_id = 'ou_new1'").get().status).toBe('confirmed')
+    expect(learnAssistantBinding(db, { assistantName: '新助手甲', openId: 'ou_new1' })).toBe('learned')
+    expect(db.prepare("SELECT COUNT(*) AS n FROM sales_assistants WHERE open_id = 'ou_new1'").get().n).toBe(1)
   })
 })
 

@@ -13,7 +13,7 @@ import {
   findSalesDuplicate, insertSalesRecord, attachVoucher,
 } from '../engine/sales.js'
 import {
-  upsertOpsReport, insertLeadIfAbsent, resolveAssistantByOpenId, learnAssistantBinding,
+  upsertOpsReport, insertLeadIfAbsent, resolveAssistantByOpenId,
 } from '../engine/ops.js'
 import { today } from '../db/time.js'
 import * as feishu from './connectors/feishu.js'
@@ -115,19 +115,19 @@ export async function runSalesExtraction(db, { llm, send } = {}) {
     if (looksLikeOpsReport(text)) {
       const p = parseOpsReport(text, { today: todayStr })
       if (!p.matched) { out.noise++; continue }
-      if (p.missing.length) {
+      if (p.missing.length) { // v0.95.2：账号不再必填（归属=发言人名册名），仅日期必填
         updateSalesMessageStatus(db, rowId, 'pending_fields', `日报缺 ${p.missing.join('/')}`)
         out.pending++
         await reply(`⚠️ 一份运营日报缺关键字段（${p.missing.join('、')}），请补发完整日报～`)
         continue
       }
-      const up = upsertOpsReport(db, p.fields, { messageId: msg.id, speakerId: msg.speakerId ?? '' })
-      const learn = learnAssistantBinding(db, { assistantName: p.fields.account, openId: msg.speakerId })
-      if (learn === 'mismatch') {
-        await reply(`⚠️ 「${p.fields.account}」的这份日报与以往发言人不同，如非代报请核对～`)
-      }
+      // v0.95.2（K81 修订）：日报归属 = 发言人名册名（文本「运营账号」字段降为参考）
+      const owner = resolveAssistantByOpenId(db, msg.speakerId)
+      const account = owner ?? p.fields.account
+      const fields = { ...p.fields, account }
+      const up = upsertOpsReport(db, fields, { messageId: msg.id, speakerId: msg.speakerId ?? '' })
       for (const lead of p.leads) {
-        const lid = insertLeadIfAbsent(db, { ...lead, account: p.fields.account }, { messageId: msg.id, day: p.fields.day, account: p.fields.account, leadSource: 'digest' })
+        const lid = insertLeadIfAbsent(db, { ...lead, account }, { messageId: msg.id, day: p.fields.day, account, leadSource: 'digest' })
         if (lid) out.leads++
       }
       updateSalesMessageStatus(db, rowId, 'ops_report', `日报 #${up.id} r${up.revision}${up.speakerChanged ? '（换人代报）' : ''}`)
@@ -197,17 +197,14 @@ export async function runSalesExtraction(db, { llm, send } = {}) {
       continue
     }
 
+    // v0.95.2（K81 修订）：成交归属 = 发言人名册名（用户拍板「永远归发言人」）——
+    // 文本「成交小助手」字段不再参与归属（照存做参考）；名册未配置回退文本名暂记
+    const owner = resolveAssistantByOpenId(db, msg.speakerId)
+    const assistant = owner ?? fields.assistant
     const dealTs = Date.parse(`${fields.dealDay}T00:00:00+08:00`)
-    const id = insertSalesRecord(db, { ...fields, dealTs, messageId: msg.id, source: 'bot' })
-    updateSalesMessageStatus(db, rowId, 'recorded', `记录 #${id}`)
+    const id = insertSalesRecord(db, { ...fields, assistant, dealTs, messageId: msg.id, source: 'bot' })
+    updateSalesMessageStatus(db, rowId, 'recorded', `记录 #${id}${owner ? '' : '（名册未配置，暂记文本助手名）'}`)
     out.recorded++
-    // S81-4 名册学习：报单（助手名， 发言人）共现；confirmed 后他人代报温和提醒
-    if (fields.assistant) {
-      const learn = learnAssistantBinding(db, { assistantName: fields.assistant, openId: msg.speakerId })
-      if (learn === 'mismatch') {
-        await reply(`⚠️ 「${fields.assistant}」的报单与以往发言人不同，如非代报请核对～`)
-      }
-    }
   }
 
   // 轮末汇总回执（S79-4/S81 静默哲学）：任一新数据才发一条合并回执、无事零打扰
