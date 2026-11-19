@@ -2,7 +2,7 @@
 // 纯函数无 LLM 无 db。用户拍板：零散线索无法拟模板、**接受信息不全**——能提多少存多少、
 // 缺就空、不猜不拦；口语形态由 brain/salesExtract.js 走 LLM 兜底（结果回本模块同归一）。
 
-import { today, addDays, isCalendarDay } from '../db/time.js'
+import { today } from '../db/time.js' // 日期归一已收敛 salesParser（v0.95.4）
 import { normalizeAssistant, parseAmount, parseDealDate } from './salesParser.js'
 
 // —— 数字指标归一：剥「人/位/条/次/个/单」等单位与全角数字容错 → 非负整数；无法解析 null ——
