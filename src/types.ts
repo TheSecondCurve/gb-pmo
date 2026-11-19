@@ -120,6 +120,12 @@ export interface MyTasksBoard {
   today: string
   stats: { total: number; overdue: number; dueThisWeek: number; pending: number }
   projects: Array<{ projectId: number; projectName: string; tasks: MyTaskRow[] }>
+  // S66-5（v0.96，K82）：今日常态任务区——仅当日 cadence 适用的常态任务（K64 排除口径的限定例外，
+  // 不进 stats/projects 未完口径）；status 为今日打卡三档（无记录=未做）
+  routine: Array<{
+    projectId: number; projectName: string
+    tasks: Array<{ id: number; title: string; cadenceLabel: string; status: 'pending' | 'done' | 'skip' }>
+  }>
 }
 
 // S69（v0.80 K64 / v0.81 K65）：常态项目执行视图（GET /api/v1/projects/:id/daily-board?span=&anchor=）

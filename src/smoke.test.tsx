@@ -1035,6 +1035,7 @@ describe('S66 我的任务工作台', () => {
         ],
       },
     ],
+    routine: [], // S66-5 今日常态区（专测单独构造夹具）
   }
   const myFetch = vi.fn(async () =>
     new Response(JSON.stringify(board), { status: 200 })
@@ -1084,6 +1085,10 @@ describe('S66 我的任务工作台', () => {
     // 日期文案四式之一（S30-4 区间式）直接展示在行内，不藏在 tooltip
     const rangeDate = rows[1]!.querySelector('[data-testid="myt-task-date"]') as HTMLElement
     expect(rangeDate.textContent).toContain(`${shift(T, -40)} ~ ${shift(T, 5)}`)
+    // 「前往项目 →」与项目名同为链接（此前 aside 是纯文本，形似链接却不可点）
+    const gotoLinks = Array.from(groups[1]!.querySelectorAll('a[href="#/projects/22"]'))
+    expect(gotoLinks.length).toBe(2) // 项目名 + 前往项目 →
+    expect(gotoLinks.some((a) => (a.textContent || '').includes('前往项目'))).toBe(true)
     // 纯提醒 ⏰ 标注 + 未排期沉底不进清单主体
     expect(groups[1]!.querySelectorAll('[data-testid="myt-reminder"]').length).toBe(1)
     const unsched = groups[1]!.querySelector('[data-testid="unscheduled-group"]') as HTMLElement
@@ -1164,6 +1169,62 @@ describe('S66 我的任务工作台', () => {
     render(<StoreProvider><App /></StoreProvider>)
     expect(await screen.findByTestId('myt-masthead')).toBeTruthy()
     expect(screen.getByRole('link', { name: '我的任务' })).toBeTruthy()
+  })
+
+  it('S66-5: 今日常态任务区——频次标签 + 今日完成计数 + 三档就地打卡走 daily-board 通道；无 routine 时区块不渲染', async () => {
+    const routineBoard: MyTasksBoard = {
+      ...board,
+      routine: [
+        {
+          projectId: 33, projectName: '常态运营',
+          // 引擎出参序：未做→跳过→完成
+          tasks: [
+            { id: 301, title: '每日盘点', cadenceLabel: '每天', status: 'pending' },
+            { id: 302, title: '已跳过的常态活', cadenceLabel: '每天', status: 'skip' },
+            { id: 303, title: '已完成的常态活', cadenceLabel: '每周三', status: 'done' },
+          ],
+        },
+      ],
+    }
+    const calls: Array<{ url: string; method: string; body: Record<string, unknown> }> = []
+    const routineFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/daily-board')) {
+        calls.push({ url, method: init?.method || 'POST', body: JSON.parse(String(init?.body || '{}')) })
+        return new Response(JSON.stringify({ ok: true }), { status: 201 })
+      }
+      return new Response(JSON.stringify(routineBoard), { status: 200 })
+    }) as unknown as typeof fetch
+    globalThis.fetch = routineFetch
+    render(<StoreProvider><MyTasks /></StoreProvider>)
+
+    const section = await screen.findByTestId('myt-routine')
+    expect(section.textContent).toContain('今日常态任务')
+    expect(section.textContent).toContain('今日完成 1/3')
+    expect(section.textContent).toContain('每周三') // 频次标签可见
+    const proj = section.querySelector('[data-testid="myt-routine-project"]') as HTMLElement
+    expect((proj.querySelector('a') as HTMLAnchorElement).getAttribute('href')).toBe('#/projects/33')
+    // 打卡行为只有三档（不是任务状态七档）：301 未做 → 改完成 → POST /api/v1/projects/33/daily-board
+    const rows = Array.from(section.querySelectorAll('[data-testid="myt-routine-row"]')) as HTMLElement[]
+    expect(rows.length).toBe(3)
+    const select = rows[0]!.querySelector('select') as HTMLSelectElement
+    expect(select.value).toBe('pending')
+    const options = Array.from(select.querySelectorAll('option')).map((o) => o.value)
+    expect(options).toEqual(['pending', 'done', 'skip'])
+    fireEvent.change(select, { target: { value: 'done' } })
+    await waitFor(() => expect(calls.length).toBe(1))
+    expect(calls[0]!.method).toBe('POST')
+    expect(calls[0]!.url.endsWith('/api/v1/projects/33/daily-board')).toBe(true)
+    expect(calls[0]!.body).toMatchObject({ taskId: 301, day: T, status: 'done' })
+
+    // 无当日适用常态任务：区块不渲染（其余页面照常）
+    globalThis.fetch = vi.fn(async () =>
+      new Response(JSON.stringify({ ...board, routine: [] }), { status: 200 })
+    ) as unknown as typeof fetch
+    cleanup()
+    render(<StoreProvider><MyTasks /></StoreProvider>)
+    await screen.findByTestId('myt-masthead')
+    expect(document.querySelector('[data-testid="myt-routine"]')).toBeNull()
   })
 })
 
