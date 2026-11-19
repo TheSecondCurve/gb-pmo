@@ -30,14 +30,14 @@ function SalesCard() {
   useEffect(() => {
     void (async () => {
       setCfg((await api.settings()).sales as SalesCfg)
-      setAssistants(await api.salesAssistants().catch(() => null))
+      setAssistants((await api.salesAssistants().catch(() => null))?.assistants ?? null)
     })()
   }, [])
   const syncAssistants = async () => {
     try {
       const r = await api.salesAssistantsSync()
       toast(`已从群同步：新增 ${r.added} 人（共 ${r.total} 名成员）`)
-      setAssistants(await api.salesAssistants())
+      setAssistants((await api.salesAssistants()).assistants)
     } catch (e) { toast((e as Error).message, 'bad') }
   }
   const renameAssistant = async (id: number, assistantName: string) => {
@@ -46,7 +46,7 @@ function SalesCard() {
     try {
       await api.salesAssistantRename(id, name)
       toast('名册名已更新（零散线索归属即刻按新名反查）')
-      setAssistants(await api.salesAssistants())
+      setAssistants((await api.salesAssistants()).assistants)
     } catch (e) { toast((e as Error).message, 'bad') }
   }
   if (!cfg) return <Spinner />
