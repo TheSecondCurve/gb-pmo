@@ -270,9 +270,15 @@ describe('S69 常态项目与每周执行周视图', () => {
     const load = queryMetric(db, 'keyperson_load', { groupBy: 'member' }).rows.find((r) => r.member === '王五')
     expect(load.openTasks).toBe(1)
 
-    // /my 与 S66 工作台不计常态任务（永不完成，计入即永久噪音）
+    // /my 斜杠与 S66 工作台「未完任务口径」不计常态任务（永不完成，计入即永久噪音）；
+    // 工作台「今日常态」区为限定例外（v0.96 K82，S66-5）：每日巡检当日适用 → routine 区可见
     expect(myWork(db, members.key.id).text).not.toContain('每日巡检')
-    expect(JSON.stringify(myTasksBoard(db, members.key.id))).not.toContain('每日巡检')
+    const board = myTasksBoard(db, members.key.id)
+    expect(JSON.stringify(board.projects)).not.toContain('每日巡检')
+    expect(board.stats.total).toBe(1) // 统计只数交付工作（逾期工作 1 条）
+    const routineRow = board.routine?.flatMap((g) => g.tasks).find((t) => t.title === '每日巡检')
+    expect(routineRow).toBeTruthy()
+    expect(routineRow.status).toBe('pending')
 
     // 盘点：常态项目按「常态清单」呈现（不冠「未完」）；全局未分配盘点不计常态任务
     const inv = tasksInventory(db, { projectId: routine2.id })

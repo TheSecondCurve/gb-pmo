@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api'
-import { TASK_STATUS_LABEL, TASK_STATUS_TONE, type MyTaskRow, type MyTasksBoard } from '../types'
+import { DAY_STATUS_LABEL, DAY_STATUS_TONE, TASK_STATUS_LABEL, TASK_STATUS_TONE, type MyTaskRow, type MyTasksBoard } from '../types'
 import { PageMasthead, SectionHeading } from '../components/editorial'
 import { Badge, Card, Empty, InlineSelect, InlineText, Spinner } from '../components/ui'
 import { useStore } from '../store'
@@ -10,6 +10,8 @@ import { dateRangeForm, fmtDateRange } from '../fmt'
 // 按项目分组的 todolist 待办清单——项目内按计划时间升序（有截止日按截止日、仅有开工日按开工日），
 // 逾期整行红提示（行底红晕 + 红日期 + 红徽章）；无日期任务沉底「未排期」不虚构；不画甘特（K55）。
 // 任务行就地快改（K56）：标题/状态 Inline 编辑、未排期补交付日，走 PATCH /api/v1/tasks/:id（与项目详情同权限），成功后刷新重排。
+// S66-5（v0.96，K82）今日常态任务区：统计带下方仅列当日 cadence 适用的常态任务（历史/过期不出现，
+// K64 排除口径的限定例外），三档就地打卡复用执行视图通道（POST /projects/:id/daily-board），不进页首统计。
 
 export default function MyTasks() {
   const [board, setBoard] = useState<MyTasksBoard | null>(null)
@@ -32,6 +34,19 @@ export default function MyTasks() {
     }
   }, [load, toast])
 
+  /** S66-5 就地打卡：三档直接生效（与执行视图同通道同权限），成功后刷新当日清单；失败 toast 不中断页面 */
+  const checkin = useCallback(async (projectId: number, taskId: number, status: string) => {
+    if (!board) return
+    try {
+      await api.setDayStatus(projectId, { taskId, day: board.today, status })
+      if (status === 'done') toast('已完成今日打卡')
+      else if (status === 'skip') toast('已记今日跳过')
+      await load()
+    } catch (e) {
+      toast(`打卡失败：${String((e as Error)?.message || e)}`, 'bad')
+    }
+  }, [board, load, toast])
+
   if (error) return <Card><Empty hint={`加载失败：${error}`} /></Card>
   if (!board) return <Spinner />
 
@@ -49,7 +64,7 @@ export default function MyTasks() {
         testId="myt-masthead"
         kicker="Workspace / 03"
         title="我的任务"
-        description="跨项目聚合你名下的全部未完任务——按项目分组的待办清单，按时间排序。逾期标红、本周到期标黄；标题、状态可就地改，未排期可就地补交付日。"
+        description="跨项目聚合你名下的全部未完任务——按项目分组的待办清单，按时间排序。逾期标红、本周到期标黄；标题、状态可就地改，未排期可就地补交付日。今日常态任务单独成区，完成/跳过/未做就地打卡。"
         aside={<div className="num text-[11px] tracking-[0.12em] text-[var(--color-ink-soft)]">今日 {board.today} · 北京时间</div>}
       />
 
@@ -62,6 +77,9 @@ export default function MyTasks() {
           </div>
         ))}
       </div>
+
+      {/* S66-5（K82）今日常态任务区：仅当日适用常态任务（历史不出现），已打卡的保留带状态 */}
+      {board.routine.length > 0 && <RoutineSection groups={board.routine} checkin={checkin} />}
 
       {board.projects.length === 0 ? (
         <Card><Empty hint="暂无未完任务——名下任务全部完成，或去项目列表认领（项目详情页任务行可就地改责任人）" /></Card>
@@ -135,5 +153,46 @@ function TaskRow({ t, save }: { t: MyTaskRow; save: (t: MyTaskRow, patch: Record
       <span data-testid="myt-task-date" className={`num shrink-0 text-[12px] ${overdue ? 'font-semibold text-[var(--color-bad)]' : 'text-[var(--color-ink-soft)]'}`}>{fmtDateRange(t.planStartDate, t.planEndDate)}</span>
       {overdue && <Badge tone="bad">逾期 {t.overdueDays} 天</Badge>}
     </li>
+  )
+}
+
+/** S66-5（K82）今日常态任务区：仅当日 cadence 适用的常态任务（历史/过期不出现——引擎出参保证），
+ *  按项目分组；行=标题 + 频次标签 + 三档就地打卡（复用执行视图通道），已打卡的保留显示。 */
+function RoutineSection({ groups, checkin }: {
+  groups: MyTasksBoard['routine']
+  checkin: (projectId: number, taskId: number, status: string) => Promise<void>
+}) {
+  const total = groups.reduce((n, g) => n + g.tasks.length, 0)
+  const done = groups.reduce((n, g) => n + g.tasks.filter((t) => t.status === 'done').length, 0)
+  return (
+    <section data-testid="myt-routine" aria-label="今日常态任务">
+      <SectionHeading
+        index="R"
+        title="今日常态任务"
+        aside={<span className="num text-[11px] tracking-[0.1em] text-[var(--color-ink-soft)]">今日完成 {done}/{total} · 仅当日适用，历史不在此列</span>}
+      />
+      <Card>
+        {groups.map((g) => (
+          <div key={g.projectId} data-testid="myt-routine-project" className={g !== groups[0] ? 'mt-3 border-t border-[var(--color-line)] pt-3' : ''}>
+            <a className="editorial-link text-[13px] font-medium" href={`#/projects/${g.projectId}`}>{g.projectName} →</a>
+            <ul className="mt-1">
+              {g.tasks.map((t) => (
+                <li key={t.id} data-testid="myt-routine-row" className="flex items-center gap-2 border-b border-[var(--color-line)] px-3 py-2.5 last:border-0 hover:bg-[var(--color-bg)]">
+                  <span className="num w-11 shrink-0 text-right text-[10px] text-[var(--color-ink-faint)]">#{t.id}</span>
+                  <span className="min-w-0 flex-1 truncate text-[13px]">{t.title}</span>
+                  <span className="num shrink-0 text-[11px] text-[var(--color-ink-faint)]">{t.cadenceLabel}</span>
+                  <InlineSelect
+                    value={t.status}
+                    options={DAY_STATUS_LABEL}
+                    tones={DAY_STATUS_TONE}
+                    onSubmit={(v) => { if (v !== t.status) void checkin(g.projectId, t.id, v) }}
+                  />
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </Card>
+    </section>
   )
 }
