@@ -3,7 +3,7 @@
 // 缺就空、不猜不拦；口语形态由 brain/salesExtract.js 走 LLM 兜底（结果回本模块同归一）。
 
 import { today, addDays, isCalendarDay } from '../db/time.js'
-import { normalizeAssistant, parseAmount } from './salesParser.js'
+import { normalizeAssistant, parseAmount, parseDealDate } from './salesParser.js'
 
 // —— 数字指标归一：剥「人/位/条/次/个/单」等单位与全角数字容错 → 非负整数；无法解析 null ——
 
@@ -35,7 +35,7 @@ const OPS_MATCHERS = Object.entries(OPS_FIELD_ALIASES)
 
 const OPS_LEADS_HEADER = /^\s*用户线索/
 
-/** 日期归一复用报单口径（今天/昨天/中文日期等）——直接内联同款规则（salesParser 未导出 parseDealDate? 已导出）。 */
+/** 日期归一复用报单实现（v0.95.4 起单一真相源——大容忍归一器在 salesParser.parseDealDate）。 */
 export { parseDealDate } from './salesParser.js'
 
 /** 日终汇总特征（S81-1 分流）：标题词或 ≥3 个日报字段行。 */
@@ -119,7 +119,7 @@ export function parseOpsReport(text, opts = {}) {
 
   const todayStr = opts.today ?? today()
   const fields = {
-    day: raw.day !== undefined ? parseOpsDay(raw.day, todayStr) : null,
+    day: raw.day !== undefined ? parseDealDate(raw.day, { today: todayStr }) : null, // v0.95.4：复用大容忍归一器
     account: normalizeAssistant(raw.account),
     reportedAmount: raw.reportedAmount !== undefined ? parseAmount(raw.reportedAmount) : null,
     products: String(raw.products ?? '').trim(),
@@ -136,6 +136,7 @@ export function parseOpsReport(text, opts = {}) {
   return { matched: true, fields, leads, missing, fieldLineCount }
 }
 
+<<<<<<< HEAD
 /** 日报日期归一：复用报单相对词与多形态（今天/昨天/2026年11月19日/11-19…）。 */
 function parseOpsDay(raw, todayStr) {
   const s = String(raw ?? '').trim()
@@ -150,6 +151,8 @@ function parseOpsDay(raw, todayStr) {
   return null
 }
 
+=======
+>>>>>>> origin/feat/date-lenient
 /**
  * 解析零散线索消息（确定性层）：行式字段（微信名：x / 微信号：x…）收集为若干条；
  * 单条口语串（线索：a，b，c）交 parseLeadLine。LLM 兜底在 brain 层，结果组装回同结构。

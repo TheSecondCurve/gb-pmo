@@ -66,15 +66,18 @@ export function parseAmount(raw) {
   return m[2] ? Math.round(n * 10000 * 100) / 100 : Math.round(n * 100) / 100
 }
 
-// 成交日期归一 → 北京日历日（S19）。支持：2026年11月18日 / 2026-11-18 / 2026/11/18 /
-// 11-18（月日缺年份，缺省当年；比今日早超 180 天视为「下一个周期」归明年，如 11 月说「3-15」）/
-// 今天 / 昨天 / 前天；无法解析返回 null（缺日期不落账，S79-4）
+// 成交日期归一 → 北京日历日（S19）。v0.95.4「大幅度容忍」（用户拍板）：
+// 全角数字/全角标点自动折半角；年/月/日/号 与 - / . 空格任意混用作分隔（2026年11.19、11月19号、
+// 2026 11 19 全认）；相对词 今天/昨天/前天。月日缺年缺省当年（早于半年前归明年）。
+// 解析出仍非真实日历日（13 月/32 日）返回 null（不猜）；无法解析返回 null（缺日期走 pending）。
+const pad2 = (x) => String(x).padStart(2, '0')
 export function parseDealDate(raw, { today: todayStr = today() } = {}) {
   const s = String(raw ?? '').trim()
   if (!s) return null
   if (s === '今天' || s === '今日' || s === '当天') return todayStr
   if (s === '昨天') return addDays(todayStr, -1)
   if (s === '前天') return addDays(todayStr, -2)
+<<<<<<< HEAD
   let m = s.match(/^(\d{4})年(\d{1,2})月(\d{1,2})\s*日?$/) // 「19 日」数字与日之间空格（输入法常见，线上实证 v0.95.1）
   let day = null
   if (m) day = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`
@@ -84,9 +87,27 @@ export function parseDealDate(raw, { today: todayStr = today() } = {}) {
     const md = `${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`
     if (dayDiff(todayStr, `${y}-${md}`) < -180) y += 1 // 已过半年前的月日 = 下一周期（明年）
     day = `${y}-${md}`
+=======
+  const t = s
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)) // 全角数字 → 半角
+    .replace(/[．・。]/g, '.').replace(/[－—–～]/g, '-').replace(/[／]/g, '/')
+    .replace(/[，、,]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  let m = t.match(/^(\d{4})\s*[年\-/. ]\s*(\d{1,2})\s*[月\-/. ]\s*(\d{1,2})\s*[日号]?$/)
+  if (m) {
+    const day = `${m[1]}-${pad2(m[2])}-${pad2(m[3])}`
+    return isCalendarDay(day) ? day : null
+>>>>>>> origin/feat/date-lenient
   }
-  if (!day || !isCalendarDay(day)) return null
-  return day
+  if ((m = t.match(/^(\d{1,2})\s*[月\-/. ]\s*(\d{1,2})\s*[日号]?$/))) {
+    let y = Number(todayStr.slice(0, 4))
+    const md = `${pad2(m[1])}-${pad2(m[2])}`
+    if (dayDiff(todayStr, `${y}-${md}`) < -180) y += 1 // 已过半年前的月日 = 下一周期（明年）
+    const day = `${y}-${md}`
+    return isCalendarDay(day) ? day : null
+  }
+  return null
 }
 
 // —— 模板解析 ——
