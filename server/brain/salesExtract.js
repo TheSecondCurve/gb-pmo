@@ -7,7 +7,7 @@
 import { getSetting } from '../engine/settings.js'
 import { getLlm, parseJsonLoose } from './llm.js'
 import { parseReport, looksLikeReport, normalizeAssistant, normalizeProduct, normalizePayPlatform, normalizeYesNo, parseAmount, parseDealDate } from '../engine/salesParser.js'
-import { parseOpsReport, looksLikeOpsReport, looksLikeLeadsMessage, parseLeadsMessage, parseCount } from '../engine/opsParser.js'
+import { parseOpsReport, looksLikeOpsReport, looksLikeLeadsMessage, parseLeadsMessage } from '../engine/opsParser.js'
 import {
   recordSalesMessage, updateSalesMessageStatus, salesCursor,
   findSalesDuplicate, insertSalesRecord, attachVoucher,
