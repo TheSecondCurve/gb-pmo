@@ -484,19 +484,6 @@ client.sh action generate_person_digest '{}'
 | source | TEXT | web | bot（打卡来源通道） |
 | updated_at | INTEGER |  |
 
-### sales_messages
-
-| 列 | 类型 | 说明 |
-|---|---|---|
-| id | INTEGER |  |
-| message_id | TEXT | 飞书消息 id（消息级幂等键，S79-2） |
-| chat_id | TEXT | 来源销售群（settings.sales.chatId） |
-| speaker_id | TEXT | 发言人 open_id（回执 @ 与审计） |
-| text | TEXT | 原文快照（复核/重解析用，D2 保留原话口径） |
-| ts | INTEGER | 消息时刻 epoch 毫秒（游标 = MAX(秒)） |
-| status | TEXT |  |
-| detail | TEXT | 状态说明（缺失字段清单等） |
-
 ### sales_records
 
 | 列 | 类型 | 说明 |
@@ -522,6 +509,70 @@ client.sh action generate_person_digest '{}'
 | synced_at | INTEGER |  |
 | vouchers | TEXT |  |
 | voucher_tokens | TEXT |  |
+
+### sales_assistants
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| assistant_name | TEXT | 名册规范名（漫漫/光光…；初值=群昵称，配置台可改） |
+| open_id | TEXT | 飞书用户（外部群成员，全局唯一稳定） |
+| display_name | TEXT | 群昵称/显示名（初始化灌入，人工核对辅助） |
+| status | TEXT |  |
+| bound_at | INTEGER | confirmed 时刻 |
+| updated_at | INTEGER |  |
+
+### ops_reports
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| message_id | TEXT | 最新修订的源消息（历史修订在 sales_messages 台账） |
+| speaker_id | TEXT | 最新修订发言人 open_id（换人代报检测） |
+| account | TEXT | 名册规范名 |
+| day | TEXT | 北京日历日（S19） |
+| reported_amount | REAL | 日报口径当日销售额——仅对账，绝不进成交统计 |
+| products | TEXT |  |
+| new_friends | INTEGER | 新增好友 |
+| active_reach | INTEGER | 主动触达用户 |
+| passive_reach | INTEGER | 被动触达用户 |
+| moments_count | INTEGER | 朋友圈数量 |
+| passive_interact | INTEGER | 被点赞评论互动 |
+| active_interact | INTEGER | 主动点赞评论互动 |
+| raw_summary | TEXT | 原文摘要（兜住未预期内容） |
+| revision | INTEGER | 修订次数（重发=修正覆盖） |
+| synced_record_id | TEXT | 多维表格行（修订后置空待 upsert） |
+| synced_at | INTEGER |  |
+| updated_at | INTEGER |  |
+
+### ops_leads
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| message_id | TEXT |  |
+| account | TEXT | 归属账号（文本自带或发言人名册反查） |
+| day | TEXT | 北京日历日 |
+| wechat_name | TEXT |  |
+| wechat_id | TEXT |  |
+| intent_product | TEXT |  |
+| source_channel | TEXT |  |
+| lead_source | TEXT |  |
+| raw_text | TEXT |  |
+| synced_record_id | TEXT |  |
+
+### sales_messages_v2
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| id | INTEGER |  |
+| message_id | TEXT |  |
+| chat_id | TEXT |  |
+| speaker_id | TEXT |  |
+| text | TEXT |  |
+| ts | INTEGER |  |
+| status | TEXT |  |
+| detail | TEXT |  |
 
 ## 枚举（值 ↔ 中文 label，双向对齐）
 

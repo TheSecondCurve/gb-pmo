@@ -1,17 +1,24 @@
 // S79（v0.94，design.md K79）销售域·抽取管线：拉销售群增量消息 → 确定性模板解析（salesParser）
 // → LLM 兜底非模板 → 双幂等落库 → 群回执 → 触发表格同步。复用飞书连接器（游标语义同 channels），
 // 但销售群不进 channels 表（独立域，游标 = sales_messages MAX(ts) 派生）。
+// S81（v0.95，K81）：一轮内三类消息分流——报单（既有）/ 日终汇总（修订覆盖+对账）/
+// 零散线索（去重入库+名册反查归属）；名册共现学习横跨三类。
 
 import { getSetting } from '../engine/settings.js'
 import { getLlm, parseJsonLoose } from './llm.js'
 import { parseReport, looksLikeReport, normalizeAssistant, normalizeProduct, normalizePayPlatform, normalizeYesNo, parseAmount, parseDealDate } from '../engine/salesParser.js'
+import { parseOpsReport, looksLikeOpsReport, looksLikeLeadsMessage, parseLeadsMessage, parseCount } from '../engine/opsParser.js'
 import {
   recordSalesMessage, updateSalesMessageStatus, salesCursor,
   findSalesDuplicate, insertSalesRecord, attachVoucher,
 } from '../engine/sales.js'
+import {
+  upsertOpsReport, insertLeadIfAbsent, resolveAssistantByOpenId, learnAssistantBinding,
+} from '../engine/ops.js'
 import { today } from '../db/time.js'
 import * as feishu from './connectors/feishu.js'
 import { syncPendingToBitable, syncVoucherBackfill } from './salesSync.js'
+import { syncOpsToBitable } from './opsSync.js'
 
 /** LLM 兜底（S79-3）：非模板但含成交语义的消息 → 结构化 JSON（同一套字段名，落库前同归一校验）。 */
 async function llmFallback(llm, text, { today: todayStr }) {
@@ -54,6 +61,24 @@ function missingOf(f) {
   return missing
 }
 
+/** LLM 兜底（S81-3）：口语线索 → JSON 数组（能提多少提多少，接受不全）。 */
+async function llmLeadsFallback(llm, text) {
+  const sys = [
+    '你是销售线索提取器。用户消息是销售群里发的用户线索（格式自由）。',
+    '提取全部线索并以 JSON 数组返回：[{"wechatName":"","wechatId":"","intentProduct":"","sourceChannel":""}]',
+    '字段能认出多少填多少，认不出留空字符串。消息里没有线索则返回 []。只回 JSON。',
+  ].join('\n')
+  const raw = await llm.complete([{ role: 'system', content: sys }, { role: 'user', content: text }], { json: true })
+  const parsed = parseJsonLoose(raw)
+  if (!Array.isArray(parsed)) return []
+  return parsed.filter((x) => x && typeof x === 'object').map((x) => ({
+    wechatName: String(x.wechatName ?? '').trim().slice(0, 60),
+    wechatId: String(x.wechatId ?? '').trim().slice(0, 60),
+    intentProduct: String(x.intentProduct ?? '').trim().slice(0, 80),
+    sourceChannel: String(x.sourceChannel ?? '').trim().slice(0, 60),
+  }))
+}
+
 /**
  * 定时/手动触发入口（调度器 / POST /api/v1/sales/trigger）。
  * opts.send 注入回执发送（测试收集；缺省走 feishu.sendText）；opts.fetchMessages 注入拉取桩。
@@ -68,11 +93,11 @@ export async function runSalesExtraction(db, { llm, send } = {}) {
   const reply = send || ((text) => feishu.sendText(feishuCfg, salesCfg.chatId, text))
   const cursor = salesCursor(db, salesCfg.chatId)
   const { messages } = await feishu.fetchMessages(feishuCfg, { groupKey: salesCfg.chatId }, cursor)
-  const out = { pulled: messages.length, recorded: 0, duplicates: 0, pending: 0, noise: 0, llmUsed: 0 }
+  const out = { pulled: messages.length, recorded: 0, duplicates: 0, pending: 0, noise: 0, llmUsed: 0, opsReports: 0, opsRevised: 0, leads: 0 }
   const todayStr = today() // 北京日（S19；相对日期「今天/昨天」的锚）
   const images = [] // S80：本轮图片消息（纯图与图文混排都收集，第二遍归属）
 
-  // 第一遍：文本报单解析落库（S79 语义不变）
+  // 第一遍：三类消息分流（S81：日报 → 线索 → 报单，模板特征互斥）+ 各自落库
   for (const msg of messages) {
     const text = String(msg.text ?? '').trim()
     const hasImage = (msg.imageKeys || []).length > 0
@@ -85,6 +110,58 @@ export async function runSalesExtraction(db, { llm, send } = {}) {
     }
     const rowId = recordSalesMessage(db, { ...base, status: 'noise' })
     if (!rowId) continue // message_id 幂等：重放/刷屏零重复（S79-2）
+
+    // —— S81-2 日终汇总：修订覆盖 + 线索区块去重并入 + 名册学习 ——
+    if (looksLikeOpsReport(text)) {
+      const p = parseOpsReport(text, { today: todayStr })
+      if (!p.matched) { out.noise++; continue }
+      if (p.missing.length) {
+        updateSalesMessageStatus(db, rowId, 'pending_fields', `日报缺 ${p.missing.join('/')}`)
+        out.pending++
+        await reply(`⚠️ 一份运营日报缺关键字段（${p.missing.join('、')}），请补发完整日报～`)
+        continue
+      }
+      const up = upsertOpsReport(db, p.fields, { messageId: msg.id, speakerId: msg.speakerId ?? '' })
+      const learn = learnAssistantBinding(db, { assistantName: p.fields.account, openId: msg.speakerId })
+      if (learn === 'mismatch') {
+        await reply(`⚠️ 「${p.fields.account}」的这份日报与以往发言人不同，如非代报请核对～`)
+      }
+      for (const lead of p.leads) {
+        const lid = insertLeadIfAbsent(db, { ...lead, account: p.fields.account }, { messageId: msg.id, day: p.fields.day, account: p.fields.account, leadSource: 'digest' })
+        if (lid) out.leads++
+      }
+      updateSalesMessageStatus(db, rowId, 'ops_report', `日报 #${up.id} r${up.revision}${up.speakerChanged ? '（换人代报）' : ''}`)
+      if (up.created) out.opsReports++; else out.opsRevised++
+      continue
+    }
+
+    // —— S81-3 零散线索：确定性 + LLM 兜底，去重入库；归属按发言人名册反查 ——
+    if (looksLikeLeadsMessage(text) && !looksLikeReport(text)) {
+      let leads = parseLeadsMessage(text)
+      if (!leads.length) {
+        const adapter = getLlm(db, llm, { purpose: 'extraction' })
+        if (adapter) {
+          try { out.llmUsed++; leads = await llmLeadsFallback(adapter, text) } catch { /* 兜底失败按噪音 */ }
+        }
+      }
+      leads = (leads || []).filter((l) => l.wechatName || l.wechatId || l.intentProduct)
+      if (!leads.length) { out.noise++; continue }
+      const account = resolveAssistantByOpenId(db, msg.speakerId) ?? ''
+      const leadDay = today(msg.ts)
+      let n = 0
+      for (const lead of leads) {
+        const lid = insertLeadIfAbsent(db, { ...lead, account }, { messageId: msg.id, day: leadDay, account, leadSource: 'scatter' })
+        if (lid) n++
+      }
+      if (!n) { // 全部与已有线索重复（如日报区块后再单发）——静默判重
+        updateSalesMessageStatus(db, rowId, 'duplicate', '线索全部重复')
+        out.duplicates++
+        continue
+      }
+      updateSalesMessageStatus(db, rowId, 'ops_lead', `线索 x${n}${account ? `（${account}）` : ''}`)
+      out.leads += n
+      continue
+    }
 
     const parsed = parseReport(text, { today: todayStr })
     let fields = parsed.matched ? parsed.fields : null
@@ -124,10 +201,21 @@ export async function runSalesExtraction(db, { llm, send } = {}) {
     const id = insertSalesRecord(db, { ...fields, dealTs, messageId: msg.id, source: 'bot' })
     updateSalesMessageStatus(db, rowId, 'recorded', `记录 #${id}`)
     out.recorded++
+    // S81-4 名册学习：报单（助手名， 发言人）共现；confirmed 后他人代报温和提醒
+    if (fields.assistant) {
+      const learn = learnAssistantBinding(db, { assistantName: fields.assistant, openId: msg.speakerId })
+      if (learn === 'mismatch') {
+        await reply(`⚠️ 「${fields.assistant}」的报单与以往发言人不同，如非代报请核对～`)
+      }
+    }
   }
 
-  // 轮末汇总回执（S79-4 回执语义）：有新成交发一条恭喜、无新成交静默零打扰（不逐条刷屏）
-  if (out.recorded > 0) await reply(`收到 ${out.recorded} 条成交信息入库，恭喜！`)
+  // 轮末汇总回执（S79-4/S81 静默哲学）：任一新数据才发一条合并回执、无事零打扰
+  const bits = []
+  if (out.recorded > 0) bits.push(`${out.recorded} 条成交`)
+  if (out.opsReports + out.opsRevised > 0) bits.push(`${out.opsReports + out.opsRevised} 份运营日报`)
+  if (out.leads > 0) bits.push(`${out.leads} 条新线索`)
+  if (bits.length) await reply(`收到 ${bits.join('、')}入库，恭喜！`)
 
   // S80 第二遍：图片归属（本轮报单已全部落库——图先文后同轮也能挂上；无主图静默）
   let voucherAttached = 0
@@ -145,6 +233,10 @@ export async function runSalesExtraction(db, { llm, send } = {}) {
     if (sync.error) out.syncError = sync.error
     const back = await syncVoucherBackfill(db)
     out.voucherPatched = back.patched
+    // S81：运营两张表（日报 upsert + 线索 insert-only；未建表时静默跳过）
+    const ops = await syncOpsToBitable(db)
+    out.opsSynced = (ops.reports?.created ?? 0) + (ops.reports?.updated ?? 0) + (ops.leads?.created ?? 0)
+    if (ops.reports?.errors?.length || ops.leads?.errors?.length) out.opsSyncError = [...(ops.reports?.errors ?? []), ...(ops.leads?.errors ?? [])].join('；').slice(0, 300)
   } catch (e) {
     out.syncError = e.message
   }

@@ -289,6 +289,22 @@ export async function patchPost(cfg, messageId, content) {
 }
 
 /** 群信息（external 字段用于 S20-7 外部群拒答；调用方负责缓存）。 */
+/** S81（v0.95，K81）：群成员分页拉取（名册初始化用）——返回 [{openId, name}]（含外部成员展示名）。 */
+export async function fetchChatMembers(cfg, chatId, { pageSize = 50 } = {}) {
+  const out = []
+  let pageToken = ''
+  do {
+    const data = await feishuApi(cfg, `/im/v1/chats/${encodeURIComponent(chatId)}/members`, {
+      query: { member_id_type: 'open_id', page_size: String(pageSize), ...(pageToken ? { page_token: pageToken } : {}) },
+    })
+    for (const it of data.items || []) {
+      out.push({ openId: it.member_id ?? '', name: it.name ?? '' })
+    }
+    pageToken = data.page_token ?? ''
+  } while (pageToken)
+  return out
+}
+
 export async function getChat(cfg, chatId) {
   const token = await tenantToken(cfg)
   const res = await fetch(`https://open.feishu.cn/open-apis/im/v1/chats/${chatId}`, {
