@@ -85,6 +85,13 @@ describe('S79-1 模板报单确定性解析（归一化，无 LLM）', () => {
     const opt = { today: '2026-11-18' }
     expect(parseDealDate('2026年11月19 日', opt)).toBe('2026-11-19') // 数字与「日」之间空格（线上实证）
     expect(parseDealDate('11.19', opt)).toBe('2026-11-19') // 点分隔（线上实证 v0.95.3）
+    // v0.95.4 大容忍归一器：全角/号后缀/混分隔/空格分隔
+    for (const c of ['11月19号', '2026年11月19号', '２０２６年１１月１９日', '2026年11.19', '2026-11月19号', '11 19', '2026 11 19']) {
+      expect(parseDealDate(c, opt)).toBe('2026-11-19')
+    }
+    for (const bad of ['2026年13月1日', '11-32', '19号', '下周三']) {
+      expect(parseDealDate(bad, opt)).toBeNull() // 非真实日历日/歧义不猜
+    }
     expect(parseDealDate('2026-11-18', opt)).toBe('2026-11-18')
     expect(parseDealDate('2026/11/18', opt)).toBe('2026-11-18')
     expect(parseDealDate('11-18', opt)).toBe('2026-11-18')
