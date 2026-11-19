@@ -131,8 +131,7 @@ export function parseOpsReport(text, opts = {}) {
     activeInteract: raw.activeInteract !== undefined ? parseCount(raw.activeInteract) : null,
   }
   const missing = []
-  if (!fields.account) missing.push('运营账号')
-  if (!fields.day) missing.push('日期')
+  if (!fields.day) missing.push('日期') // v0.95.2：账号不必填——归属=发言人名册名（K81 修订）
   const leads = leadLines.map(parseLeadLine).filter(Boolean)
   return { matched: true, fields, leads, missing, fieldLineCount }
 }
