@@ -7,6 +7,7 @@ import { getSetting } from './settings.js'
 import { pendingSuggestionsFor } from './events.js'
 import { queryMetric } from './metrics.js'
 import { label } from './enums.js'
+import { isApplicableDay, parseCadence, cadenceLabel } from './dailyBoard.js' // S66-5 适用判定复用唯一真相源（无环）
 
 /** /my：本人未完任务（逾期标注）+ 明日到期 + 待确认建议计数（跨在跑项目聚合）。
  *  S69：排除常态任务——永不完成，计入即永久噪音（周视图自管每日执行）。 */
@@ -35,10 +36,40 @@ export function myWork(db, memberId) {
   return { taskCount: tasks.length, overdueCount, dueTomorrow, pendingCount: pending.length, text: sections.join('\n') }
 }
 
+/** S66-5（v0.96，K82）：本人在在跑常态项目中「当日 cadence 适用」的常态任务，按项目分组——
+ *  K64 排除口径的限定例外：当日清单有终局（当日打卡即出清），非永久噪音；历史/过期常态任务
+ *  天然不出现（无按日实例可回看，isApplicableDay 只放行今天）。无打卡记录 = 未做（K64 惰性语义）。
+ *  纯读；打卡走既有 setDayStatus 通道（本函数不写）。 */
+const ROUTINE_TIER = { pending: 0, skip: 1, done: 2 }
+
+function todayRoutineGroups(db, memberId, todayDay) {
+  const rows = camelizeRows(
+    db.prepare(
+      `SELECT t.id, t.title, t.cadence, t.project_id, p.name AS project_name, r.status AS day_status
+       FROM tasks t JOIN projects p ON p.id = t.project_id
+       LEFT JOIN task_day_records r ON r.task_id = t.id AND r.day = ?
+       WHERE t.responsible_member_id = ? AND t.kind = 'routine' AND t.deleted_at IS NULL
+         AND p.kind = 'routine' AND p.status = 'active'`
+    ).all(todayDay, memberId)
+  )
+  const byProject = new Map()
+  for (const t of rows) {
+    const cadence = parseCadence(t.cadence)
+    if (!isApplicableDay(cadence, todayDay)) continue
+    if (!byProject.has(t.projectId)) byProject.set(t.projectId, { projectId: t.projectId, projectName: t.projectName, tasks: [] })
+    byProject.get(t.projectId).tasks.push({ id: t.id, title: t.title, cadenceLabel: cadenceLabel(cadence), status: t.dayStatus || 'pending' })
+  }
+  for (const g of byProject.values()) {
+    g.tasks.sort((a, b) => ROUTINE_TIER[a.status] - ROUTINE_TIER[b.status] || a.id - b.id) // 未做→跳过→完成，同档保持任务序
+  }
+  return [...byProject.values()]
+}
+
 /**
  * S66（v0.73，K52）：我的任务工作台——跨在跑项目聚合本人未完任务（/my 同口径），
  * 按项目分组供 web #/my 页时间线渲染。纯读。
  * 「本周到期」= 北京自然周（周一~周日）且不早于今日——逾期任务不重复计入本周。
+ * S66-5（v0.96，K82）：另带今日常态区 routine（不进 stats/projects 未完口径，S69-6 主体不变）。
  */
 export function myTasksBoard(db, memberId, { now = Date.now() } = {}) {
   const rows = camelizeRows(
@@ -72,6 +103,7 @@ export function myTasksBoard(db, memberId, { now = Date.now() } = {}) {
       pending: pendingSuggestionsFor(db, memberId).length,
     },
     projects: [...byProject.values()],
+    routine: todayRoutineGroups(db, memberId, todayDay), // S66-5：今日常态区（不进 stats/projects）
   }
 }
 

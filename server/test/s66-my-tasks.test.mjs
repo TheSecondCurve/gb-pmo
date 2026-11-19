@@ -3,9 +3,10 @@ import { describe, it, expect, afterAll } from 'vitest'
 import { setupApp, loginCookie, authed } from './helpers.mjs'
 import { createProject, cancelProject } from '../engine/projects.js'
 import { createTask, updateTask, deleteTask } from '../engine/tasks.js'
+import { setDayStatus } from '../engine/dailyBoard.js'
 import { addEvent } from '../engine/events.js'
 import { myTasksBoard } from '../engine/statusBoard.js'
-import { today, addDays, bjWeekStartMs } from '../db/time.js'
+import { today, addDays, bjWeekStartMs, weekdayOf } from '../db/time.js'
 
 // 造数（各用例共用一份库）：dev 名下 A 项目 4 条（区间/逾期/今天到期/上周到期）+ B 项目 2 条（纯提醒/未排期），
 // 另有他人任务、已完成、软删、终态项目任务各 1 条（均不应出现在 dev 视图）。
@@ -95,5 +96,52 @@ describe('S66 我的任务工作台', () => {
     const leadView = await authed(ctx.app, leadCookie, 'GET', '/api/v1/my-tasks')
     expect(leadView.status).toBe(200)
     expect(leadView.body.projects.flatMap((p) => p.tasks.map((x) => x.title))).toEqual(['别人的任务'])
+  })
+
+  it('S66-5: 今日常态任务区——仅当日 cadence 适用（历史/非今日不出现）、含今日状态三档、未做→跳过→完成排序；不进统计、按成员定域', async () => {
+    const { dev, lead } = ctx.members
+    const wd = weekdayOf(today())
+    const otherWd = wd === 2 ? 3 : 2 // 必然 ≠ 今天的星期（今天不适用）
+    const r = createProject(ctx.db, {
+      name: '常态运营', kind: 'routine', typeCode: 'routine_ops', leadMemberId: lead.id,
+      tasks: [
+        '每日盘点',
+        { title: '今天才有的周任务', weekdays: [wd] },
+        { title: '非今天的周任务', weekdays: [otherWd] },
+        '已完成的常态活',
+        '已跳过的常态活',
+        '别人的常态活',
+      ],
+    }, 1)
+    for (const id of [r.tasks[0].id, r.tasks[1].id, r.tasks[2].id, r.tasks[3].id, r.tasks[4].id]) {
+      updateTask(ctx.db, id, { responsibleMemberId: dev.id }, 1)
+    }
+    updateTask(ctx.db, r.tasks[5].id, { responsibleMemberId: lead.id }, 1)
+    setDayStatus(ctx.db, { projectId: r.id, taskId: r.tasks[3].id, day: today(), status: 'done' }, dev.id)
+    setDayStatus(ctx.db, { projectId: r.id, taskId: r.tasks[4].id, day: today(), status: 'skip' }, dev.id)
+
+    const board = myTasksBoard(ctx.db, dev.id)
+    expect(board.routine).toHaveLength(1)
+    const g = board.routine[0]
+    expect(g.projectId).toBe(r.id)
+    expect(g.projectName).toBe('常态运营')
+    // 非今日适用不出现；档序 未做→跳过→完成，同档保持任务序
+    expect(g.tasks.map((t) => t.title)).toEqual(['每日盘点', '今天才有的周任务', '已跳过的常态活', '已完成的常态活'])
+    expect(g.tasks.map((t) => t.status)).toEqual(['pending', 'pending', 'skip', 'done'])
+    expect(g.tasks[0].cadenceLabel).toBe('每天')
+    expect(g.tasks[1].cadenceLabel).toMatch(/^每周/)
+    // 未完任务口径不变（S69-6 主体）：统计与 projects[] 均不含常态任务
+    expect(board.stats.total).toBe(6)
+    expect(JSON.stringify(board.projects)).not.toContain('每日盘点')
+    // 成员定域：别人的常态活不进 dev 视图；dev 的常态任务在 lead 视图只有他自己的
+    expect(JSON.stringify(board.routine)).not.toContain('别人的常态活')
+    const leadBoard = myTasksBoard(ctx.db, lead.id)
+    expect(leadBoard.routine.flatMap((x) => x.tasks.map((t) => t.title))).toEqual(['别人的常态活'])
+
+    // 路由：GET /api/v1/my-tasks 响应带 routine 区（按会话成员定域）
+    const cookie = await loginCookie(ctx.app, 'lisi', 'pass-123456')
+    const res = await authed(ctx.app, cookie, 'GET', '/api/v1/my-tasks')
+    expect(res.status).toBe(200)
+    expect(res.body.routine[0].projectName).toBe('常态运营')
   })
 })
