@@ -576,6 +576,35 @@ export function registerApiRoutes(app) {
     return salesSummary(db, { day: req.query?.day || undefined })
   })
 
+  // —— S81-4（v0.95）：小助手名册——读全员透明；改名册规范名与同步群成员仅管理员 ——
+  app.get('/api/v1/sales/assistants', async () => {
+    const { listAssistants } = await import('../engine/ops.js')
+    return { assistants: listAssistants(db) }
+  })
+
+  app.put('/api/v1/sales/assistants/:id', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const name = String(req.body?.assistantName ?? '').trim()
+    if (!name) return reply.status(400).send({ message: 'assistantName 须为非空字符串' })
+    const { renameAssistant } = await import('../engine/ops.js')
+    renameAssistant(db, Number(req.params.id), name)
+    auth.audit(db, { memberId: req.member.id, action: 'sales.assistant.rename', objectType: 'sales_assistant', objectId: String(req.params.id), detail: { assistantName: name } })
+    return { ok: true }
+  })
+
+  app.post('/api/v1/sales/assistants/sync', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return
+    const salesCfg = getSetting(db, 'sales')
+    const feishuCfg = getSetting(db, 'im.feishu')
+    if (!salesCfg.chatId || !feishuCfg.appId) return reply.status(400).send({ message: 'sales.chatId 或 im.feishu 凭证未配置' })
+    const { syncAssistantsFromMembers } = await import('../engine/ops.js')
+    const { fetchChatMembers } = await import('../brain/connectors/feishu.js')
+    const members = await fetchChatMembers(feishuCfg, salesCfg.chatId)
+    const added = syncAssistantsFromMembers(db, members)
+    auth.audit(db, { memberId: req.member.id, action: 'sales.assistant.sync', objectType: 'sales_assistant', detail: { added, total: members.length } })
+    return { added, total: members.length }
+  })
+
   // —— S67-5（v0.77，K58）：定时任务手动触发——与调度器同一 runner 表执行一次并回显；
   // 幂等语义与定时一致（不在手动路径绕过判重：晨报当日已推跳过、周报本周已推跳过、备份未配跳过） ——
   app.post('/api/v1/admin/scheduler/run', async (req, reply) => {

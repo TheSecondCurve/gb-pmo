@@ -105,7 +105,7 @@ describe('S79-2/S79-3/S79-4 抽取管线（fetch 注桩，真实请求路径）'
     try {
       const r1 = await runSalesExtraction(ctx.db, { send })
       expect(r1.recorded).toBe(1)
-      expect(sent).toEqual(['收到 1 条成交信息入库，恭喜！']) // 轮末汇总回执（不逐条刷屏）
+      expect(sent).toEqual(['收到 1 条成交入库，恭喜！']) // 轮末合并回执（S81 起「成交/日报/线索」合并一句）
       const r2 = await runSalesExtraction(ctx.db, { send }) // 同消息重放
       expect(r2.recorded).toBe(0)
       expect(listSalesRecords(ctx.db, {}).length).toBe(1)
@@ -241,8 +241,8 @@ describe('S79-5 汇总统计与每日播报（北京日界，日级幂等）', (
     expect(top).toEqual({ assistant: '漫漫', n: 2, amount: 13165 })
     const prod = s.byProduct.find((x) => x.product === '2026女商私董')
     expect(prod).toEqual({ product: '2026女商私董', n: 1, amount: 12800 })
-    expect(buildSalesReportText(s)).toContain('今日成交 2 单')
-    expect(buildSalesReportText(s)).toContain('15,799')
+    expect(buildSalesReportText({ day: s.day, sales: s, ops: null })).toContain('今日成交 2 单')
+    expect(buildSalesReportText({ day: s.day, sales: s, ops: null })).toContain('15,799')
   })
 
   it('S79-5: 每日播报为汇总卡片（K41 模板）；卡片失败降级文本；日级幂等不重发', async () => {
