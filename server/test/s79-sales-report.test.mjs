@@ -84,6 +84,7 @@ describe('S79-1 模板报单确定性解析（归一化，无 LLM）', () => {
   it('S79-1: 日期形态——中文/斜杠/月日缺省当年（未来归明年）/相对词（K16：显式传 today 锚）', () => {
     const opt = { today: '2026-11-18' }
     expect(parseDealDate('2026年11月19 日', opt)).toBe('2026-11-19') // 数字与「日」之间空格（线上实证）
+    expect(parseDealDate('11.19', opt)).toBe('2026-11-19') // 点分隔（线上实证 v0.95.3）
     expect(parseDealDate('2026-11-18', opt)).toBe('2026-11-18')
     expect(parseDealDate('2026/11/18', opt)).toBe('2026-11-18')
     expect(parseDealDate('11-18', opt)).toBe('2026-11-18')
@@ -120,15 +121,15 @@ describe('S79-2/S79-3/S79-4 抽取管线（fetch 注桩，真实请求路径）'
       // 无订单号组合查重：库内已有无订单号记录（迁移/人工数据），同 客户+日+金额 报单再来判重。
       // （无订单号的新报单本身会进 pending——S79-4 缺关键字段不落账，故用直插构造存量。）
       const noOrder = FULL_REPORT.split('\n').filter((l) => !l.startsWith('订单号')).join('\n')
-      insertSalesRecord(ctx.db, {
+      insertSalesRecord(ctx.db, { // 金额错开主报单（v0.95.3 组合查重对全量记录生效，同客户同日同金额会互撞）
         messageId: 'om_seed_no_order', orderNo: '', dealDay: '2026-11-18', dealTs: Date.parse('2026-11-18T00:00:00+08:00'),
-        amount: 12800, product: '2026女商私董', assistant: '漫漫', customerNick: '吉莹', source: 'manual',
+        amount: 97531, product: '2026女商私董', assistant: '漫漫', customerNick: '吉莹', source: 'manual',
       })
       items.length = 0
-      items.push(msg('om_t3b', noOrder, 10004)) // 同客户+同日+同金额、不同消息
+      items.push(msg('om_t3b', noOrder, 10004)) // 同客户+同日+同金额、无订单号重发
       const r4 = await runSalesExtraction(ctx.db, { send })
-      expect(r4.duplicates).toBe(1)
-      expect(listSalesRecords(ctx.db, {}).length).toBe(2) // 有订单 1 + 无订单 1
+      expect(r4.duplicates).toBe(1) // v0.95.3：组合查重命中已有单号记录（忘填单号的重发不重复入库）
+      expect(listSalesRecords(ctx.db, {}).length).toBe(2)
       expect(sent.length).toBe(1) // 重放/判重轮全部静默（重复不回执，台账留痕）
     } finally { s.restore() }
   })
