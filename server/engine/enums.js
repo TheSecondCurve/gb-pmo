@@ -171,5 +171,7 @@ export const DEFAULT_SETTINGS = {
     chatId: 'oc_d5ac056209bf35bd08383f5babca4293', // 销售数据同步群（外部群，机器人进群后拉历史消息）
     baseToken: 'OzZcbBHa5aDnVvscpyxc6QE1nzg',     // 多维表格「2026 女商成交登记表」
     tableId: 'tblU1tSP7A0LZ0t9',                  // 「成交登记总表」（合并单表，金额 number，K79）
+    opsTableId: 'tbleDDS2tjhV999D',               // S81「运营数据日报」表（生产值，配置台可改）
+    leadsTableId: 'tbl00g0Da3hcG9TW',              // S81「用户线索」表（生产值，配置台可改）
   },
 }

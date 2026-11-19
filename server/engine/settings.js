@@ -116,10 +116,12 @@ const VALIDATORS = {
   // S79（v0.94，K79）：销售域坐标——三项均须非空字符串（trim 后判空）；存在性（群/表是否真实可达）
   // 不在保存时拦，抽取/同步运行时判定并回原因（S22 同构：未配全=跳过）。
   sales(value) {
-    for (const k of ['chatId', 'baseToken', 'tableId']) {
+    // ops/leads 两表 id 允许空串（建表前默认空）；chatId/baseToken/tableId 三主坐标须非空
+    for (const k of ['chatId', 'baseToken', 'tableId', 'opsTableId', 'leadsTableId']) {
       if (value?.[k] === undefined) continue
-      if (typeof value[k] !== 'string' || !value[k].trim()) {
-        throw Object.assign(new Error(`sales.${k} 须为非空字符串`), { statusCode: 400 })
+      const must = !['opsTableId', 'leadsTableId'].includes(k)
+      if (typeof value[k] !== 'string' || (must && !value[k].trim())) {
+        throw Object.assign(new Error(`sales.${k} 须为字符串${must ? '且非空' : '（运营表可空）'}`), { statusCode: 400 })
       }
     }
   },

@@ -217,6 +217,11 @@ export const api = {
   schedulerRun: (task: string) => req<{ ok: boolean; task: string; result?: unknown; error?: string }>('POST', '/api/v1/admin/scheduler/run', { task }),
   // S67-6（v0.77）运行台账：cron 与手动触发统一记录，最近 N 条新→旧（仅管理员）
   schedulerRuns: (limit = 50) => req<{ runs: { id: number; task: string; origin: string; startedAt: number; durationMs: number; ok: number; summary?: string | null; memberName?: string | null }[] }>('GET', `/api/v1/admin/scheduler/runs?limit=${limit}`),
+
+  // S81-4（v0.95）：销售小助手名册
+  salesAssistants: () => req<{ assistants: { id: number; assistantName: string; openId: string; displayName: string; status: string }[] }>('GET', '/api/v1/sales/assistants'),
+  salesAssistantRename: (id: number, assistantName: string) => req('PUT', `/api/v1/sales/assistants/${id}`, { assistantName }),
+  salesAssistantsSync: () => req<{ added: number; total: number }>('POST', '/api/v1/sales/assistants/sync'),
   // S34-5（v0.77）远端备份对象清单：桶内命名规则对象实时列表（仅管理员；点开才拉）
   backupRemote: () => req<{ ok: boolean; skipped?: boolean; reason?: string; keepCount?: number; count?: number; totalBytes?: number; objects?: { key: string; lastModifiedMs: number | null; bytes: number }[] }>('GET', '/api/v1/admin/backup/remote'),
   tokens: () => req<{ tokens: { id: number; name: string; tokenPrefix: string; scope: string; createdAt: number; expiresAt: number; revokedAt?: number | null }[] }>('GET', '/api/v1/auth/tokens'),

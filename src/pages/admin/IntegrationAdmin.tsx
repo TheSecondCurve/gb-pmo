@@ -26,14 +26,34 @@ interface SalesCfg { chatId: string; baseToken: string; tableId: string }
 function SalesCard() {
   const { toast } = useStore()
   const [cfg, setCfg] = useState<SalesCfg | null>(null)
+  const [assistants, setAssistants] = useState<AssistantRow[] | null>(null)
   useEffect(() => {
-    void (async () => { setCfg((await api.settings()).sales as SalesCfg) })()
+    void (async () => {
+      setCfg((await api.settings()).sales as SalesCfg)
+      setAssistants((await api.salesAssistants().catch(() => null))?.assistants ?? null)
+    })()
   }, [])
+  const syncAssistants = async () => {
+    try {
+      const r = await api.salesAssistantsSync()
+      toast(`已从群同步：新增 ${r.added} 人（共 ${r.total} 名成员）`)
+      setAssistants((await api.salesAssistants()).assistants)
+    } catch (e) { toast((e as Error).message, 'bad') }
+  }
+  const renameAssistant = async (id: number, assistantName: string) => {
+    const name = assistantName.trim()
+    if (!name || assistants?.find((a) => a.id === id)?.assistantName === name) return
+    try {
+      await api.salesAssistantRename(id, name)
+      toast('名册名已更新（零散线索归属即刻按新名反查）')
+      setAssistants((await api.salesAssistants()).assistants)
+    } catch (e) { toast((e as Error).message, 'bad') }
+  }
   if (!cfg) return <Spinner />
   const save = async () => {
     try {
       await api.putSetting('sales', cfg)
-      toast('销售域坐标已保存（三项均须非空；生效即时）')
+      toast('销售域坐标已保存（主坐标非空；运营表可空；生效即时）')
     } catch (e) { toast((e as Error).message, 'bad') }
   }
   return (
@@ -55,9 +75,36 @@ function SalesCard() {
         权限前提：应用具备云文档（bitable）读写与附件上传、机器人已进报单群；未配全时任务静默跳过（运行记录可查）。
         换群/换表后下一轮抽取生效（游标按群 chat_id 区分）；不要手动改总表字段名——同步按中文字段名写入。
       </p>
+      <div className="mt-4 border-t border-[var(--color-line)] pt-3">
+        <div className="mb-2 flex items-center gap-2">
+          <span className="text-[13px] font-medium">小助手名册（S81）</span>
+          <Btn onClick={() => void syncAssistants()}>从群同步成员</Btn>
+          {assistants === null ? <Spinner /> : (
+            <span className="text-[12px] text-[var(--color-ink-soft)]">{assistants.length} 人在册 · 点「从群同步成员」拉取群内 open_id 与昵称，再修改名册规范名</span>
+          )}
+        </div>
+        {assistants && assistants.length > 0 && (
+          <div className="space-y-1">
+            {assistants.map((a) => (
+              <div key={a.id} className="flex flex-wrap items-center gap-2 text-[12px]">
+                <span className="w-28 truncate text-[var(--color-ink-soft)]" title={a.displayName || a.openId}>{a.displayName || a.openId.slice(0, 14) + '…'}</span>
+                <input
+                  className={inputCls + ' !w-36'}
+                  defaultValue={a.assistantName}
+                  onBlur={(e) => void renameAssistant(a.id, e.target.value)}
+                />
+                <span className="text-[var(--color-ink-soft)]">{a.status === 'confirmed' ? '✓ 已确认' : '待确认'}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </Card>
   )
 }
+
+// S81-4：名册行（展示名 + 规范名编辑 + 学习状态）
+interface AssistantRow { id: number; assistantName: string; openId: string; displayName: string; status: string }
 
 interface LlmSub { apiKey: string; baseUrl: string; model: string }
 interface LlmCfg {
