@@ -37,8 +37,10 @@ export function findSalesDuplicate(db, rec) {
     return db.prepare('SELECT id, message_id FROM sales_records WHERE order_no = ?').get(rec.orderNo) || null
   }
   if (rec.customerNick) {
+    // v0.95.3：组合查重对**所有**记录生效（不限无单号记录）——无单号重发（忘填单号）不会重复入库；
+    // 边界：同客户同日同金额的两笔真实成交会被误判重（罕见，台账留原文可人工补录），防重优先。
     return db.prepare(
-      'SELECT id, message_id FROM sales_records WHERE order_no = \'\' AND customer_nick = ? AND deal_day = ? AND amount = ?'
+      'SELECT id, message_id FROM sales_records WHERE customer_nick = ? AND deal_day = ? AND amount = ?'
     ).get(rec.customerNick, rec.dealDay, rec.amount) || null
   }
   return null

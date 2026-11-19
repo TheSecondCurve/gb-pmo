@@ -54,8 +54,7 @@ async function llmFallback(llm, text, { today: todayStr }) {
 }
 
 function missingOf(f) {
-  const missing = []
-  if (!f.orderNo) missing.push('订单号')
+  const missing = [] // v0.95.3：订单号可选（外部成交无单号，组合查重兜底）
   if (f.amount == null) missing.push('成交金额')
   if (!f.dealDay) missing.push('成交日期')
   return missing

@@ -79,7 +79,7 @@ export function parseDealDate(raw, { today: todayStr = today() } = {}) {
   let day = null
   if (m) day = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`
   else if ((m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/))) day = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`
-  else if ((m = s.match(/^(\d{1,2})[-/月](\d{1,2})日?$/))) {
+  else if ((m = s.match(/^(\d{1,2})[-/.月](\d{1,2})日?$/))) { // 点分隔「11.19」（线上实证 v0.95.3）
     let y = Number(todayStr.slice(0, 4))
     const md = `${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`
     if (dayDiff(todayStr, `${y}-${md}`) < -180) y += 1 // 已过半年前的月日 = 下一周期（明年）
@@ -172,8 +172,9 @@ export function parseReport(text, opts = {}) {
     distribution: normalizeYesNo(raw.distribution),
     note: String(raw.note ?? '').trim().replace(/^[_＿\s]+$/, ''), // 模板占位符「____」归一为空
   }
+  // v0.95.3（K81 边界修订）：订单号降级可选——外部渠道成交（线下/外部链接）天然无单号
+  // （线上实证：刘润链接单被拦 pending）。防重改由组合查重兜底（客户+日+金额，对所有记录生效）。
   const missing = []
-  if (!fields.orderNo) missing.push('订单号')
   if (fields.amount == null) missing.push('成交金额')
   if (!fields.dealDay) missing.push('成交日期')
   return { matched: true, fields, missing, fieldLineCount }

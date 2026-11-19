@@ -145,7 +145,8 @@ function parseOpsDay(raw, todayStr) {
   let m = s.match(/^(\d{4})年(\d{1,2})月(\d{1,2})\s*日?$/)
   if (m) { const d = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`; return isCalendarDay(d) ? d : null }
   if ((m = s.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/))) { const d = `${m[1]}-${String(m[2]).padStart(2, '0')}-${String(m[3]).padStart(2, '0')}`; return isCalendarDay(d) ? d : null }
-  if ((m = s.match(/^(\d{1,2})[-/月](\d{1,2})日?$/))) { const d = `${todayStr.slice(0, 4)}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`; return isCalendarDay(d) && d <= addDays(todayStr, 1) ? d : null }
+  // 点分隔「11.19」（线上实证 v0.95.3）
+  if ((m = s.match(/^(\d{1,2})[-/.月](\d{1,2})日?$/))) { const d = `${todayStr.slice(0, 4)}-${String(m[1]).padStart(2, '0')}-${String(m[2]).padStart(2, '0')}`; return isCalendarDay(d) && d <= addDays(todayStr, 1) ? d : null }
   return null
 }
 
