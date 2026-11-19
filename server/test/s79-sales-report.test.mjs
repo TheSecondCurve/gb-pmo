@@ -83,6 +83,7 @@ describe('S79-1 模板报单确定性解析（归一化，无 LLM）', () => {
   })
   it('S79-1: 日期形态——中文/斜杠/月日缺省当年（未来归明年）/相对词（K16：显式传 today 锚）', () => {
     const opt = { today: '2026-11-18' }
+    expect(parseDealDate('2026年11月19 日', opt)).toBe('2026-11-19') // 数字与「日」之间空格（线上实证）
     expect(parseDealDate('2026-11-18', opt)).toBe('2026-11-18')
     expect(parseDealDate('2026/11/18', opt)).toBe('2026-11-18')
     expect(parseDealDate('11-18', opt)).toBe('2026-11-18')
