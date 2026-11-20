@@ -251,7 +251,8 @@ function applyDayStatusCandidate(db, { projectId, projectName, channel, evt, sou
     if (out.eventId) {
       stats.events += 1
       const ev = db.prepare('SELECT summary FROM project_events WHERE id = ?').get(out.eventId)
-      stats.progressEvents.push({ projectId, projectName, summary: ev?.summary || evt.summary })
+      // S60-5（v0.96.1）：打卡自动生效 = 任务状态变化，播报聚合带 ✅ 标注
+      stats.progressEvents.push({ projectId, projectName, summary: ev?.summary || evt.summary, statusChange: true })
     }
     return 'applied'
   } catch {
@@ -330,6 +331,11 @@ export function persistExtractionEvents(db, { projectId, channel, extracted, sta
       if (applied) {
         stats.events += 1
         stats.autoApplied += 1
+        // S60-5（v0.96.1）：任务/里程碑状态变更自动生效汇入播报聚合（✅ 行）——排期/责任人变更不入播报
+        if (evt.selected?.targetField === 'status') {
+          const ev = db.prepare('SELECT summary FROM project_events WHERE id = ?').get(created.id)
+          stats.progressEvents.push({ projectId, projectName, summary: ev?.summary || evt.summary, statusChange: true })
+        }
       } else {
         stats.suggestions += 1
         pending.push(created)

@@ -34,7 +34,10 @@ export async function runExtraction(db, { channelId, projectId } = {}, { llm, se
     // S52：① 先排干事件流缓冲（独立于 API 拉取；失败不标记、下轮重试）
     try {
       const drained = await drainBuffer(db, ch, { llm, send })
-      if (drained) Object.assign(row, drained)
+      if (drained) {
+        Object.assign(row, drained)
+        collectProgress(progressByProject, drained.progressEvents) // S60-5（v0.96.1）：缓冲路径同样汇聚
+      }
     } catch (e) {
       row.bufferError = e.message
     }
@@ -46,25 +49,30 @@ export async function runExtraction(db, { channelId, projectId } = {}, { llm, se
       db.prepare('UPDATE channels SET cursor = ?, last_pull_at = ? WHERE id = ?').run(nextCursor, Date.now(), ch.id)
       Object.assign(row, { pulled: messages.length, events: (row.events ?? 0) + (ingested.events ?? 0), suggestions: (row.suggestions ?? 0) + (ingested.suggestions ?? 0), autoApplied: (row.autoApplied ?? 0) + (ingested.autoApplied ?? 0), duplicates: (row.duplicates ?? 0) + (ingested.duplicates ?? 0), unrouted: (row.unrouted ?? 0) + (ingested.unrouted ?? 0), noiseSkipped: (row.noiseSkipped ?? 0) + (ingested.noiseSkipped ?? 0), bufferSkipped: (row.bufferSkipped ?? 0) + (ingested.bufferSkipped ?? 0) })
       // S60：收集本轮进展（排干缓冲与 API 两路都汇聚）
-      for (const ev of ingested.progressEvents ?? []) {
-        if (!progressByProject.has(ev.projectId)) progressByProject.set(ev.projectId, [])
-        progressByProject.get(ev.projectId).push(ev)
-      }
+      collectProgress(progressByProject, ingested.progressEvents)
     } catch (e) {
       row.error = e.message
     }
     results.push(row)
   }
-  // S60：抽取后群进展播报（周期尾部，三道闸任一不过即静默）
+  // S60：抽取后群进展播报（周期尾部，闸门任一不过即静默）
   await broadcastProgress(db, progressByProject, { send })
   return { channels: results }
 }
 
+/** S60-5（v0.96.1）：两路进展汇聚——缓冲排干与 API 游标摄入的 progressEvents 统一进按项目聚合。 */
+function collectProgress(progressByProject, events) {
+  for (const ev of events ?? []) {
+    if (!progressByProject.has(ev.projectId)) progressByProject.set(ev.projectId, [])
+    progressByProject.get(ev.projectId).push(ev)
+  }
+}
+
 /**
- * S60（v0.65，K44）群进展播报：把本轮各项目沉淀的 record 型 progress 事件按项目聚合，
+ * S60（v0.65，K44；v0.96.1 K44 修订）群进展播报：把本轮各项目沉淀的进展事件按项目聚合，
  * 往项目绑定的飞书专题群（dedicated）发绿色「🎉 有新进展」汇总卡。
- * 三道闸（任一不过即静默）：本轮没拉到新群消息 / 拉到的全是噪音闲聊 / 抽取出事件但无一条
- * record 型 progress——progressByProject 为空即整体静默，单项目无进展即跳过该项目。
+ * 闸门（任一不过即静默）：本轮没拉到新群消息 / 拉到的全是噪音闲聊 / 该项目本轮无任何
+ * 任务状态变化（day_status 打卡或 status 建议自动生效）——纯普通进展/风险/决策轮不打扰（用户拍板）。
  * 幂等：同调度周期（小时级 cron）同项目已播报过则不重复发（pushes 台账锚点）。
  */
 async function broadcastProgress(db, progressByProject, { send } = {}) {
@@ -73,6 +81,7 @@ async function broadcastProgress(db, progressByProject, { send } = {}) {
   const { buildProgressDigestCard, progressDigestBody } = await import('./bot/cards.js')
   for (const [projectId, items] of progressByProject) {
     if (!items.length) continue // 闸：该项目本轮无进展
+    if (!items.some((it) => it.statusChange)) continue // 闸（v0.96.1）：无任务状态变化不播报
     const dup = db.prepare(
       `SELECT 1 FROM pushes WHERE push_type = 'progress_digest' AND related_project_id = ? AND created_at >= ?`
     ).get(projectId, cycleStart)

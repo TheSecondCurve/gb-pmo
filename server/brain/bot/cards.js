@@ -86,12 +86,13 @@ const card = (template, title, elements) => ({
 })
 
 /**
- * S60（v0.65，K44）群进展播报卡：绿色 header 🎉 + 本轮沉淀的进展列表。
- * items: [{summary}]——record 型 progress 事件摘要；>TABLE_MAX_ROWS 条截断并标注。
+ * S60（v0.65，K44；v0.96.1 K44 修订）群进展播报卡：绿色 header 🎉 + 本轮沉淀的进展列表。
+ * items: [{summary, statusChange?}]——statusChange（任务状态变化：打卡/状态建议自动生效）行加 ✅ 显著标注；
+ * >TABLE_MAX_ROWS 条截断并标注。
  */
 export function buildProgressDigestCard({ projectName, items }) {
   const shown = items.slice(0, TABLE_MAX_ROWS)
-  const lines = shown.map((it, i) => `${i + 1}. ${it.summary}`)
+  const lines = shown.map((it, i) => `${i + 1}. ${it.statusChange ? '✅ ' : ''}${it.summary}`)
   if (items.length > TABLE_MAX_ROWS) lines.push(`… 等 ${items.length} 条`)
   return card('green', `🎉 ${projectName} 有新进展`, [
     md(`本轮抽取沉淀 **${items.length}** 条进展：\n${lines.join('\n')}`),
@@ -101,7 +102,7 @@ export function buildProgressDigestCard({ projectName, items }) {
 /** S60 播报文本兜底（卡片降级 / web 通知收件箱共用 body）。 */
 export function progressDigestBody({ items }) {
   const shown = items.slice(0, TABLE_MAX_ROWS)
-  const lines = shown.map((it, i) => `${i + 1}. ${it.summary}`)
+  const lines = shown.map((it, i) => `${i + 1}. ${it.statusChange ? '✅ ' : ''}${it.summary}`)
   if (items.length > TABLE_MAX_ROWS) lines.push(`… 等 ${items.length} 条`)
   return `本轮抽取沉淀 ${items.length} 条进展：\n${lines.join('\n')}`
 }
