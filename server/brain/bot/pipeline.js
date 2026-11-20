@@ -267,6 +267,14 @@ export function makeExecTool(db, env, { llm, sqlLog = [], fetchChat, push, botSe
         return `Brief 失败：${e.message}（先 query 确认项目 id）`
       }
     }
+    if (parsed.action === 'inventory') { // S20-24（v0.96.2，K83）：NL 列任务 → 确定性统一格式（定域同晨报）
+      try {
+        const projectId = parsed.projectId !== undefined && parsed.projectId !== null ? Number(parsed.projectId) : morningScopeProjectId(db, env)
+        return tasksInventory(db, { projectId }).text.slice(0, 4000)
+      } catch (e) {
+        return `任务盘点失败：${e.message}（先 query 确认项目 id，或基于已有信息 reply）`
+      }
+    }
     if (parsed.action === 'morning') {
       try {
         // 定域：显式 projectId 优先，其次会话上下文（专题群=本群项目，其余=全部在跑项目）

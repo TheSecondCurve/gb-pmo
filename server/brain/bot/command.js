@@ -395,6 +395,7 @@ ${schemaDigest(db)}
 {"action":"metric","id":"<指标id>","params":{}} 口径化指标：${metricIdList()}
 {"action":"brief","projectId":1}               项目 Brief：一次取全单个项目摘要（概况/任务盘子/进行中/近期进展/下一步/风险，含中文标签）——用户整体问询某项目（「XX项目怎么样/Brief」）时优先用它，取不到再 fallback query
 {"action":"morning","projectId":1?}            今日晨报：按会话自动定域（项目专题群=本群项目；私聊/其他=全部在跑项目；可显式给 projectId 取单项目）——用户要「晨报/早报/今天的情况汇总」时优先用它
+{"action":"inventory","projectId":1?}          任务清单盘点（确定性统一格式：按责任人分组+打卡/状态图标）：用户要「列出任务/任务清单/盘点/今天有什么任务」时优先用它；定域同晨报（专题群=本群项目，其余会话要具体项目须给 projectId，可先 query 找 id）；自行整理清单时用同一格式语言——🟡 责任人（N 项）分组、⬜/✅ #id 标题（关键信息） 行、未办在前、组间空行，#id 必须保留（后续变更指令靠它定位）
 {"action":"recent_chat","limit":20}            本群最近讨论（仅项目专题群；用户提到「刚才/上面/刚才讨论的」而对话历史不足以理解时，先读它再作答/起建议）——其余会话该动作返回不可用说明
 {"action":"minutes","hours":2}               群讨论纪要拉取（仅项目专题群；默认 2h、上限 6h；S54：用户要「纪要/总结讨论/记一下」时先拉取，再浓缩为三段式纪要【结论/待办/风险，标注发言人】，末尾附「回复『归档』沉淀为项目记录」；讨论为空明说，不编造；用户随后说「归档/记下来」时用 record_event 落 decision 记录）
 {"action":"write","kind":"record_event","payload":{"projectId":1,"eventType":"progress|risk|decision|blocker","summary":"一句中文"}}

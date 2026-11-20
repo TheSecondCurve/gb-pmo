@@ -152,15 +152,26 @@ const invLine = (t) => `· #${t.id} ${t.title}（${t.statusLabel}${t.planEndDate
  * 任务盘点卡片。输入 = engine tasksInventory 返回体（含 groups；scope='project' 单项目 / 'all' 多项目）。
  * 单项目域：分段（未分配/已分配）≤TABLE_MAX_ROWS 行成表（任务/状态·截止/责任人 3 列），超出退化文本行；
  * 多项目域：每项目一节文本行，全有主项目标「均已分配」。汇总行复用 text 首行（口径唯一）。
+ * K83（v0.96.2）：常态分支人员分节（key='person'，带 dot/name 与行级 dayStatus/cadenceLabel）→
+ * 统一格式文本行（⬜/✅/⏭ #id 标题（周期标签）），footnote（今天之外 + 打卡指引）追加卡片尾。
  */
 export function buildTasksInventoryCard(inv) {
   const single = inv.scope === 'project'
   const elements = [md(`**${String(inv.text).split('\n')[0]}**`)]
+  const dayStatusIcon = (t) => (t.dayStatus === 'done' ? '✅' : t.dayStatus === 'skip' ? '⏭' : '⬜')
   for (const g of inv.groups || []) {
     const hasTasks = (g.sections || []).some((s) => s.tasks.length)
     if (!single) elements.push(md(`**【${g.name}】**${hasTasks ? '' : '均已分配'}`))
     for (const sec of g.sections || []) {
       if (!sec.tasks.length) continue
+      if (sec.key === 'person') {
+        elements.push(md(`**${sec.dot || '👤'} ${sec.name}（${sec.tasks.length} 项）**`))
+        const lines = sec.tasks.slice(0, INV_MAX_PER_PROJECT)
+          .map((t) => `  ${dayStatusIcon(t)} #${t.id} ${t.title}${t.cadenceLabel ? `（${t.cadenceLabel}）` : ''}`)
+        if (sec.tasks.length > INV_MAX_PER_PROJECT) lines.push(`（其余 ${sec.tasks.length - INV_MAX_PER_PROJECT} 条略）`)
+        elements.push(md(lines.join('\n')))
+        continue
+      }
       const labelText = SECTION_LABEL[sec.key]
       if (labelText) elements.push(md(`**${labelText}（${sec.tasks.length}）**`))
       if (single && sec.tasks.length <= TABLE_MAX_ROWS) {
@@ -176,6 +187,7 @@ export function buildTasksInventoryCard(inv) {
       }
     }
   }
+  if (inv.footnote) elements.push(md(inv.footnote))
   const title = single ? `任务盘点 · ${inv.projectName}` : '未分配任务盘点'
   return card('wathet', title, elements)
 }
