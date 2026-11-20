@@ -189,6 +189,33 @@ describe('S45-2 晨报/盘点卡片模板与双入口契约', () => {
     expect(flatG).toContain('均已分配')
   })
 
+  it('S45-2: 盘点卡片常态形态（v0.96.2 K83）——人员分节 + 打卡图标行 + 「今天之外」footnote', () => {
+    const routineInv = buildTasksInventoryCard({
+      text: '📋 今天（周四 11-20）「常态甲项目」常态清单：今日适用 3 项 · ✅ 已打卡 1 · ⬜ 未打卡 2',
+      unassigned: 0, total: 3, scope: 'project', projectName: '常态甲项目',
+      footnote: '—— 今天之外（1 项）\n· 每月1号：月检D\n打卡：群里说「XX打卡」或 @我；web 周视图点格',
+      groups: [{ name: '常态甲项目', sections: [
+        { key: 'person', name: '气球', dot: '🟡', tasks: [
+          { id: 1, title: '巡检A（每日）', kind: 'routine', status: 'todo', statusLabel: '未开始', planEndDate: null, responsibleName: '气球', dayStatus: 'done', cadenceLabel: null },
+          { id: 2, title: '巡检B（每日）', kind: 'routine', status: 'todo', statusLabel: '未开始', planEndDate: null, responsibleName: '气球', dayStatus: null, cadenceLabel: null },
+        ] },
+        { key: 'person', name: '登登', dot: '🔵', tasks: [
+          { id: 3, title: '周检C', kind: 'routine', status: 'todo', statusLabel: '未开始', planEndDate: null, responsibleName: '登登', dayStatus: null, cadenceLabel: '每周三' },
+        ] },
+      ] }],
+    })
+    expect(routineInv.header.title.content).toContain('常态甲项目')
+    const flatR = flattenCard(routineInv)
+    expect(flatR).toContain('🟡 气球')
+    expect(flatR).toContain('🔵 登登')
+    expect(flatR).toContain('✅ #1 巡检A（每日）')
+    expect(flatR).toContain('⬜ #2 巡检B（每日）')
+    expect(flatR).toContain('⬜ #3 周检C（每周三）')
+    expect(flatR).toContain('今天之外')
+    expect(flatR).toContain('月检D')
+    expect(flatR).toContain('打卡')
+  })
+
   it('S45-2: 专题群 /morning 与 /tasks 出卡片；web 端同一命令仍收纯文本', async () => {
     const p = await mkProject(ctx, '富格式甲项目', ctx.members.lead.id)
     ctx.db.prepare(`UPDATE tasks SET responsible_member_id = NULL WHERE id = (SELECT id FROM tasks WHERE project_id = ? ORDER BY id LIMIT 1)`).run(p.id)
