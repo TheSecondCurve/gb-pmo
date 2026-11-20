@@ -1,12 +1,12 @@
 import { camelizeRow, camelizeRows } from '../db/index.mjs'
-import { today, isCalendarDay } from '../db/time.js'
+import { today, isCalendarDay, dayDiff } from '../db/time.js'
 import { assertValue, label } from './enums.js'
 import { getProject } from './projects.js'
 import { memberName } from './members.js'
 import { HTTP_URL, normalizeTaskNote } from './projectTypes.js'
 import { addEvent } from './events.js'
 import { audit } from './auth.js'
-import { parseCadence, normalizeCadence, weekdaysToCadence, cadenceLabel, cadenceWeekdays } from './dailyBoard.js'
+import { parseCadence, normalizeCadence, weekdaysToCadence, cadenceLabel, cadenceWeekdays, isApplicableDay } from './dailyBoard.js'
 
 // v0.80（S69）：isCalendarDay 移入 db/time.js（日期纯函数归位），此处 re-export 维持既有导入方（initAssign 等）
 export { isCalendarDay } from '../db/time.js'
@@ -58,63 +58,145 @@ export function listUnassigned(db) {
 
 export const INV_MAX_PER_PROJECT = 40 // 盘点单项目列出的任务条数上限（模板任务 ≤30，防御性截断；S45 卡片文本行同口径复用）
 
+// K83（v0.96.2）：任务盘点统一呈现语言——责任人色点按成员 id 序循环（未分配恒 ⚪）
+const PERSON_DOTS = ['🟡', '🔵', '🟢', '🟠', '🟣']
+
 const invLine = (t) => `${t.kind === 'reminder' ? '⏰ ' : ''}· #${t.id} ${t.title}（${label('taskStatus', t.status)}${t.plan_end_date ? `，截止 ${t.plan_end_date}` : ''}${t.responsible_name ? `，${t.responsible_name}` : ''}）`
 
-/** S45：盘点任务行结构化（卡片模板渲染用；camelCase，statusLabel 查枚举表）。S57：带 kind（reminder 行 ⏰ 标注）。 */
-const invRow = (t) => ({
+/** S45：盘点任务行结构化（卡片模板渲染用；camelCase，statusLabel 查枚举表）。S57：带 kind（reminder 行 ⏰ 标注）。
+ *  K83：常态分支行扩 dayStatus（当日打卡 done/skip/null）与 cadenceLabel（非每日周期标签）。 */
+const invRow = (t, extra = {}) => ({
   id: t.id, title: t.title, kind: t.kind ?? 'work', status: t.status, statusLabel: label('taskStatus', t.status),
-  planEndDate: t.plan_end_date ?? null, responsibleName: t.responsible_name ?? null,
+  planEndDate: t.plan_end_date ?? null, responsibleName: t.responsible_name ?? null, ...extra,
 })
 
+const bjWeekdayChar = (day) => {
+  const [y, m, d] = String(day).split('-').map(Number)
+  return '日一二三四五六'[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]
+}
+
+/** K83 交付任务行：`图标 #id 标题（截止 X · 逾期 N 天 / 未排期）`——纯提醒 ⏰ 前缀、doing 🔷、todo ⬜。 */
+const workLine = (t) => {
+  const icon = t.kind === 'reminder' ? '⏰' : t.status === 'doing' ? '🔷' : '⬜'
+  const datePart = t.plan_end_date
+    ? (t.plan_end_date < today() ? `截止 ${t.plan_end_date} · 逾期 ${dayDiff(t.plan_end_date, today())} 天` : `截止 ${t.plan_end_date}`)
+    : '未排期'
+  return `  ${icon} #${t.id} ${t.title}（${datePart}）`
+}
+
 /** S20-17 任务盘点（v0.34，/tasks 斜杠命令）：确定性组装，零 LLM。
- *  projectId 给定 → 该项目全部未完任务（未分配责任人段置顶 + 计数）；
+ *  projectId 给定 → 单项目盘点（K83 统一呈现语言）：
+ *    常态项目=「今日适用」视图——按责任人分组（色点、未分配置顶），行带当日打卡状态图标，
+ *    未打卡在前已办沉底；非今日任务收敛「今天之外」footer（按周期标签分组）+ 打卡指引；
+ *    交付项目=全部未完任务按责任人分组文本（⚪ 未分配置顶 + 计数），payload 维持 unassigned/owned（卡片 3 列表格不动）。
  *  缺省 → 全部在跑项目的未分配责任人任务（按项目分组，全有主项目明确说明）。
- *  口径：未完 = status != 'done' 且 responsible_member_id IS NULL——宽于 S2-1 listUnassigned 的
- *  「已设开始日」兜底告警口径（那是异常检测，这是会议盘点视图，两者语义并存）。
- *  v0.50（S45）：返回体扩 scope/groups（卡片模板渲染用）；text 字段内容不变（web/审计消费方零影响）。 */
+ *  口径：交付未完 = status != 'done' 且 responsible_member_id IS NULL——宽于 S2-1 listUnassigned 的
+ *  「已设开始日」兜底告警口径（那是异常检测，这是会议盘点视图，两者语义并存）；常态适用=isApplicableDay 唯一真相源。 */
 export function tasksInventory(db, { projectId } = {}) {
   if (projectId) {
     const project = db.prepare('SELECT id, name, kind FROM projects WHERE id = ?').get(projectId)
     if (!project) throw Object.assign(new Error('项目不存在'), { statusCode: 404 })
-    // S69（v0.80）：常态项目按「常态清单」呈现——行=模板（带周期/责任人），无「未完」框架与排期
+    // S69（v0.80）建分支；K83（v0.96.2）重构为「今日适用 × 责任人」视图（周视图全量看板仍按天打卡管理）
     if (project.kind === 'routine') {
+      const day = today()
       const rows = db.prepare(
-        `SELECT t.id, t.title, t.kind, t.status, t.cadence, m.name AS responsible_name
-         FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
+        `SELECT t.id, t.title, t.kind, t.status, t.cadence, t.responsible_member_id, m.name AS responsible_name,
+                r.status AS day_status
+         FROM tasks t
+         LEFT JOIN members m ON m.id = t.responsible_member_id
+         LEFT JOIN task_day_records r ON r.task_id = t.id AND r.day = ?
          WHERE t.project_id = ? AND t.deleted_at IS NULL ORDER BY t.id`
-      ).all(projectId)
-      const lines = [`项目「${project.name}」常态任务清单：${rows.length} 条（周视图按天打卡管理，S69）`, '']
-      lines.push(...rows.slice(0, INV_MAX_PER_PROJECT).map((t) =>
-        `· #${t.id} ${t.title}（${cadenceLabel(parseCadence(t.cadence))}${t.responsible_name ? `，${t.responsible_name}` : ''}）`))
-      if (rows.length > INV_MAX_PER_PROJECT) lines.push(`（其余 ${rows.length - INV_MAX_PER_PROJECT} 条略）`)
-      if (!rows.length) lines.push('（暂无常态任务，可在详情页或群里让我添加）')
+      ).all(day, projectId)
+      const applicable = rows.filter((t) => isApplicableDay(parseCadence(t.cadence), day))
+      const others = rows.filter((t) => !isApplicableDay(parseCadence(t.cadence), day))
+      const doneN = applicable.filter((t) => t.day_status === 'done').length
+      const skipN = applicable.filter((t) => t.day_status === 'skip').length
+      const undoneN = applicable.length - doneN - skipN
+      const countParts = [
+        ...(doneN ? [`✅ 已打卡 ${doneN}`] : []),
+        ...(skipN ? [`⏭ 跳过 ${skipN}`] : []),
+        ...(undoneN ? [`⬜ 未打卡 ${undoneN}`] : []),
+      ]
+      const lines = [
+        `📋 今天（周${bjWeekdayChar(day)} ${day.slice(5)}）「${project.name}」常态清单：今日适用 ${applicable.length} 项${countParts.length ? ` · ${countParts.join(' · ')}` : ''}${applicable.length && doneN + skipN === 0 ? ' · 尚无打卡' : ''}`,
+        '',
+      ]
+      // 责任人分组（成员 id 升序、未分配置顶）；组内未打卡在前（id 序）、已办/跳过沉底
+      const groupOrder = []
+      for (const t of applicable.slice().sort((a, b) => (a.responsible_member_id ?? -1) - (b.responsible_member_id ?? -1))) {
+        const key = t.responsible_member_id ?? null
+        if (!groupOrder.some((g) => g.key === key)) groupOrder.push({ key, name: key === null ? '未分配' : t.responsible_name || `成员#${key}` })
+      }
+      const dayIcon = (t) => (t.day_status === 'done' ? '✅' : t.day_status === 'skip' ? '⏭' : '⬜')
+      const cadSuffix = (t) => {
+        const cad = parseCadence(t.cadence)
+        return cad && cad.type !== 'daily' ? cadenceLabel(cad) : null // 每日不挂标签（15 行都带「（每日）」是噪音）
+      }
+      const sections = []
+      groupOrder.forEach((g, gi) => {
+        const tasks = applicable.filter((t) => (t.responsible_member_id ?? null) === g.key)
+          .sort((a, b) => (a.day_status ? 1 : 0) - (b.day_status ? 1 : 0) || a.id - b.id)
+        const shown = tasks.slice(0, INV_MAX_PER_PROJECT)
+        const gDone = tasks.filter((t) => t.day_status === 'done').length
+        const gSkip = tasks.filter((t) => t.day_status === 'skip').length
+        const gDoneTxt = gDone || gSkip ? ` · ${[gDone ? `✅${gDone}` : null, gSkip ? `⏭${gSkip}` : null].filter(Boolean).join(' ')}` : ''
+        const dot = g.key === null ? '⚪' : PERSON_DOTS[gi % PERSON_DOTS.length]
+        lines.push(`${dot} ${g.name}（${tasks.length} 项${gDoneTxt}）`)
+        lines.push(...shown.map((t) => `  ${dayIcon(t)} #${t.id} ${t.title}${cadSuffix(t) ? `（${cadSuffix(t)}）` : ''}`))
+        if (tasks.length > INV_MAX_PER_PROJECT) lines.push(`（其余 ${tasks.length - INV_MAX_PER_PROJECT} 条略）`)
+        lines.push('')
+        sections.push({
+          key: 'person', name: g.name, dot,
+          tasks: shown.map((t) => invRow(t, { dayStatus: t.day_status ?? null, cadenceLabel: cadSuffix(t) })),
+        })
+      })
+      if (!applicable.length) lines.push('（今天没有适用任务）')
+      const footer = []
+      if (others.length) {
+        footer.push(`—— 今天之外（${others.length} 项）`)
+        const byCad = new Map()
+        for (const t of others) {
+          const lbl = cadenceLabel(parseCadence(t.cadence))
+          if (!byCad.has(lbl)) byCad.set(lbl, [])
+          byCad.get(lbl).push(t.title)
+        }
+        for (const [lbl, titles] of byCad) footer.push(`· ${lbl}：${titles.join('、')}`)
+      }
+      footer.push('打卡：群里说「XX打卡」或 @我；web 周视图点格')
+      lines.push(...footer)
       return {
-        text: lines.join('\n'), unassigned: 0, total: rows.length,
-        scope: 'project', projectName: project.name,
-        groups: [{ name: project.name, sections: [{ key: 'plain', tasks: rows.map(invRow) }] },
-        ],
+        text: lines.join('\n'), unassigned: 0, total: rows.length, scope: 'project', projectName: project.name,
+        footnote: footer.join('\n'),
+        groups: [{ name: project.name, sections }],
       }
     }
     const rows = db.prepare(
-      `SELECT t.id, t.title, t.kind, t.status, t.plan_end_date, m.name AS responsible_name
+      `SELECT t.id, t.title, t.kind, t.status, t.plan_end_date, t.responsible_member_id, m.name AS responsible_name
        FROM tasks t LEFT JOIN members m ON m.id = t.responsible_member_id
        WHERE t.project_id = ? AND t.status != 'done' AND t.deleted_at IS NULL ORDER BY t.id`
     ).all(projectId)
-    const unassigned = rows.filter((t) => !t.responsible_name)
-    const owned = rows.filter((t) => t.responsible_name)
-    const lines = [`项目「${project.name}」任务盘点：未完 ${rows.length} 条，未分配责任人 ${unassigned.length} 条`, '']
-    if (unassigned.length) {
-      lines.push(`⚠ 未分配责任人（${unassigned.length}）：`)
-      lines.push(...unassigned.slice(0, INV_MAX_PER_PROJECT).map(invLine))
-      if (unassigned.length > INV_MAX_PER_PROJECT) lines.push(`（其余 ${unassigned.length - INV_MAX_PER_PROJECT} 条略）`)
+    const unassigned = rows.filter((t) => !t.responsible_member_id)
+    const owned = rows.filter((t) => t.responsible_member_id)
+    const lines = [`📋 「${project.name}」任务盘点：未完 ${rows.length} 项 · 未分配责任人 ${unassigned.length} 条`, '']
+    // K83：按责任人分组（成员 id 升序、未分配置顶）；payload 维持 unassigned/owned 两节（卡片 3 列表格不动）
+    const ownedGroups = []
+    for (const t of owned.slice().sort((a, b) => (a.responsible_member_id ?? 0) - (b.responsible_member_id ?? 0))) {
+      const key = t.responsible_member_id
+      if (!ownedGroups.some((g) => g.key === key)) ownedGroups.push({ key, name: t.responsible_name || `成员#${key}` })
+    }
+    ownedGroups.forEach((g, gi) => {
+      const tasks = owned.filter((t) => t.responsible_member_id === g.key)
+      lines.push(`${PERSON_DOTS[gi % PERSON_DOTS.length]} ${g.name}（${tasks.length} 项）`)
+      lines.push(...tasks.slice(0, INV_MAX_PER_PROJECT).map(workLine))
+      if (tasks.length > INV_MAX_PER_PROJECT) lines.push(`（其余 ${tasks.length - INV_MAX_PER_PROJECT} 条略）`)
       lines.push('')
+    })
+    if (unassigned.length) {
+      lines.push(`⚪ 未分配（${unassigned.length}）`)
+      lines.push(...unassigned.slice(0, INV_MAX_PER_PROJECT).map(workLine))
+      if (unassigned.length > INV_MAX_PER_PROJECT) lines.push(`（其余 ${unassigned.length - INV_MAX_PER_PROJECT} 条略）`)
     }
-    if (owned.length) {
-      lines.push(`已分配（${owned.length}）：`)
-      lines.push(...owned.slice(0, INV_MAX_PER_PROJECT).map(invLine))
-      if (owned.length > INV_MAX_PER_PROJECT) lines.push(`（其余 ${owned.length - INV_MAX_PER_PROJECT} 条略）`)
-    }
-    if (!unassigned.length && !owned.length) lines.push('（项目没有未完成任务）')
+    if (!rows.length) lines.push('（项目没有未完成任务）')
     const sections = [
       ...(unassigned.length ? [{ key: 'unassigned', tasks: unassigned.map(invRow) }] : []),
       ...(owned.length ? [{ key: 'owned', tasks: owned.map(invRow) }] : []),

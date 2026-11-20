@@ -2,7 +2,10 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { setupApp } from './helpers.mjs'
 import { BOT_SECRET as SECRET, scriptedLlm, makeRecorder, makeMsgFactory, mkProject, flattenCard, flattenPost } from './bot-kit.mjs'
 import { handleBotEvent } from '../brain/bot/command.js'
-import { upsertChannel } from '../engine/tasks.js'
+import { createProject } from '../engine/projects.js'
+import { createTask, tasksInventory, upsertChannel } from '../engine/tasks.js'
+import { setDayStatus } from '../engine/dailyBoard.js'
+import { addDays, today, weekdayOf } from '../db/time.js'
 import { setSetting } from '../engine/settings.js'
 
 // PRD S20 — 机器人指令通道·功能面：/tasks 任务盘点（S20-17）、群讨论上下文 recent_chat（S20-18）、
@@ -86,6 +89,98 @@ describe('S20 机器人指令通道 — 任务盘点 /tasks（v0.34）', () => {
     expect(scoped.text).toContain('未分配责任人 1 条')
     const globalInv = tasksInventory(ctx.db, {})
     expect(globalInv.text).toContain('盘点丁项目')
+  })
+
+  // v0.96.2（K83）统一呈现语言：常态项目「今日适用」视图 + 交付项目文本对齐
+  it('S20-17: 常态项目 /tasks——按责任人分组（色点）+打卡状态图标+未打卡在前+「今天之外」footer（零 LLM，日期无关）', async () => {
+    // 常态夹具日期无关：每周任务取「今天之外的下一个星期」、每月任务取「今天之外的日号」
+    const otherWd = weekdayOf(today()) >= 7 ? 1 : weekdayOf(today()) + 1
+    const otherMd = Number(today().slice(8)) === 1 ? 2 : 1
+    const p = createProject(ctx.db, { name: '常态盘点项目', kind: 'routine', typeCode: 'routine_ops', leadMemberId: ctx.members.lead.id }, ctx.members.admin.id)
+    const d1 = createTask(ctx.db, { projectId: p.id, title: '巡检A（每日）', responsibleMemberId: ctx.members.lead.id }, ctx.members.admin.id)
+    const d2 = createTask(ctx.db, { projectId: p.id, title: '巡检B（每日）', responsibleMemberId: ctx.members.lead.id }, ctx.members.admin.id)
+    const d3 = createTask(ctx.db, { projectId: p.id, title: '巡检E（每日）', responsibleMemberId: ctx.members.dev.id }, ctx.members.admin.id)
+    createTask(ctx.db, { projectId: p.id, title: '周检C', responsibleMemberId: ctx.members.lead.id, cadence: { type: 'weekly', weekdays: [otherWd] } }, ctx.members.admin.id)
+    createTask(ctx.db, { projectId: p.id, title: '月检D', responsibleMemberId: ctx.members.lead.id, cadence: { type: 'monthly', monthDays: [otherMd] } }, ctx.members.admin.id)
+    setDayStatus(ctx.db, { projectId: p.id, taskId: d1.id, day: today(), status: 'done' }, ctx.members.lead.id)
+    upsertChannel(ctx.db, { platform: 'feishu', groupKey: 'oc_rt', name: '常态盘点群', channelType: 'dedicated', projectId: p.id }, ctx.members.admin.id)
+
+    const rec = recorder()
+    const out = await handleBotEvent(ctx.db, { ...group('fs_zhang', 'oc_rt', '/tasks'), mentioned: true }, { send: rec.send, secret: SECRET })
+    expect(out.result).toBe('replied')
+    const text = flattenCard(rec.sent[0].card)
+    // 头部：项目名 + 常态清单 + 今日计数（今日适用 3 = 巡检A/B/E；周检C/月检D 非今日进 footer）
+    expect(text).toContain('常态盘点项目')
+    expect(text).toContain('常态清单')
+    expect(text).toContain('今日适用 3 项')
+    expect(text).toContain('已打卡 1')
+    expect(text).toContain('未打卡 2')
+    // 责任人分组（色点 + 名字）与打卡图标
+    expect(text).toContain('🟡 张三')
+    expect(text).toContain('🔵 李四')
+    expect(text).toContain('✅ #' + d1.id)
+    expect(text).toContain('⬜ #' + d2.id)
+    expect(text).toContain('⬜ #' + d3.id)
+    // 未打卡在前、已办沉底（组内行序）
+    expect(text.indexOf('⬜ #')).toBeLessThan(text.indexOf('✅ #'))
+    // 非今日任务收敛 footer（标题与周期标签保留）
+    expect(text).toContain('今天之外')
+    expect(text).toContain('周检C')
+    expect(text).toContain('月检D')
+    expect(text).toContain(`每月${otherMd}号`)
+    expect(text).toContain('打卡')
+    // 常态口径不冠「未完」（S69-6 词汇边界）
+    expect(text).not.toContain('未完')
+  })
+
+  it('S20-17: 交付项目盘点文本统一——按责任人分组+状态图标+未分配置顶+⏰ 提醒保留（engine 直调，v0.96.2）', async () => {
+    const p = await mkProject(ctx, '盘点戊项目', ctx.members.lead.id)
+    assignAll(p.id, ctx.members.lead.id)
+    // 两条无主：一条带截止日（过期）、一条无任何日期（未排期）
+    ctx.db.prepare(`UPDATE tasks SET responsible_member_id = NULL, plan_end_date = '2026-10-08' WHERE id = (SELECT id FROM tasks WHERE project_id = ? ORDER BY id LIMIT 1)`).run(p.id)
+    ctx.db.prepare(`UPDATE tasks SET responsible_member_id = NULL, plan_start_date = NULL, plan_end_date = NULL WHERE id = (SELECT id FROM tasks WHERE project_id = ? ORDER BY id LIMIT 1 OFFSET 1)`).run(p.id)
+    // 一条 doing（有主）、一条过期纯提醒（有主）
+    ctx.db.prepare(`UPDATE tasks SET status = 'doing' WHERE id = (SELECT id FROM tasks WHERE project_id = ? AND responsible_member_id = ? ORDER BY id LIMIT 1)`).run(p.id, ctx.members.lead.id)
+    createTask(ctx.db, { projectId: p.id, title: '过期提醒任务Z1', kind: 'reminder', responsibleMemberId: ctx.members.lead.id, planEndDate: addDays(today(), -1) }, ctx.members.admin.id)
+
+    const inv = tasksInventory(ctx.db, { projectId: p.id })
+    expect(inv.text).toContain('盘点戊项目')
+    expect(inv.text).toContain('未分配责任人 2 条')
+    expect(inv.text).toContain('⚪ 未分配')
+    expect(inv.text).toContain('🟡 张三')
+    expect(inv.text).toContain('⬜ #')
+    expect(inv.text).toContain('🔷 #') // doing 状态图标
+    expect(inv.text).toContain('（未排期）')
+    expect(inv.text).toContain('逾期')
+    expect(inv.text).toContain('⏰ #') // 纯提醒前缀保留（S57 锚点口径）
+    expect(inv.text).toContain('过期提醒任务Z1')
+  })
+})
+
+describe('S20 机器人指令通道 — NL 列任务统一格式 inventory 动作（v0.96.2 K83 / S20-24）', () => {
+  it('S20-24: NL「列出任务」走 inventory 动作——工具反馈为统一格式文本、计入查询次数；提示词含 schema 与格式守则', async () => {
+    const { llm, calls } = scriptedLlm(
+      JSON.stringify({ action: 'inventory' }),
+      JSON.stringify({ action: 'reply', text: '清单如上，需要打卡直接说。' })
+    )
+    const rec = recorder()
+    const evt = group('fs_zhang', 'oc_rt', '列出任务') // 专题群（常态项目）——定域默认本群项目
+    const out = await handleBotEvent(ctx.db, evt, { llm, send: rec.send, secret: SECRET })
+    expect(out.result).toBe('replied')
+    // 工具反馈 = tasksInventory 统一格式文本（与 /tasks 同源同构）
+    expect(calls[1].at(-1).content).toContain('常态清单')
+    expect(calls[1].at(-1).content).toContain('🟡')
+    expect(calls[1].at(-1).content).toContain('今天之外')
+    // 系统提示含 inventory schema 与自行组织清单的格式守则（#id 锚点纪律）
+    const sys = String(calls[0][0]?.content || '')
+    expect(sys).toContain('"action":"inventory"')
+    expect(sys).toContain('未办在前')
+    expect(sys).toContain('#id')
+    // 读侧动作计入查询次数
+    const row = ctx.db.prepare('SELECT * FROM bot_commands WHERE message_id = ?').get(evt.messageId)
+    expect(JSON.parse(row.detail).queries).toBe(1)
+    // 回复透出
+    expect(rec.sent.at(-1).text || flattenCard(rec.sent.at(-1).card)).toContain('清单如上')
   })
 })
 
