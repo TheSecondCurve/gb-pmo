@@ -620,16 +620,17 @@ Zeabur 前 Cloudflare 边缘 ~120s 即 524，GLM 大 JSON 稳态要约 2 分钟�
 | S59-3 | 当建议确认经 applyTaskPatch 把任务置为 done 时，应在 confirmEvent 事务内同步落一条 record 型 `progress` 事件（generatedBy=extraction，与状态修改原子） | `server/test/s59-task-progress-events.test.mjs` |
 | S59-4 | 当任务经 add_task 建议确认创建或被软删时，不重复落进展事件（新增只在 createTask 一处；软删留痕走 audit 不进进展列） | `server/test/s59-task-progress-events.test.mjs` |
 
-## S60（P0）— 系统（大脑·推送）— 抽取后群进展播报（v0.65）
+## S60（P0）— 系统（大脑·推送）— 抽取后群进展播报（v0.65 建 / v0.96.1 K44 修订）
 
-extraction 调度周期尾部，把本轮各项目沉淀的 record 型 `progress` 事件按项目聚合，往项目绑定的飞书专题群（dedicated）发一张绿色「🎉 有新进展」汇总卡（失败降级富文本，pushes 台账幂等）。三道闸任一不过即静默：本轮没拉到新群消息 / 拉到的全是噪音闲聊 / 抽取出事件但无一条进展，都不发消息、不打扰团队。决策见 design.md K44。
+extraction 调度周期尾部，把本轮各项目沉淀的进展事件按项目聚合（缓冲排干与 API 游标两路汇聚，v0.96.1 修复），当该项目本轮存在至少一条任务状态变化（常态打卡 day_status 自动生效，或任务/里程碑 status 字段建议自动生效）时，往项目绑定的飞书专题群（dedicated）发一张绿色「🎉 有新进展」汇总卡，状态变化行以 ✅ 显著标注（失败降级富文本，pushes 台账幂等）。无状态变化的周期完全静默（v0.96.1 用户拍板：没有任务状态变化就不发消息）。决策见 design.md K44 及其修订。
 
 | # | 验收标准 | 对应测试 |
 |---|---|---|
-| S60-1 | 当本轮抽取沉淀了某项目至少一条 record 型 `progress` 事件时，应往该项目绑定的专题群发一张绿色汇总卡（标题含 🎉 与项目名，正文列出各进展摘要），pushes 行落 group_key | `server/test/s60-progress-digest.test.mjs` |
-| S60-2 | 当本轮无新群消息、或拉到的全是噪音闲聊、或抽取出事件但无一条 record 型 progress（只有风险/决策/建议或无归属闲聊）时，应静默不发任何群消息 | `server/test/s60-progress-digest.test.mjs` |
-| S60-3 | 当卡片发送失败时，应降级富文本补发（必达兜底，pushes 行三态语义不变）；同一调度周期内同项目不重复播报（幂等） | `server/test/s60-progress-digest.test.mjs` |
+| S60-1 | 当本轮抽取（缓冲排干或 API 游标任一路径）沉淀了某项目至少一条任务状态变化（常态打卡 day_status 自动生效，或任务/里程碑 status 字段建议自动生效）时，应往该项目绑定的专题群发一张绿色汇总卡（标题含 🎉 与项目名），状态变化行以 ✅ 显著标注，pushes 行落 group_key | `server/test/s60-progress-digest.test.mjs` |
+| S60-2 | 当本轮无新群消息、全是噪音闲聊、只有风险/决策/建议、或仅有普通 record 型进展（无任何任务状态变化）时，应静默不发任何群消息、不落 progress_digest 行 | `server/test/s60-progress-digest.test.mjs` |
+| S60-3 | 当卡片发送失败时，应降级富文本补发（必达兜底，pushes 行三态语义不变，降级文本保留 ✅ 标注）；同一调度周期内同项目不重复播报（幂等） | `server/test/s60-progress-digest.test.mjs` |
 | S60-4 | 当提醒任务到期自动完成（S57）产生「系统提醒已送达」记录时，不应触发进展播报（系统动作非真实进展） | `server/test/s60-progress-digest.test.mjs` |
+| S60-5 | 混合轮（任务状态变化与普通 record 进展并存）应只发一张卡：状态变化行带 ✅、普通进展行不标；同轮缓冲排干与 API 路径的事件聚合进同项目同一张卡 | `server/test/s60-progress-digest.test.mjs` |
 
 ## S61（P0）— 全员（web/机器人）+ 系统（大脑·飞书知识库）— 项目知识库绑定与写入（v0.66）
 
