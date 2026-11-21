@@ -52,7 +52,7 @@ describe('S71 常态项目晨报专用版', () => {
     const taskAlways = createTask(db, { projectId: p.id, title: '看资讯早报', responsibleMemberId: members.dev.id }, members.admin.id) // 每天适用
     const taskTodayOnly = createTask(db, { projectId: p.id, title: '私董群答疑', responsibleMemberId: members.lead.id, weekdays: [todayWd] }, members.admin.id)
     createTask(db, { projectId: p.id, title: '背单词', weekdays: [tomorrowWd] }, members.admin.id) // 未指派，仅明日适用
-    createTask(db, { projectId: p.id, title: '数据巡检', responsibleMemberId: members.dev.id }, members.admin.id) // 每天适用、未打卡
+    const taskD = createTask(db, { projectId: p.id, title: '数据巡检', responsibleMemberId: members.dev.id }, members.admin.id) // 每天适用、未打卡
     setDayStatus(db, { projectId: p.id, taskId: taskAlways.id, day: todayStr, status: 'done' }, members.dev.id)
     setDayStatus(db, { projectId: p.id, taskId: taskTodayOnly.id, day: todayStr, status: 'skip' }, members.lead.id)
     addEvent(db, { projectId: p.id, nature: 'record', eventType: 'progress', summary: '周视图上线', sourcePlatform: 'feishu', speakerLabel: '张三' })
@@ -76,27 +76,31 @@ describe('S71 常态项目晨报专用版', () => {
     expect(body).toContain('明日待办')
     expect(body).toContain('昨日以来动态')
     for (const absent of ['项目概况', '逾期任务', '近期开工']) expect(body).not.toContain(absent)
-    // 措辞：默认归属人 + 协助说明 + 未指派如实标注
-    expect(body).toContain('默认归属人：李四')
-    expect(body).toContain('默认归属人：张三')
-    expect(body).toContain('默认归属人：未指派')
+    // 措辞：说明行的默认归属人口径 + 协助说明（K84：行内「默认归属人：X」措辞退役，归属改责任人分组行）
+    expect(body).toContain('默认归属人负责日常执行')
     expect(body).toContain('其他成员可协助打卡')
-    // 今日：适用=每天两张 + 今日专属；未做排前 → 数据巡检 < 私董群答疑(跳过) < 看资讯早报(已完成)；背单词不在今日
+    // K84 今日待办：按责任人分组（色点、成员 id 序）+ 打卡图标 + #id 锚点
+    expect(body).toContain('🟡 张三')
+    expect(body).toContain('🔵 李四')
+    expect(body).toContain(`⏭ #${taskTodayOnly.id} 私董群答疑`)
+    expect(body).toContain(`⬜ #${taskD.id} 数据巡检`)
+    expect(body).toContain(`✅ #${taskAlways.id} 看资讯早报`)
+    // 组内未打卡在前、已办沉底；分组按成员 id 序（张三组在李四组前）
     const iPending = body.indexOf('数据巡检')
-    const iSkip = body.indexOf('私董群答疑')
     const iDone = body.indexOf('看资讯早报')
     expect(iPending).toBeGreaterThanOrEqual(0)
-    expect(iPending).toBeLessThan(iSkip)
-    expect(iSkip).toBeLessThan(iDone)
-    expect(body).toContain('✓ 已完成')
-    expect(body).toContain('⤴ 跳过')
-    const iTomorrow = body.indexOf('明日待办')
-    expect(body.indexOf('背单词')).toBeGreaterThan(iTomorrow) // 背单词只出现在明日节，不在今日
+    expect(iPending).toBeLessThan(iDone)
+    expect(body.indexOf('🟡 张三')).toBeLessThan(body.indexOf('🔵 李四'))
     // 节头计数：今日共 3 项、未做 1 / 跳过 1 / 已完成 1
     expect(body).toContain('共 3 项')
     expect(body).toContain('未做 1')
     expect(body).toContain('跳过 1')
     expect(body).toContain('已完成 1')
+    // K84 明日待办：按人计数一行（明日共 3 项：李四 2 · 未分配 1），不逐行列任务——「背单词」标题不再出现在待办两节
+    expect(body).toContain('李四 2')
+    expect(body).toContain('未分配 1')
+    const beforeEvents = body.slice(0, body.indexOf('昨日以来动态'))
+    expect(beforeEvents).not.toContain('背单词') // 动态节的建任务事件可合法带出任务名，不计入待办断言
     // 动态节保留（置尾，昨日以来）
     expect(body).toContain('周视图上线')
     // LLM：仅交付项目调用 1 次，常态项目零调用

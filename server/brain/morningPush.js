@@ -13,6 +13,7 @@
 import { today, bjDayStartMs, addDays, weekdayOf, DAY_MS } from '../db/time.js'
 import { morningReport } from '../engine/morning.js'
 import { parseCadence, isApplicableDay } from '../engine/dailyBoard.js'
+import { PERSON_DOTS } from '../engine/tasks.js'
 import { label } from '../engine/enums.js'
 import { getLlm } from './llm.js'
 import { notifyProjectChannel } from './push.js'
@@ -95,15 +96,16 @@ function composeBody(block, upcoming, overview) {
 // —— S71（v0.83，K67）：常态项目专用盘面（与周视图 dailyBoard 同源：适用星期判定 + 当日打卡记录） ——
 
 const WEEKDAY_CN = '日一二三四五六'
-const ROUTINE_STATUS_LABEL = { pending: '未做', skip: '⤴ 跳过', done: '✓ 已完成' }
+const ROUTINE_STATUS_ICON = { pending: '⬜', skip: '⏭', done: '✅' } // K84：对齐 K83 打卡图标语言
 const ROUTINE_SORT = { pending: 0, skip: 1, done: 2 }
 
 /** 某日的常态待办清单：S75 起按周期对象判定当日适用（isApplicableDay——daily/weekly/biweekly/monthly）；
- *  withStatus 时读当日打卡记录（明日纯预览不查——未来打卡本就被 S69 拒）。 */
+ *  withStatus 时读当日打卡记录（明日纯预览不查——未来打卡本就被 S69 拒）。
+ *  K84：行带 taskId/memberId（分组与 #id 锚点用）。 */
 function routineTodos(db, projectId, day, { withStatus = false } = {}) {
   const wd = weekdayOf(day)
   const rows = db.prepare(
-    `SELECT t.id, t.title, t.cadence, m.name AS responsible FROM tasks t
+    `SELECT t.id, t.title, t.cadence, t.responsible_member_id, m.name AS responsible FROM tasks t
      LEFT JOIN members m ON m.id = t.responsible_member_id
      WHERE t.project_id = ? AND t.kind = 'routine' AND t.deleted_at IS NULL ORDER BY t.id`
   ).all(projectId)
@@ -113,8 +115,10 @@ function routineTodos(db, projectId, day, { withStatus = false } = {}) {
   const items = rows
     .filter((t) => isApplicableDay(parseCadence(t.cadence), day))
     .map((t) => ({
+      id: t.id,
       title: t.title,
       responsible: t.responsible,
+      memberId: t.responsible_member_id ?? null,
       status: statusStmt ? (statusStmt.get(t.id, day)?.status || 'pending') : 'pending',
     }))
     .sort((a, b) => ROUTINE_SORT[a.status] - ROUTINE_SORT[b.status]) // 未做排前（同态保持任务序，sort 稳定）
@@ -133,30 +137,49 @@ function routineEvents(db, projectId, sinceMs) {
     .map((r) => ({ typeLabel: label('eventType', r.event_type), date: today(r.business_time), summary: r.summary, speaker: r.speaker }))
 }
 
-/** 常态版正文：说明行 +【今日待办】（带状态，未做排前）+【明日待办】（纯预览）+【昨日以来动态】（置尾）。 */
+/** 常态版正文：说明行 +【今日待办】（K84：按责任人分组+打卡图标+#id，未打卡在前已办沉底）
+ *  +【明日待办】（按人计数一行，不逐行平铺）+【昨日以来动态】（置尾）。 */
 function composeRoutineBody(db, p, { todayStr, sinceMs }) {
   const todayTodos = routineTodos(db, p.id, todayStr, { withStatus: true })
   const tomorrowStr = addDays(todayStr, 1)
   const tomorrowTodos = routineTodos(db, p.id, tomorrowStr)
   const events = routineEvents(db, p.id, sinceMs)
-  const ownerOf = (t) => `默认归属人：${t.responsible || '未指派'}`
+  const ownerName = (t) => (t.memberId === null ? '未分配' : t.responsible || `成员#${t.memberId}`)
+  // 分组收集：成员 id 升序、未分配置顶；组内保持 routineTodos 的未做排前序
+  const groupByOwner = (items) => {
+    const groups = new Map()
+    for (const t of items) {
+      const key = t.memberId ?? null
+      if (!groups.has(key)) groups.set(key, { key, name: ownerName(t), tasks: [] })
+      groups.get(key).tasks.push(t)
+    }
+    return [...groups.values()].sort((a, b) => (a.key === null ? -1 : b.key === null ? 1 : a.key - b.key))
+  }
 
   const lines = []
   lines.push('按各任务适用星期生成；默认归属人负责日常执行，其他成员可协助打卡（@我 说「XX 打卡」）。')
   lines.push('')
   lines.push(`**【今日待办】（${todayStr} ${todayTodos.weekdayCn} · 共 ${todayTodos.items.length} 项 · 未做 ${todayTodos.counts.pending} / 跳过 ${todayTodos.counts.skip} / 已完成 ${todayTodos.counts.done}）**`)
-  lines.push(
-    todayTodos.items.length
-      ? todayTodos.items.map((t) => `- ${t.title}（${ownerOf(t)}）${ROUTINE_STATUS_LABEL[t.status]}`).join('\n')
-      : '- 今日无适用任务（按各任务适用星期）'
-  )
+  if (todayTodos.items.length) {
+    groupByOwner(todayTodos.items).forEach((g, gi) => {
+      const dot = g.key === null ? '⚪' : PERSON_DOTS[gi % PERSON_DOTS.length]
+      lines.push(`${dot} ${g.name}（${g.tasks.length} 项）`)
+      lines.push(...g.tasks.map((t) => `  ${ROUTINE_STATUS_ICON[t.status]} #${t.id} ${t.title}`))
+    })
+  } else {
+    lines.push('- 今日无适用任务（按各任务适用星期）')
+  }
   lines.push('')
   lines.push(`**【明日待办】（${tomorrowStr} ${tomorrowTodos.weekdayCn} · 共 ${tomorrowTodos.items.length} 项）**`)
-  lines.push(
-    tomorrowTodos.items.length
-      ? tomorrowTodos.items.map((t) => `- ${t.title}（${ownerOf(t)}）`).join('\n')
-      : '- 明日无适用任务（按各任务适用星期）'
-  )
+  if (tomorrowTodos.items.length) {
+    lines.push(
+      groupByOwner(tomorrowTodos.items)
+        .map((g, gi) => `${g.key === null ? '⚪' : PERSON_DOTS[gi % PERSON_DOTS.length]} ${g.name} ${g.tasks.length}`)
+        .join(' · ')
+    )
+  } else {
+    lines.push('- 明日无适用任务（按各任务适用星期）')
+  }
   lines.push('')
   lines.push('**【昨日以来动态】**')
   lines.push(events.length ? events.map((e) => `- ${e.date} ${e.speaker}：${e.summary}（${e.typeLabel}）`).join('\n') : '- 昨日以来无动态')
