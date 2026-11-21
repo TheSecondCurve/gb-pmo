@@ -58,8 +58,9 @@ export function listUnassigned(db) {
 
 export const INV_MAX_PER_PROJECT = 40 // 盘点单项目列出的任务条数上限（模板任务 ≤30，防御性截断；S45 卡片文本行同口径复用）
 
-// K83（v0.96.2）：任务盘点统一呈现语言——责任人色点按成员 id 序循环（未分配恒 ⚪）
-const PERSON_DOTS = ['🟡', '🔵', '🟢', '🟠', '🟣']
+// K83（v0.96.2）：任务盘点统一呈现语言——责任人色点按成员 id 序循环（未分配恒 ⚪）。
+// K84（v0.96.3）起导出为唯一真相源（常态晨报今日待办分组同源复用）。
+export const PERSON_DOTS = ['🟡', '🔵', '🟢', '🟠', '🟣']
 
 const invLine = (t) => `${t.kind === 'reminder' ? '⏰ ' : ''}· #${t.id} ${t.title}（${label('taskStatus', t.status)}${t.plan_end_date ? `，截止 ${t.plan_end_date}` : ''}${t.responsible_name ? `，${t.responsible_name}` : ''}）`
 

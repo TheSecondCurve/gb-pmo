@@ -176,12 +176,15 @@ describe('S75 常态任务周期四档', () => {
     clearMorningLedger()
     await dailyProjectMorningPush(db, { now: () => bjNov(15), send: async (m) => { sent.push(m); return { messageId: 'om_1' } } }) // 2026-11-15 周日
     const day1Full = (sent.at(-1).post ? (sent.at(-1).post.zh_cn?.content || []).flat().map((r) => r?.text || '').join('\n') : sent.at(-1).text)
-    const [day1, day1Tomorrow] = day1Full.split('【明日待办】') // 段落拆开：今日/明日分别断言（明日预览会带出命中任务）
+    const [day1, day1Tomorrow] = day1Full.split('【明日待办】') // 段落拆开：今日/明日分别断言
     expect(day1).toContain('月度结算单') // monthly 命中 15 号
     expect(day1).toContain('每日巡检D') // daily
     expect(day1).not.toContain('双周对账A') // 周日不适用（biweekly 只认周一）
     expect(day1).not.toContain('周三例会C') // 周日不适用（weekly 只认周三）
-    expect(day1Tomorrow).toContain('双周对账A') // 明日 11-16 周一命中序列 A 周（v0.87.3 隔周，明日预览如实带出）
+    // K84（v0.96.3）：明日待办降按人计数，不再列标题——隔周适用性改由计数体现
+    // （明日 11-16 周一命中序列 A 周：daily 1 + biweekly 1 = 共 2 项；标题不再出现）
+    expect(day1Tomorrow).toContain('共 2 项')
+    expect(day1Tomorrow).not.toContain('双周对账A')
 
     // 时钟隔离（v0.89 随行修复）：pushes.created_at 落的是真实 Date.now()（push.js），
     // 幂等闸门却拿注入假时钟的 dayStart 比——真实日期越过假 11-09 起本段被上一段
